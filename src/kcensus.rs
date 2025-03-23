@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::io;
-use std::io::Error;
 use futures::{SinkExt, Stream, StreamExt};
 use crate::DeSink;
 use crate::kcensus::Flow::{NextMsg, NextSlot};
@@ -65,7 +64,7 @@ enum Flow {
 }
 
 
-impl<St: Stream<Item=Result<MsgWithSource,Error>> + Unpin> KCensus<St> {
+impl<St: Stream<Item=MsgWithSource> + Unpin> KCensus<St> {
     pub fn new(nb_nodes: NbNodes, my_pid: Pid,
                in_stream: St, out_sinks: HashMap<usize, DeSink>) -> Self {
         let nb_nodes = nb_nodes.0;
@@ -133,7 +132,7 @@ impl<St: Stream<Item=Result<MsgWithSource,Error>> + Unpin> KCensus<St> {
             }
 
             // Read new messages
-            let msg = self.in_stream.next().await.unwrap()?;
+            let msg = self.in_stream.next().await.unwrap();
             let src = msg.src;
 
             match msg.msg {

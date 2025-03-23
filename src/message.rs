@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use tokio::time::Instant;
 use crate::kcensus::Value;
 use crate::node_state::NodeState;
 
@@ -37,6 +38,20 @@ impl Message {
         MsgWithSource {
             msg: self,
             src,
+        }
+    }
+}
+
+pub struct MsgWithDeadline {
+    pub msg: MsgWithSource,
+    pub deadline: Instant
+}
+
+impl MsgWithSource {
+    pub fn with_deadline(self, deadline: Instant) -> MsgWithDeadline {
+        MsgWithDeadline {
+            msg: self,
+            deadline
         }
     }
 }

@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::collections::HashMap;
 use futures::{SinkExt, StreamExt, TryStreamExt};
 use std::io;
@@ -10,9 +11,14 @@ use tokio::net::{
 use tokio_serde::{formats::Bincode, Framed};
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 use clap::Parser;
+use tokio::{pin, select};
+use tokio::sync::mpsc;
+use tokio::time::{sleep_until, Instant};
+use tokio_stream::wrappers::ReceiverStream;
 use message::Message;
 use message::Message::{Hello};
 use crate::kcensus::{KCensus, NbNodes, Pid};
+use crate::message::{MsgWithDeadline};
 
 mod message;
 mod kcensus;
@@ -73,14 +79,78 @@ async fn main() -> io::Result<()> {
         };
     }
 
-    let streams = select_all(streams);
-    
+    let mut streams = select_all(streams);
+
+    // TODO: Channel buffer size ?
+    let (tx, rx) = mpsc::channel(1);
+
+    let delayer = tokio::task::spawn(async move {
+        let sleep = sleep_until(Instant::now());
+        pin!(sleep);
+
+        let mut queues: Vec<VecDeque<MsgWithDeadline>> = Vec::with_capacity(nb_nodes);
+        for _ in 0..nb_nodes {
+            queues.push(VecDeque::with_capacity(nb_nodes*nb_nodes));
+        }
+
+        let mut stream_ended = false;
+
+        loop {
+            let opt_deadline = queues.iter()
+                .filter_map(|q| q.front())
+                .map(|msg| msg.deadline)
+                .min();
+            if let Some(deadline) = opt_deadline {
+                sleep.as_mut().reset(deadline)
+            }
+            let is_empty = opt_deadline.is_none();
+            if is_empty && stream_ended {
+                break;
+            }
+            select! {
+                opt_msg = streams.next(), if !stream_ended => {
+                    if opt_msg.is_none() {
+                        stream_ended = true;
+                        continue
+                    }
+                    let msg = opt_msg.unwrap().unwrap();
+
+                    // Line topology
+                    let pid_diff = my_pid as i64 - msg.src as i64;
+                    let pid_diff = if pid_diff > 0 { pid_diff } else { - pid_diff } as u64;
+                    let deadline = Instant::now() + Duration::from_millis(100*pid_diff);
+
+                    queues[msg.src].push_back(
+                        msg.with_deadline(deadline)
+                    );
+                    // println!("queue_size++ = {}", queues.iter()
+                    //     .map(|q| q.len()).sum::<usize>());
+                }
+                () = &mut sleep, if !is_empty => {
+                    let now = Instant::now();
+                    // println!("Slept enough. Consuming messages...");
+                    for q in queues.iter_mut() {
+                        if let Some(m) = q.front() {
+                            if m.deadline < now {
+                                tx.send(q.pop_front().unwrap().msg).await.unwrap();
+                            }
+                        }
+                    }
+                    // println!("New queue_size = {}", queues.iter()
+                    //     .map(|q| q.len()).sum::<usize>());
+                }
+            } // select end
+        }
+        tx.clone()
+    });
+
     let mut kcensus = 
-        KCensus::new(NbNodes(nb_nodes), Pid(my_pid), streams, sinks);
-    
+        KCensus::new(NbNodes(nb_nodes), Pid(my_pid), ReceiverStream::new(rx), sinks);
+
     kcensus.run().await?;
 
     tokio::time::sleep(Duration::from_millis(100)).await;
+    delayer.await?;
 
     Ok(())
 }
