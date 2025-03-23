@@ -165,8 +165,9 @@ impl<St: Stream<Item=Result<MsgWithSource,Error>> + Unpin> KCensus<St> {
         Ok(())
     }
 
-    async fn broadcast_with_value(&mut self, command: RoundCommand,
-                                  value: &Value) -> io::Result<()> {
+    #[inline]
+    async fn inner_broadcast(&mut self, command: RoundCommand,
+                             value: Option<Value>) -> io::Result<()> {
         let value_uid = my_state!(self).v_uid.unwrap();
         for (_, sink) in self.out_sinks.iter_mut() {
             sink.send(KCensusMessage {
@@ -175,25 +176,28 @@ impl<St: Stream<Item=Result<MsgWithSource,Error>> + Unpin> KCensus<St> {
                     round: self.round,
                     value_uid,
                     command: command.clone()
-                }, value: Some(value.clone())
+                }, value: value.clone()
             }).await?;
         }
         Ok(())
     }
 
+    #[inline]
+    async fn spread_with_value(&mut self, remote_states: Vec<NodeState>,
+                               value: &Value) -> io::Result<()> {
+        self.inner_broadcast(Spread {
+            remote_states: remote_states.clone(),
+        }, Some(value.clone())).await
+    }
+
+    #[inline]
     async fn broadcast(&mut self, command: RoundCommand) -> io::Result<()> {
-        let value_uid = my_state!(self).v_uid.unwrap();
-        for (_, sink) in self.out_sinks.iter_mut() {
-            sink.send(KCensusMessage {
-                msg: KCensusMsg {
-                    slot: self.slot,
-                    round: self.round,
-                    value_uid,
-                    command: command.clone()
-                }, value: None
-            }).await?;
-        }
-        Ok(())
+        self.inner_broadcast(command, None).await
+    }
+
+    #[inline]
+    async fn spread(&mut self, remote_states: Vec<NodeState>) -> io::Result<()> {
+        self.broadcast(Spread { remote_states }).await
     }
 
     async fn process_message(&mut self, msg: KCensusMsg, src: usize) -> io::Result<Flow> {
@@ -251,9 +255,7 @@ impl<St: Stream<Item=Result<MsgWithSource,Error>> + Unpin> KCensus<St> {
                     if let Some(adopted_v) = self.try_adopt() {
                         self.goto_round(self.round + 1);
                         my_state!(self).v_uid = Some(adopted_v);
-                        self.broadcast(Spread {
-                            remote_states: self.node_states.clone()
-                        }).await?;
+                        self.spread(self.node_states.clone()).await?;
                         return Ok(NextMsg)
                     }
                 }
@@ -261,17 +263,13 @@ impl<St: Stream<Item=Result<MsgWithSource,Error>> + Unpin> KCensus<St> {
                 if ( msg_v_uid != my_v_uid || msg_frozen ) && !my_state!(self).frozen {
                     // Conflict detected
                     my_state!(self).frozen = true;
-                    self.broadcast(Spread {
-                        remote_states: self.node_states.clone()
-                    }).await?;
+                    self.spread(self.node_states.clone()).await?;
                     return Ok(NextMsg)
                 }
 
                 let kl = my_state!(self).k.len();
                 if kl > orig_kl {
-                    self.broadcast(Spread {
-                        remote_states: self.node_states.clone()
-                    }).await?;
+                    self.spread(self.node_states.clone()).await?;
                 }
             }
             Commit => {
@@ -295,9 +293,7 @@ impl<St: Stream<Item=Result<MsgWithSource,Error>> + Unpin> KCensus<St> {
         let value_uid = self.my_pid + (self.slot * self.nb_nodes);
         my_state!(self).v_uid = Some(value_uid);
 
-        self.broadcast_with_value(Spread {
-            remote_states: self.node_states.clone(),
-        }, &value).await?;
+        self.spread_with_value(self.node_states.clone(), &value).await?;
 
         self.values.insert(value_uid, value);
 
@@ -309,9 +305,7 @@ impl<St: Stream<Item=Result<MsgWithSource,Error>> + Unpin> KCensus<St> {
 
         my_state!(self).v_uid = Some(value_uid);
 
-        self.broadcast(Spread {
-            remote_states: self.node_states.clone(),
-        }).await
+        self.spread(self.node_states.clone()).await
     }
 
     #[inline]
