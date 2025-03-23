@@ -486,7 +486,6 @@ impl<St: Stream<Item=Result<MsgWithSource,Error>> + Unpin> KCensus<St> {
             debug_assert!(v_frozen_count <= v_known_count);
 
             if v_known_count > self.majority {
-                debug_assert!(max_score_v.is_some());
                 return v
             }
 
