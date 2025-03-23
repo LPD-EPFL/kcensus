@@ -205,20 +205,18 @@ impl<St: Stream<Item=Result<MsgWithSource,Error>> + Unpin> KCensus<St> {
         debug_assert!(self.values.contains_key(&msg_v_uid));
         debug_assert_eq!(slot, self.slot);
 
-        if round < self.round {
-            // TODO: Answer with adopted value ? Only if src is not in my knowledge set ?
-            return Ok(NextMsg);
-        }
-
-        if round > self.round {
-            self.goto_round(round);
-        }
-        debug_assert!(round == self.round);
-
         // TODO: Ignore some messages if max_seen_slot > slot ?
 
         match command {
             Spread { remote_states } => {
+                if round < self.round {
+                    // TODO: Answer with adopted value ? Only if src is not in my knowledge set ?
+                    return Ok(NextMsg);
+                } else if round > self.round {
+                    self.goto_round(round);
+                }
+                debug_assert!(round == self.round);
+
                 if my_state!(self).v_uid == None {
                     debug_assert!(!my_state!(self).frozen);
                     my_state!(self).v_uid = Some(msg_v_uid);
@@ -277,6 +275,7 @@ impl<St: Stream<Item=Result<MsgWithSource,Error>> + Unpin> KCensus<St> {
                 }
             }
             Commit => {
+                // TODO: ignore round ?
                 // TODO: Handle commit
 
                 println!("Commit msg for value_uid {}", msg_v_uid);
