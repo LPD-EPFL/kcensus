@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use bit_set::BitSet;
+use serde::{Deserialize, Serialize};
 use std::fmt;
 
 pub type Knowledge = BitSet;
@@ -27,7 +27,7 @@ impl NodeState {
     }
 }
 
-pub struct StateDisplay<'a> (pub &'a [NodeState]);
+pub struct StateDisplay<'a>(pub &'a [NodeState]);
 
 impl<'a> fmt::Display for StateDisplay<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {

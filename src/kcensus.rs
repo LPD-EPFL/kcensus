@@ -1,14 +1,14 @@
-use std::collections::HashMap;
-use std::io;
+use crate::kcensus::Flow::{NextMsg, NextSlot};
+use crate::message::Message::{Done, KCensusMessage};
+use crate::message::RoundCommand::{Commit, Spread};
+use crate::message::{KCensusMsg, KCensusMsgWithSource, Message, MsgWithSource, RoundCommand};
+use crate::node_state::{Knowledge, NodeState, StateDisplay};
+use crate::DeSink;
 use color_print::cprintln;
 use futures::{SinkExt, StreamExt};
+use std::collections::HashMap;
+use std::io;
 use tokio_stream::wrappers::ReceiverStream;
-use crate::DeSink;
-use crate::kcensus::Flow::{NextMsg, NextSlot};
-use crate::message::{KCensusMsg, KCensusMsgWithSource, Message, MsgWithSource, RoundCommand};
-use crate::message::RoundCommand::{Commit, Spread};
-use crate::message::Message::{Done, KCensusMessage};
-use crate::node_state::{Knowledge, NodeState, StateDisplay};
 
 // #[derive(Serialize, Deserialize, Debug, Clone)]
 pub type Value = String;
@@ -48,7 +48,9 @@ pub struct KCensus<St> {
 }
 
 macro_rules! my_state {
-    ($self:ident) => { $self.node_states[$self.my_pid] }
+    ($self:ident) => {
+        $self.node_states[$self.my_pid]
+    };
 }
 
 macro_rules! ready_to_process {
@@ -65,10 +67,13 @@ enum Flow {
     NextMsg,
 }
 
-
 impl KCensus<ReceiverStream<MsgWithSource>> {
-    pub fn new(nb_nodes: NbNodes, my_pid: Pid, in_stream: ReceiverStream<MsgWithSource>,
-               out_sinks: HashMap<usize, DeSink>) -> Self {
+    pub fn new(
+        nb_nodes: NbNodes,
+        my_pid: Pid,
+        in_stream: ReceiverStream<MsgWithSource>,
+        out_sinks: HashMap<usize, DeSink>,
+    ) -> Self {
         let nb_nodes = nb_nodes.0;
         let majority = (nb_nodes / 2) + 1;
         let mut node_states = Vec::with_capacity(nb_nodes);
@@ -93,7 +98,7 @@ impl KCensus<ReceiverStream<MsgWithSource>> {
             node_states,
 
             my_quorum: Vec::with_capacity(nb_nodes),
-            next_combination_pos: Vec::with_capacity(majority-1),
+            next_combination_pos: Vec::with_capacity(majority - 1),
             frozen_size_checked: 0,
             _bitset_scratchpad: Knowledge::with_capacity(nb_nodes),
         }
@@ -153,7 +158,7 @@ impl KCensus<ReceiverStream<MsgWithSource>> {
                         // TODO: Allow forwarding values ? (could the value already be there ?)
                         debug_assert!(inserted.is_none());
                     }
-                    
+
                     if !ready_to_process!(self, msg) {
                         self.max_seen_slot = self.max_seen_slot.max(msg.slot);
                         self.queued_messages.push(msg.with_source(src));
@@ -167,13 +172,10 @@ impl KCensus<ReceiverStream<MsgWithSource>> {
                         NextMsg => (),
                     }
                 }
-                Done => {
-                    count_done += 1
-                }
+                Done => count_done += 1,
                 _ => panic!("Unexpected message type"),
             }
-
-        }
+        } // 'main_loop: loop
 
         self.in_stream.close();
         Ok(())
@@ -188,26 +190,36 @@ impl KCensus<ReceiverStream<MsgWithSource>> {
     }
 
     #[inline]
-    async fn inner_round_broadcast(&mut self, command: RoundCommand,
-                                   value: Option<Value>) -> io::Result<()> {
-        self.inner_broadcast(
-            KCensusMessage {
-                msg: KCensusMsg {
-                    slot: self.slot,
-                    round: self.round,
-                    value_uid: my_state!(self).v_uid.unwrap(),
-                    command: command.clone()
-                }, value: value.clone()
-            }
-        ).await
+    async fn inner_round_broadcast(
+        &mut self,
+        command: RoundCommand,
+        value: Option<Value>,
+    ) -> io::Result<()> {
+        self.inner_broadcast(KCensusMessage {
+            msg: KCensusMsg {
+                slot: self.slot,
+                round: self.round,
+                value_uid: my_state!(self).v_uid.unwrap(),
+                command: command.clone(),
+            },
+            value: value.clone(),
+        })
+        .await
     }
 
     #[inline]
-    async fn spread_with_value(&mut self, remote_states: Vec<NodeState>,
-                               value: &Value) -> io::Result<()> {
-        self.inner_round_broadcast(Spread {
-            remote_states: remote_states.clone(),
-        }, Some(value.clone())).await
+    async fn spread_with_value(
+        &mut self,
+        remote_states: Vec<NodeState>,
+        value: &Value,
+    ) -> io::Result<()> {
+        self.inner_round_broadcast(
+            Spread {
+                remote_states: remote_states.clone(),
+            },
+            Some(value.clone()),
+        )
+        .await
     }
 
     #[inline]
@@ -266,7 +278,7 @@ impl KCensus<ReceiverStream<MsgWithSource>> {
                 if self.can_commit() {
                     self.round_broadcast(Commit).await?;
                     let value = self.commit_slot(my_v_uid, false);
-                    return Ok(NextSlot)
+                    return Ok(NextSlot);
                 }
 
                 let msg_frozen = remote_states[src].frozen;
@@ -276,15 +288,15 @@ impl KCensus<ReceiverStream<MsgWithSource>> {
                         self.goto_round(self.round + 1);
                         my_state!(self).v_uid = Some(adopted_v);
                         self.spread(self.node_states.clone()).await?;
-                        return Ok(NextMsg)
+                        return Ok(NextMsg);
                     }
                 }
 
-                if ( msg_v_uid != my_v_uid || msg_frozen ) && !my_state!(self).frozen {
+                if (msg_v_uid != my_v_uid || msg_frozen) && !my_state!(self).frozen {
                     // Conflict detected
                     my_state!(self).frozen = true;
                     self.spread(self.node_states.clone()).await?;
-                    return Ok(NextMsg)
+                    return Ok(NextMsg);
                 }
 
                 let kl = my_state!(self).k.len();
@@ -298,13 +310,11 @@ impl KCensus<ReceiverStream<MsgWithSource>> {
 
                 println!("######## Commit msg (from round {}):", round);
                 let value = self.commit_slot(msg_v_uid, true);
-                return Ok(NextSlot)
+                return Ok(NextSlot);
             }
-            // x => panic!("Unexpected kcensus command {:?}", x)
-        }
+        } // match command
         Ok(NextMsg)
-    }
-
+    } // fn process_message
 
     #[inline]
     async fn propose_start(&mut self, value: Value) -> io::Result<()> {
@@ -313,7 +323,8 @@ impl KCensus<ReceiverStream<MsgWithSource>> {
         let value_uid = self.my_pid + (self.slot * self.nb_nodes);
         my_state!(self).v_uid = Some(value_uid);
 
-        self.spread_with_value(self.node_states.clone(), &value).await?;
+        self.spread_with_value(self.node_states.clone(), &value)
+            .await?;
 
         self.values.insert(value_uid, value);
 
@@ -334,21 +345,29 @@ impl KCensus<ReceiverStream<MsgWithSource>> {
         if commit_msg {
             cprintln!("<#2FB82F>Commited \"{}\" in slot {}.</>", value, self.slot);
         } else {
-            cprintln!("<#2FB82F>Commited \"{}\" in slot {} (round {}) from state:</> <#B8E8B8>{}</>",
-                     value, self.slot, self.round, StateDisplay(&self.node_states));
+            cprintln!(
+                "<#2FB82F>Commited \"{}\" in slot {} (round {}) from state:</> <#B8E8B8>{}</>",
+                value,
+                self.slot,
+                self.round,
+                StateDisplay(&self.node_states)
+            );
         }
         self.slot += 1;
         self.max_seen_slot = self.max_seen_slot.max(self.slot);
         self.goto_round(0);
-        self.queued_messages.retain(|msg| {msg.msg.slot >= self.slot});
+        self.queued_messages.retain(|msg| msg.msg.slot >= self.slot);
         value
     }
 
     #[inline]
     fn goto_round(&mut self, round: usize) {
         if round != 0 {
-            cprintln!("<#FF4F4F>Can not commit in round {} from state:</> <#EFBFBF>{}</>",
-                     self.round, StateDisplay(&self.node_states));
+            cprintln!(
+                "<#FF4F4F>Can not commit in round {} from state:</> <#EFBFBF>{}</>",
+                self.round,
+                StateDisplay(&self.node_states)
+            );
             if round > self.round + 1 {
                 println!("<yellow>######## Skipping round !!!!</>");
             }
@@ -370,24 +389,22 @@ impl KCensus<ReceiverStream<MsgWithSource>> {
         let k_size = my_state!(self).k.len();
         debug_assert!(k_size <= self.nb_nodes);
         if k_size < self.majority {
-            return false
+            return false;
         }
         let unknown_nodes = self.nb_nodes - k_size;
         let trivial_frozen = self.majority;
         let minority = self.nb_nodes - self.majority;
-        let min_frozen = (k_size - minority)
-            .max(self.frozen_size_checked + 1); // Skip already checked ones
+        let min_frozen = (k_size - minority).max(self.frozen_size_checked + 1); // Skip already checked ones
 
         /* When new nodes appear, if we already checked combinations of up to k-1 frozen,
-           then we know that sets of up to k frozen nodes that include some new nodes are fine
-           (thanks to the monotonicity of the score function & min_frozen increasing with new nodes)
-           thus we only need to refresh my_quorum when reaching k+1 frozen bellow */
+        then we know that sets of up to k frozen nodes that include some new nodes are fine
+        (thanks to the monotonicity of the score function & min_frozen increasing with new nodes)
+        thus we only need to refresh my_quorum when reaching k+1 frozen bellow */
         if self.frozen_size_checked + 1 < min_frozen {
             // Note: this will trigger a refresh of my_quorum
             self.next_combination_pos.clear();
             self.frozen_size_checked = min_frozen - 1;
         }
-
 
         for frozen in min_frozen..trivial_frozen {
             let max_others_score = 2 * unknown_nodes - (self.majority - frozen);
@@ -402,7 +419,7 @@ impl KCensus<ReceiverStream<MsgWithSource>> {
             if to_know <= frozen {
                 self.frozen_size_checked = frozen;
                 self.next_combination_pos.clear();
-                continue
+                continue;
             }
             if self.next_combination_pos.is_empty() {
                 if self.my_quorum.len() != k_size {
@@ -410,7 +427,8 @@ impl KCensus<ReceiverStream<MsgWithSource>> {
                     self.my_quorum.extend(my_state!(self).k.iter());
                     // Optimisation: Put bigger knowledge first to help early skip
                     // Note: !x == (usize::MAX - x)
-                    self.my_quorum.sort_by_key(|a| !self.node_states[*a].k.len());
+                    self.my_quorum
+                        .sort_by_key(|a| !self.node_states[*a].k.len());
 
                     // println!("Reordering my_k len: {}", self.my_k.len());
                     // for pid in self.my_k.iter() {
@@ -431,7 +449,7 @@ impl KCensus<ReceiverStream<MsgWithSource>> {
                     unused_knowledge -= 1;
                     // Optimisation: Early skip
                     if known.len() >= to_know {
-                        break
+                        break;
                     }
                 }
 
@@ -439,8 +457,8 @@ impl KCensus<ReceiverStream<MsgWithSource>> {
                     return false;
                 }
 
-                let changed_suffix_size = self
-                    .next_combination(self.my_quorum.len(), unused_knowledge);
+                let changed_suffix_size =
+                    self.next_combination(self.my_quorum.len(), unused_knowledge);
                 if changed_suffix_size == 0 {
                     break;
                 }
@@ -448,9 +466,9 @@ impl KCensus<ReceiverStream<MsgWithSource>> {
             // Save combinations that are checked
             self.frozen_size_checked = frozen;
             self.next_combination_pos.clear();
-        }
+        } // for frozen
         true
-    }
+    } // fn can_commit
 
     #[inline]
     fn next_combination(&mut self, positions: usize, unused: usize) -> usize {
@@ -460,7 +478,7 @@ impl KCensus<ReceiverStream<MsgWithSource>> {
         debug_assert!(len < self.majority);
 
         // Optimisation: Skip combinations that only change the unused nodes
-        let min_to_move = 1.max(unused+1);
+        let min_to_move = 1.max(unused + 1);
         for suffix_size in min_to_move..=len {
             let suffix_start = len - suffix_size;
             // Can we move the last "suffix_size" positions ?
@@ -470,41 +488,44 @@ impl KCensus<ReceiverStream<MsgWithSource>> {
                 for j in 0..suffix_size {
                     pos[suffix_start + j] = new_pos + j;
                 }
-                return suffix_size
+                return suffix_size;
             }
         }
         0
     }
 
     fn try_adopt(&mut self) -> Option<usize> {
-        let frozen_count = self.node_states.iter()
-            .filter(|x| x.frozen).count();
+        let frozen_count = self.node_states.iter().filter(|x| x.frozen).count();
         if frozen_count < self.majority {
-            return None
+            return None;
         }
 
         let mut max_score = 0usize;
         let mut max_score_v = None;
-        for v in self.node_states.iter()
-            .filter(|x| x.frozen)
-            .map(|x| x.v_uid) // For all v in the frozen set
-        {
-            if v == max_score_v { continue }
+        for some_node in self.node_states.iter() {
+            if !some_node.frozen {
+                continue;
+            }
+            let v = some_node.v_uid;
+            // For all v in the frozen set
+            if v == max_score_v {
+                continue;
+            }
 
             let mut v_frozen_count = 0;
             self._bitset_scratchpad.clear();
-            for node_state in self.node_states.iter()
-                .filter(|x| x.frozen)
-            {
-                if v != node_state.v_uid { continue }
+            for node in self.node_states.iter() {
+                if !node.frozen || v != node.v_uid {
+                    continue;
+                }
                 v_frozen_count += 1;
-                self._bitset_scratchpad.union_with(&node_state.k);
+                self._bitset_scratchpad.union_with(&node.k);
             }
             let v_known_count = self._bitset_scratchpad.len();
             debug_assert!(v_frozen_count <= v_known_count);
 
             if v_known_count > self.majority {
-                return v
+                return v;
             }
 
             let score = v_known_count * 2 - v_frozen_count;

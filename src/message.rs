@@ -1,7 +1,7 @@
-use serde::{Deserialize, Serialize};
-use tokio::time::Instant;
 use crate::kcensus::Value;
 use crate::node_state::NodeState;
+use serde::{Deserialize, Serialize};
+use tokio::time::Instant;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum RoundCommand {
@@ -19,11 +19,13 @@ pub struct KCensusMsg {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum Message {
-    Hello { pid: usize },
+    Hello {
+        pid: usize,
+    },
     // TODO: Add path-graph to spread messages
     KCensusMessage {
         msg: KCensusMsg,
-        value: Option<Value>
+        value: Option<Value>,
     },
     Done,
 }
@@ -31,28 +33,25 @@ pub enum Message {
 #[derive(Debug)]
 pub struct MsgWithSource {
     pub msg: Message,
-    pub src: usize
+    pub src: usize,
 }
 
 impl Message {
     pub fn with_source(self, src: usize) -> MsgWithSource {
-        MsgWithSource {
-            msg: self,
-            src,
-        }
+        MsgWithSource { msg: self, src }
     }
 }
 
 pub struct MsgWithDeadline {
     pub msg: MsgWithSource,
-    pub deadline: Instant
+    pub deadline: Instant,
 }
 
 impl MsgWithSource {
     pub fn with_deadline(self, deadline: Instant) -> MsgWithDeadline {
         MsgWithDeadline {
             msg: self,
-            deadline
+            deadline,
         }
     }
 }
@@ -60,14 +59,11 @@ impl MsgWithSource {
 #[derive(Debug)]
 pub struct KCensusMsgWithSource {
     pub msg: KCensusMsg,
-    pub src: usize
+    pub src: usize,
 }
 
 impl KCensusMsg {
     pub fn with_source(self, src: usize) -> KCensusMsgWithSource {
-        KCensusMsgWithSource {
-            msg: self,
-            src,
-        }
+        KCensusMsgWithSource { msg: self, src }
     }
 }
