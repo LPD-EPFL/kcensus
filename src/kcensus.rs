@@ -1,11 +1,12 @@
 use std::collections::HashMap;
 use std::io;
-use futures::{SinkExt, Stream, StreamExt};
+use futures::{SinkExt, StreamExt};
+use tokio_stream::wrappers::ReceiverStream;
 use crate::DeSink;
 use crate::kcensus::Flow::{NextMsg, NextSlot};
-use crate::message::{KCensusMsg, KCensusMsgWithSource, MsgWithSource, RoundCommand};
+use crate::message::{KCensusMsg, KCensusMsgWithSource, Message, MsgWithSource, RoundCommand};
 use crate::message::RoundCommand::{Commit, Spread};
-use crate::message::Message::KCensusMessage;
+use crate::message::Message::{Done, KCensusMessage};
 use crate::node_state::{Knowledge, NodeState, StateDisplay};
 
 // #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -64,9 +65,9 @@ enum Flow {
 }
 
 
-impl<St: Stream<Item=MsgWithSource> + Unpin> KCensus<St> {
-    pub fn new(nb_nodes: NbNodes, my_pid: Pid,
-               in_stream: St, out_sinks: HashMap<usize, DeSink>) -> Self {
+impl KCensus<ReceiverStream<MsgWithSource>> {
+    pub fn new(nb_nodes: NbNodes, my_pid: Pid, in_stream: ReceiverStream<MsgWithSource>,
+               out_sinks: HashMap<usize, DeSink>) -> Self {
         let nb_nodes = nb_nodes.0;
         let majority = (nb_nodes / 2) + 1;
         let mut node_states = Vec::with_capacity(nb_nodes);
@@ -100,6 +101,8 @@ impl<St: Stream<Item=MsgWithSource> + Unpin> KCensus<St> {
     pub async fn run(&mut self) -> io::Result<()> {
         self.goto_round(0);
         self.propose_start(format!("v{}!", self.my_pid)).await?;
+        let mut count_done = 0usize;
+        let mut done = false;
 
         'main_loop: loop {
             // Process queued messages (if possible)
@@ -118,7 +121,14 @@ impl<St: Stream<Item=MsgWithSource> + Unpin> KCensus<St> {
             }
 
             // TODO: Break dynamically based on expected propose count
-            if self.slot >= self.nb_nodes {
+            if !done && self.slot == self.nb_nodes {
+                self.inner_broadcast(Done).await?;
+                count_done += 1;
+                done = true;
+                self.queued_messages.clear();
+            }
+
+            if count_done == self.nb_nodes {
                 break 'main_loop;
             }
 
@@ -156,47 +166,57 @@ impl<St: Stream<Item=MsgWithSource> + Unpin> KCensus<St> {
                         NextMsg => (),
                     }
                 }
+                Done => {
+                    count_done += 1
+                }
                 _ => panic!("Unexpected message type"),
             }
 
         }
 
+        self.in_stream.close();
         Ok(())
     }
 
     #[inline]
-    async fn inner_broadcast(&mut self, command: RoundCommand,
-                             value: Option<Value>) -> io::Result<()> {
-        let value_uid = my_state!(self).v_uid.unwrap();
+    async fn inner_broadcast(&mut self, msg: Message) -> io::Result<()> {
         for (_, sink) in self.out_sinks.iter_mut() {
-            sink.send(KCensusMessage {
-                msg: KCensusMsg {
-                    slot: self.slot,
-                    round: self.round,
-                    value_uid,
-                    command: command.clone()
-                }, value: value.clone()
-            }).await?;
+            sink.send(msg.clone()).await?;
         }
         Ok(())
     }
 
     #[inline]
+    async fn inner_round_broadcast(&mut self, command: RoundCommand,
+                                   value: Option<Value>) -> io::Result<()> {
+        self.inner_broadcast(
+            KCensusMessage {
+                msg: KCensusMsg {
+                    slot: self.slot,
+                    round: self.round,
+                    value_uid: my_state!(self).v_uid.unwrap(),
+                    command: command.clone()
+                }, value: value.clone()
+            }
+        ).await
+    }
+
+    #[inline]
     async fn spread_with_value(&mut self, remote_states: Vec<NodeState>,
                                value: &Value) -> io::Result<()> {
-        self.inner_broadcast(Spread {
+        self.inner_round_broadcast(Spread {
             remote_states: remote_states.clone(),
         }, Some(value.clone())).await
     }
 
     #[inline]
-    async fn broadcast(&mut self, command: RoundCommand) -> io::Result<()> {
-        self.inner_broadcast(command, None).await
+    async fn round_broadcast(&mut self, command: RoundCommand) -> io::Result<()> {
+        self.inner_round_broadcast(command, None).await
     }
 
     #[inline]
     async fn spread(&mut self, remote_states: Vec<NodeState>) -> io::Result<()> {
-        self.broadcast(Spread { remote_states }).await
+        self.round_broadcast(Spread { remote_states }).await
     }
 
     async fn process_message(&mut self, msg: KCensusMsg, src: usize) -> io::Result<Flow> {
@@ -243,7 +263,7 @@ impl<St: Stream<Item=MsgWithSource> + Unpin> KCensus<St> {
 
                 // Can commit ?
                 if self.can_commit() {
-                    self.broadcast(Commit).await?;
+                    self.round_broadcast(Commit).await?;
                     let value = self.commit_slot(my_v_uid);
                     return Ok(NextSlot)
                 }

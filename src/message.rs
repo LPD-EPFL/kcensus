@@ -24,7 +24,8 @@ pub enum Message {
     KCensusMessage {
         msg: KCensusMsg,
         value: Option<Value>
-    }
+    },
+    Done,
 }
 
 #[derive(Debug)]

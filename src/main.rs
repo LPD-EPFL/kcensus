@@ -13,12 +13,14 @@ use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 use clap::Parser;
 use tokio::{pin, select};
 use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 use tokio::time::{sleep_until, Instant};
 use tokio_stream::wrappers::ReceiverStream;
 use message::Message;
 use message::Message::{Hello};
 use crate::kcensus::{KCensus, NbNodes, Pid};
 use crate::message::{MsgWithDeadline};
+use crate::message::Message::Done;
 
 mod message;
 mod kcensus;
@@ -84,7 +86,7 @@ async fn main() -> io::Result<()> {
     // TODO: Channel buffer size ?
     let (tx, rx) = mpsc::channel(1);
 
-    let delayer = tokio::task::spawn(async move {
+    let delayer: JoinHandle<io::Result<()>> = tokio::task::spawn(async move {
         let sleep = sleep_until(Instant::now());
         pin!(sleep);
 
@@ -113,7 +115,7 @@ async fn main() -> io::Result<()> {
                         stream_ended = true;
                         continue
                     }
-                    let msg = opt_msg.unwrap().unwrap();
+                    let msg = opt_msg.unwrap()?;
 
                     // Line topology
                     let pid_diff = my_pid as i64 - msg.src as i64;
@@ -132,16 +134,21 @@ async fn main() -> io::Result<()> {
                     for q in queues.iter_mut() {
                         if let Some(m) = q.front() {
                             if m.deadline < now {
-                                tx.send(q.pop_front().unwrap().msg).await.unwrap();
+                                if tx.send(q.pop_front().unwrap().msg).await.is_err() {
+                                    return Ok(())
+                                }
                             }
                         }
                     }
                     // println!("New queue_size = {}", queues.iter()
                     //     .map(|q| q.len()).sum::<usize>());
                 }
+                () = tx.closed() => {
+                    return Ok(())
+                }
             } // select end
         }
-        tx.clone()
+        Ok(())
     });
 
     let mut kcensus = 
@@ -149,8 +156,7 @@ async fn main() -> io::Result<()> {
 
     kcensus.run().await?;
 
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    delayer.await?;
+    delayer.await??;
 
     Ok(())
 }
