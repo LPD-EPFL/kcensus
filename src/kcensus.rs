@@ -19,7 +19,7 @@ pub type Value = String;
 //     }
 // }
 
-pub struct KCensus<St> {
+pub struct KCensus<St, Sk> {
     // Settings
     nb_nodes: usize,
     my_pid: usize,
@@ -27,7 +27,7 @@ pub struct KCensus<St> {
 
     // Connections
     in_stream: St,
-    out_sinks: HashMap<usize, DeSink>,
+    out_sinks: HashMap<usize, Sk>,
 
     // Overall state
     slot: usize,
@@ -67,7 +67,7 @@ enum Flow {
     NextMsg,
 }
 
-impl KCensus<ReceiverStream<MsgWithSource>> {
+impl KCensus<ReceiverStream<MsgWithSource>, DeSink> {
     pub fn new(
         nb_nodes: NbNodes,
         my_pid: Pid,
