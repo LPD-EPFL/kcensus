@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::io;
+use color_print::cprintln;
 use futures::{SinkExt, StreamExt};
 use tokio_stream::wrappers::ReceiverStream;
 use crate::DeSink;
@@ -264,7 +265,7 @@ impl KCensus<ReceiverStream<MsgWithSource>> {
                 // Can commit ?
                 if self.can_commit() {
                     self.round_broadcast(Commit).await?;
-                    let value = self.commit_slot(my_v_uid);
+                    let value = self.commit_slot(my_v_uid, false);
                     return Ok(NextSlot)
                 }
 
@@ -295,8 +296,8 @@ impl KCensus<ReceiverStream<MsgWithSource>> {
                 // TODO: ignore round ?
                 // TODO: Handle commit
 
-                println!("Commit msg for value_uid {}", msg_v_uid);
-                let value = self.commit_slot(msg_v_uid);
+                println!("######## Commit msg (from round {}):", round);
+                let value = self.commit_slot(msg_v_uid, true);
                 return Ok(NextSlot)
             }
             // x => panic!("Unexpected kcensus command {:?}", x)
@@ -328,10 +329,14 @@ impl KCensus<ReceiverStream<MsgWithSource>> {
     }
 
     #[inline]
-    fn commit_slot(&mut self, value_uid: usize) -> Value {
+    fn commit_slot(&mut self, value_uid: usize, commit_msg: bool) -> Value {
         let value = self.values.remove(&value_uid).unwrap();
-        println!("Commited \'{}\' in slot {} after {} rounds from state: {}",
-                 value, self.slot, self.round, StateDisplay(&self.node_states));
+        if commit_msg {
+            cprintln!("<#2FB82F>Commited \"{}\" in slot {}.</>", value, self.slot);
+        } else {
+            cprintln!("<#2FB82F>Commited \"{}\" in slot {} (round {}) from state:</> <#B8E8B8>{}</>",
+                     value, self.slot, self.round, StateDisplay(&self.node_states));
+        }
         self.slot += 1;
         self.max_seen_slot = self.max_seen_slot.max(self.slot);
         self.goto_round(0);
@@ -342,10 +347,10 @@ impl KCensus<ReceiverStream<MsgWithSource>> {
     #[inline]
     fn goto_round(&mut self, round: usize) {
         if round != 0 {
-            println!("Failed to commit in slot {} after {} rounds from state: {}",
-                     self.slot, self.round, StateDisplay(&self.node_states));
+            cprintln!("<#FF4F4F>Can not commit in round {} from state:</> <#EFBFBF>{}</>",
+                     self.round, StateDisplay(&self.node_states));
             if round > self.round + 1 {
-                println!("!!!!!!! Skipping round !!!!!!!");
+                println!("<yellow>######## Skipping round !!!!</>");
             }
         }
         self.round = round;

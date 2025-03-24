@@ -31,13 +31,13 @@ pub struct StateDisplay<'a> (pub &'a [NodeState]);
 
 impl<'a> fmt::Display for StateDisplay<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        writeln!(f, "[")?;
+        // write!(f, "[")?;
         for (i, state) in self.0.iter().enumerate() {
             if let Some(v_uid) = state.v_uid {
-                writeln!(f, "  {}: uid={}, k={:?}", i, v_uid, state.k)?;
+                write!(f, "\n  {}: uid={}, k={:?}", i, v_uid, state.k)?;
             }
         }
-        write!(f, "]")?;
+        // write!(f, "\n]")?;
         Ok(())
     }
 }
