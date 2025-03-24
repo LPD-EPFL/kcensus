@@ -84,7 +84,7 @@ async fn main() -> io::Result<()> {
     let mut streams = select_all(streams);
 
     // TODO: Channel buffer size ?
-    let (tx, rx) = mpsc::channel(1);
+    let (tx, rx) = mpsc::channel(nb_nodes * nb_nodes);
 
     let delayer: JoinHandle<io::Result<()>> = tokio::task::spawn(async move {
         let sleep = sleep_until(Instant::now());
