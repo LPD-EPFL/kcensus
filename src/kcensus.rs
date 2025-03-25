@@ -283,20 +283,23 @@ impl KCensus<ReceiverStream<MsgWithSource>, DeSink> {
 
                 let msg_frozen = remote_states[src].frozen;
 
-                if msg_frozen {
+                if msg_frozen || msg_v_uid != my_v_uid {
+                    let orig_frozen = my_state!(self).frozen;
+                    my_state!(self).frozen = true;
+
                     if let Some(adopted_v) = self.try_adopt() {
+                        // Conflict resolved. Adopting...
                         self.goto_round(self.round + 1);
                         my_state!(self).v_uid = Some(adopted_v);
                         self.spread(self.node_states.clone()).await?;
                         return Ok(NextMsg);
                     }
-                }
 
-                if (msg_v_uid != my_v_uid || msg_frozen) && !my_state!(self).frozen {
-                    // Conflict detected
-                    my_state!(self).frozen = true;
-                    self.spread(self.node_states.clone()).await?;
-                    return Ok(NextMsg);
+                    if !orig_frozen {
+                        // New conflict. Freezing others...
+                        self.spread(self.node_states.clone()).await?;
+                        return Ok(NextMsg);
+                    }
                 }
 
                 let kl = my_state!(self).k.len();
