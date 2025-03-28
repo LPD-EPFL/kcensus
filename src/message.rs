@@ -1,11 +1,14 @@
-use crate::kcensus::Value;
+use crate::kcensus::KVal;
 use crate::node_state::NodeState;
 use serde::{Deserialize, Serialize};
 use tokio::time::Instant;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum RoundCommand {
-    Spread { remote_states: Vec<NodeState> },
+    Spread {
+        remote_states: Vec<NodeState>,
+        step: usize,
+    },
     Commit,
 }
 
@@ -25,7 +28,7 @@ pub enum Message {
     // TODO: Add path-graph to spread messages
     KCensusMessage {
         msg: KCensusMsg,
-        value: Option<Value>,
+        value: Option<KVal>,
     },
     Done,
 }

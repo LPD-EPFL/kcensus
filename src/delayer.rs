@@ -1,0 +1,82 @@
+use crate::message::{MsgWithDeadline, MsgWithSource};
+use futures::Stream;
+use log::trace;
+use std::collections::VecDeque;
+use std::io;
+use std::time::Duration;
+use tokio::sync::mpsc::Sender;
+use tokio::time::{sleep_until, Instant};
+use tokio::{pin, select};
+use tokio_stream::StreamExt;
+
+pub async fn delayer<St: Stream<Item = io::Result<MsgWithSource>> + Unpin>(
+    nb_nodes: usize,
+    my_pid: usize,
+    mut input_stream: St,
+    delayed_output: Sender<MsgWithSource>,
+) -> io::Result<()> {
+    let sleep = sleep_until(Instant::now());
+    pin!(sleep);
+
+    let mut queues: Vec<VecDeque<MsgWithDeadline>> = Vec::with_capacity(nb_nodes);
+    for _ in 0..nb_nodes {
+        queues.push(VecDeque::with_capacity(nb_nodes * nb_nodes));
+    }
+
+    let mut stream_ended = false;
+
+    loop {
+        let opt_deadline = queues
+            .iter()
+            .filter_map(|q| q.front())
+            .map(|msg| msg.deadline)
+            .min();
+        if let Some(deadline) = opt_deadline {
+            sleep.as_mut().reset(deadline)
+        }
+        let is_empty = opt_deadline.is_none();
+        if is_empty && stream_ended {
+            break;
+        }
+        select! {
+            opt_res = input_stream.next(), if !stream_ended => {
+                if opt_res.is_none() {
+                    stream_ended = true;
+                    continue
+                }
+                let msg = opt_res.unwrap()?;
+
+                // TODO: Load topology from config
+                // Line topology
+                let pid_diff = my_pid as i64 - msg.src as i64;
+                let pid_diff = if pid_diff > 0 { pid_diff } else { - pid_diff } as u64;
+                let deadline = Instant::now() + Duration::from_millis(10*pid_diff);
+
+                queues[msg.src].push_back(
+                    msg.with_deadline(deadline)
+                );
+                trace!("queue_size++ = {}", queues.iter()
+                    .map(|q| q.len()).sum::<usize>());
+            }
+            () = &mut sleep, if !is_empty => {
+                let now = Instant::now();
+                trace!("Slept enough. Consuming messages...");
+                for q in queues.iter_mut() {
+                    if let Some(m) = q.front() {
+                        if m.deadline < now {
+                            if delayed_output.send(q.pop_front().unwrap().msg).await.is_err() {
+                                return Ok(())
+                            }
+                        }
+                    }
+                }
+                trace!("New queue_size = {}", queues.iter()
+                     .map(|q| q.len()).sum::<usize>());
+            }
+            () = delayed_output.closed() => {
+                return Ok(())
+            }
+        } // select!
+    } // loop
+    Ok(())
+}

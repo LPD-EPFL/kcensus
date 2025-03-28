@@ -1,29 +1,21 @@
-use crate::kcensus::Flow::{NextMsg, NextSlot};
+use crate::connector::DeSink;
 use crate::message::Message::{Done, KCensusMessage};
 use crate::message::RoundCommand::{Commit, Spread};
 use crate::message::{KCensusMsg, KCensusMsgWithSource, Message, MsgWithSource, RoundCommand};
-use crate::node_state::{Knowledge, NodeState, StateDisplay};
-use crate::DeSink;
-use color_print::cprintln;
+use crate::round_state::RoundState;
+pub(crate) use crate::value::{KVal, Request};
 use futures::{SinkExt, StreamExt};
+use log::{debug, info};
 use std::collections::HashMap;
 use std::io;
+use tokio::select;
+use tokio::sync::mpsc::{Receiver, Sender};
 use tokio_stream::wrappers::ReceiverStream;
-
-// #[derive(Serialize, Deserialize, Debug, Clone)]
-pub type Value = String;
-
-// impl Value {
-//     pub fn new(proposer: usize, val: String) -> Value {
-//         Value { proposer, val }
-//     }
-// }
 
 pub struct KCensus<St, Sk> {
     // Settings
     nb_nodes: usize,
     my_pid: usize,
-    majority: usize,
 
     // Connections
     in_stream: St,
@@ -33,39 +25,15 @@ pub struct KCensus<St, Sk> {
     slot: usize,
     max_seen_slot: usize,
     round: usize,
+    step: usize,
     queued_messages: Vec<KCensusMsgWithSource>,
-    queued_values: Vec<Value>,
-    values: HashMap<usize, Value>,
+    values: HashMap<usize, Request>,
 
-    // Round-state
-    node_states: Vec<NodeState>,
-
-    // can_commit optimizations / scratchpads
-    my_quorum: Vec<usize>,
-    next_combination_pos: Vec<usize>,
-    frozen_size_checked: usize,
-    _bitset_scratchpad: Knowledge,
-}
-
-macro_rules! my_state {
-    ($self:ident) => {
-        $self.node_states[$self.my_pid]
-    };
-}
-
-macro_rules! ready_to_process {
-    ($self:ident, $msg:expr) => {
-        ($msg.slot == $self.slot && $self.values.contains_key(&$msg.value_uid))
-    };
+    round_state: RoundState,
 }
 
 pub struct NbNodes(pub usize);
 pub struct Pid(pub usize);
-
-enum Flow {
-    NextSlot,
-    NextMsg,
-}
 
 impl KCensus<ReceiverStream<MsgWithSource>, DeSink> {
     pub fn new(
@@ -75,15 +43,9 @@ impl KCensus<ReceiverStream<MsgWithSource>, DeSink> {
         out_sinks: HashMap<usize, DeSink>,
     ) -> Self {
         let nb_nodes = nb_nodes.0;
-        let majority = (nb_nodes / 2) + 1;
-        let mut node_states = Vec::with_capacity(nb_nodes);
-        for _ in 0..nb_nodes {
-            node_states.push(NodeState::new(nb_nodes));
-        }
         Self {
             nb_nodes,
             my_pid: my_pid.0,
-            majority,
 
             in_stream,
             out_sinks,
@@ -91,22 +53,20 @@ impl KCensus<ReceiverStream<MsgWithSource>, DeSink> {
             slot: 0,
             max_seen_slot: 0,
             round: 0,
+            step: 0,
             queued_messages: Vec::with_capacity(nb_nodes),
-            queued_values: Vec::with_capacity(4),
-
             values: HashMap::with_capacity(nb_nodes),
-            node_states,
 
-            my_quorum: Vec::with_capacity(nb_nodes),
-            next_combination_pos: Vec::with_capacity(majority - 1),
-            frozen_size_checked: 0,
-            _bitset_scratchpad: Knowledge::with_capacity(nb_nodes),
+            round_state: RoundState::new(nb_nodes, my_pid.0),
         }
     }
 
-    pub async fn run(&mut self) -> io::Result<()> {
+    pub async fn run(
+        mut self,
+        mut rx: Receiver<Option<Request>>,
+        tx: Sender<Request>,
+    ) -> io::Result<()> {
         self.goto_round(0);
-        self.propose_start(format!("v{}!", self.my_pid)).await?;
         let mut count_done = 0usize;
         let mut done = false;
 
@@ -115,23 +75,18 @@ impl KCensus<ReceiverStream<MsgWithSource>, DeSink> {
             let mut i = 0usize;
             while i < self.queued_messages.len() {
                 let msg = &self.queued_messages[i];
-                if ready_to_process!(self, msg.msg) {
+                if self.ready_to_process(&msg.msg) {
                     let msg = self.queued_messages.remove(i);
                     match self.process_message(msg.msg, msg.src).await? {
-                        NextSlot => continue 'main_loop, // Restart from the beginning of the queue
-                        NextMsg => (),
+                        Some(value) => {
+                            tx.send(value).await.expect("Sending value");
+                            continue 'main_loop; // Restart from the beginning of the queue
+                        }
+                        None => (),
                     }
                     continue; // Don't increment i here !
                 }
                 i += 1;
-            }
-
-            // TODO: Break dynamically based on expected propose count
-            if !done && self.slot == self.nb_nodes {
-                self.inner_broadcast(Done).await?;
-                count_done += 1;
-                done = true;
-                self.queued_messages.clear();
             }
 
             if count_done == self.nb_nodes {
@@ -139,27 +94,46 @@ impl KCensus<ReceiverStream<MsgWithSource>, DeSink> {
             }
 
             // TODO: (Optim.) peak connection first ?
-            if my_state!(self).v_uid == None
+            if self.round_state.get_my_v() == None
                 && self.max_seen_slot == self.slot
                 && !self.values.is_empty()
             {
-                let (v_uid, _) = self.values.iter().next().unwrap();
+                let v_uid = self.values.keys().min().unwrap();
                 self.repropose_start(*v_uid).await?;
             }
 
             // Read new messages
-            let msg = self.in_stream.next().await.unwrap();
+            let msg = select! {
+                req = rx.recv(), if self.round_state.get_my_v() == None
+                && !done && self.max_seen_slot == self.slot => {
+                    match req.unwrap() {
+                        Some(req) =>  {
+                            self.propose_start(req).await?;
+                        }
+                        None => {
+                            done = true;
+                            self.inner_broadcast(Done).await?;
+                            count_done += 1;
+                            if count_done == self.nb_nodes {
+                                break 'main_loop;
+                            }
+                        }
+                    }
+                    self.in_stream.next().await.unwrap()
+                }
+                opt_msg = self.in_stream.next() => opt_msg.unwrap(),
+            };
             let src = msg.src;
 
             match msg.msg {
                 KCensusMessage { msg, value } => {
                     if let Some(v) = value {
-                        let inserted = self.values.insert(msg.value_uid, v);
+                        let inserted = self.values.insert(msg.value_uid, v.into_remote_req());
                         // TODO: Allow forwarding values ? (could the value already be there ?)
                         debug_assert!(inserted.is_none());
                     }
 
-                    if !ready_to_process!(self, msg) {
+                    if !self.ready_to_process(&msg) {
                         self.max_seen_slot = self.max_seen_slot.max(msg.slot);
                         self.queued_messages.push(msg.with_source(src));
                         // TODO: recheck queued messages only if
@@ -168,8 +142,11 @@ impl KCensus<ReceiverStream<MsgWithSource>, DeSink> {
                     }
 
                     match self.process_message(msg, src).await? {
-                        NextSlot => continue 'main_loop,
-                        NextMsg => (),
+                        Some(value) => {
+                            tx.send(value).await.expect("Sending value");
+                            continue 'main_loop; // Restart from the beginning of the queue
+                        }
+                        None => (),
                     }
                 }
                 Done => count_done += 1,
@@ -177,8 +154,13 @@ impl KCensus<ReceiverStream<MsgWithSource>, DeSink> {
             }
         } // 'main_loop: loop
 
+        rx.close();
         self.in_stream.close();
         Ok(())
+    }
+
+    fn ready_to_process(&self, msg: &KCensusMsg) -> bool {
+        msg.slot == self.slot && self.values.contains_key(&msg.value_uid)
     }
 
     #[inline]
@@ -193,13 +175,13 @@ impl KCensus<ReceiverStream<MsgWithSource>, DeSink> {
     async fn inner_round_broadcast(
         &mut self,
         command: RoundCommand,
-        value: Option<Value>,
+        value: Option<KVal>,
     ) -> io::Result<()> {
         self.inner_broadcast(KCensusMessage {
             msg: KCensusMsg {
                 slot: self.slot,
                 round: self.round,
-                value_uid: my_state!(self).v_uid.unwrap(),
+                value_uid: self.round_state.get_my_v().unwrap(),
                 command: command.clone(),
             },
             value: value.clone(),
@@ -208,14 +190,12 @@ impl KCensus<ReceiverStream<MsgWithSource>, DeSink> {
     }
 
     #[inline]
-    async fn spread_with_value(
-        &mut self,
-        remote_states: Vec<NodeState>,
-        value: &Value,
-    ) -> io::Result<()> {
+    async fn spread_with_value(&mut self, value: &KVal) -> io::Result<()> {
+        let remote_states = self.round_state.get_node_states().clone();
         self.inner_round_broadcast(
             Spread {
-                remote_states: remote_states.clone(),
+                remote_states,
+                step: 0,
             },
             Some(value.clone()),
         )
@@ -228,12 +208,46 @@ impl KCensus<ReceiverStream<MsgWithSource>, DeSink> {
     }
 
     #[inline]
-    async fn spread(&mut self, remote_states: Vec<NodeState>) -> io::Result<()> {
-        self.round_broadcast(Spread { remote_states }).await
+    async fn spread(&mut self) -> io::Result<()> {
+        let remote_states = self.round_state.get_node_states().clone();
+        let step = self.step + 1;
+        if step > 2 {
+            return Ok(());
+        }
+        let cmd = Spread {
+            remote_states,
+            step,
+        };
+        if step == 2 {
+            let val_uid = self.round_state.get_my_v().unwrap();
+            let proposer = self.values.get(&val_uid).unwrap().value.proposer;
+            if proposer == self.my_pid {
+                return Ok(());
+            }
+            self.out_sinks
+                .get_mut(&proposer)
+                .unwrap()
+                .send(KCensusMessage {
+                    msg: KCensusMsg {
+                        slot: self.slot,
+                        round: self.round,
+                        value_uid: val_uid,
+                        command: cmd,
+                    },
+                    value: None,
+                })
+                .await
+        } else {
+            self.round_broadcast(cmd).await
+        }
     }
 
-    async fn process_message(&mut self, msg: KCensusMsg, src: usize) -> io::Result<Flow> {
-        debug_assert!(ready_to_process!(self, msg)); // Redundant with the following asserts...
+    async fn process_message(
+        &mut self,
+        msg: KCensusMsg,
+        src: usize,
+    ) -> io::Result<Option<Request>> {
+        debug_assert!(self.ready_to_process(&msg)); // Redundant with the following asserts...
         let slot = msg.slot;
         let round = msg.round;
         let msg_v_uid = msg.value_uid;
@@ -242,118 +256,99 @@ impl KCensus<ReceiverStream<MsgWithSource>, DeSink> {
         debug_assert_eq!(slot, self.slot);
 
         // TODO: Ignore some messages if max_seen_slot > slot ?
-
+        // TODO: Handle dead nodes / packet loss ?
         match command {
-            Spread { remote_states } => {
+            Spread {
+                remote_states,
+                step,
+            } => {
                 if round < self.round {
-                    // TODO: Answer with adopted value ? Only if src is not in my knowledge set ?
-                    return Ok(NextMsg);
+                    return Ok(None);
                 } else if round > self.round {
                     self.goto_round(round);
                 }
+                if self.step < step {
+                    self.step = step;
+                }
                 debug_assert!(round == self.round);
 
-                if my_state!(self).v_uid == None {
-                    debug_assert!(!my_state!(self).frozen);
-                    my_state!(self).v_uid = Some(msg_v_uid);
+                if self.round_state.get_my_v() == None {
+                    debug_assert!(!self.round_state.am_i_frozen());
+                    self.round_state.set_my_v(msg_v_uid);
                 }
-                let my_v_uid = my_state!(self).v_uid.unwrap();
+                let my_v_uid = self.round_state.get_my_v().unwrap();
 
-                let orig_kl = my_state!(self).k.len();
-                for pid in 0..self.nb_nodes {
-                    let local_node_state = &mut self.node_states[pid];
-                    let remote_node_state = &remote_states[pid];
-                    local_node_state.k.union_with(&remote_node_state.k);
-                    if let Some(node_v_uid) = remote_node_state.v_uid {
-                        debug_assert_eq!(local_node_state.v_uid.unwrap_or(node_v_uid), node_v_uid);
-                        local_node_state.v_uid = Some(node_v_uid);
-                    }
-                    local_node_state.frozen |= remote_node_state.frozen;
-                }
-                if msg_v_uid == my_v_uid && !my_state!(self).frozen {
-                    my_state!(self).k.union_with(&remote_states[src].k);
-                }
+                let learned = self.round_state.learn_from(&remote_states, msg_v_uid, src);
 
                 // Can commit ?
-                if self.can_commit() {
+                if self.round_state.can_commit() {
                     self.round_broadcast(Commit).await?;
                     let value = self.commit_slot(my_v_uid, false);
-                    return Ok(NextSlot);
+                    return Ok(Some(value));
                 }
 
                 let msg_frozen = remote_states[src].frozen;
 
                 if msg_frozen || msg_v_uid != my_v_uid {
-                    let orig_frozen = my_state!(self).frozen;
-                    my_state!(self).frozen = true;
+                    let orig_frozen = self.round_state.am_i_frozen();
+                    self.round_state.freeze();
 
-                    if let Some(adopted_v) = self.try_adopt() {
+                    if let Some(adopted_v) = self.round_state.try_adopt() {
                         // Conflict resolved. Adopting...
                         self.goto_round(self.round + 1);
-                        my_state!(self).v_uid = Some(adopted_v);
-                        self.spread(self.node_states.clone()).await?;
-                        return Ok(NextMsg);
+                        self.round_state.set_my_v(adopted_v);
+                        self.spread().await?;
+                        return Ok(None);
                     }
 
                     if !orig_frozen {
                         // New conflict. Freezing others...
-                        self.spread(self.node_states.clone()).await?;
-                        return Ok(NextMsg);
+                        self.spread().await?;
+                        return Ok(None);
                     }
                 }
 
-                let kl = my_state!(self).k.len();
-                if kl > orig_kl {
-                    self.spread(self.node_states.clone()).await?;
+                if learned {
+                    self.spread().await?;
                 }
             }
             Commit => {
-                // TODO: ignore round ?
-                // TODO: Handle commit
-
-                println!("######## Commit msg (from round {}):", round);
+                info!("######## Commit msg (from round {}):", round);
                 let value = self.commit_slot(msg_v_uid, true);
-                return Ok(NextSlot);
+                return Ok(Some(value));
             }
         } // match command
-        Ok(NextMsg)
+        Ok(None)
     } // fn process_message
 
     #[inline]
-    async fn propose_start(&mut self, value: Value) -> io::Result<()> {
-        debug_assert!(my_state!(self).v_uid == None);
-
+    async fn propose_start(&mut self, req: Request) -> io::Result<()> {
         let value_uid = self.my_pid + (self.slot * self.nb_nodes);
-        my_state!(self).v_uid = Some(value_uid);
+        self.round_state.set_my_v(value_uid);
 
-        self.spread_with_value(self.node_states.clone(), &value)
-            .await?;
+        self.spread_with_value(&req.value).await?;
 
-        self.values.insert(value_uid, value);
+        self.values.insert(value_uid, req);
 
         Ok(())
     }
 
     async fn repropose_start(&mut self, value_uid: usize) -> io::Result<()> {
-        debug_assert!(my_state!(self).v_uid == None);
-
-        my_state!(self).v_uid = Some(value_uid);
-
-        self.spread(self.node_states.clone()).await
+        self.round_state.set_my_v(value_uid);
+        self.spread().await
     }
 
     #[inline]
-    fn commit_slot(&mut self, value_uid: usize, commit_msg: bool) -> Value {
+    fn commit_slot(&mut self, value_uid: usize, commit_msg: bool) -> Request {
         let value = self.values.remove(&value_uid).unwrap();
         if commit_msg {
-            cprintln!("<#2FB82F>Commited \"{}\" in slot {}.</>", value, self.slot);
+            // "<#2FB82F>Commited \"{}\" in slot {}.</>"
+            debug!("Commited \"{}\" in slot {}.", value.value.val, self.slot);
         } else {
-            cprintln!(
-                "<#2FB82F>Commited \"{}\" in slot {} (round {}) from state:</> <#B8E8B8>{}</>",
-                value,
-                self.slot,
-                self.round,
-                StateDisplay(&self.node_states)
+            debug!(
+                // "<#2FB82F>Commited \"{}\" in slot {} (round {}) from state:</> <#B8E8B8>{}</>"
+                "Commited \"{}\" in slot {} (round {}) from state: {}",
+                value.value.val, self.slot, self.round, self.round_state,
             );
         }
         self.slot += 1;
@@ -366,179 +361,18 @@ impl KCensus<ReceiverStream<MsgWithSource>, DeSink> {
     #[inline]
     fn goto_round(&mut self, round: usize) {
         if round != 0 {
-            cprintln!(
-                "<#FF4F4F>Can not commit in round {} from state:</> <#EFBFBF>{}</>",
-                self.round,
-                StateDisplay(&self.node_states)
+            debug!(
+                // "<#FF4F4F>Can not commit in round {} from state:</> <#EFBFBF>{}</>"
+                "Can not commit in round {} from state: {}",
+                self.round, self.round_state,
             );
             if round > self.round + 1 {
-                println!("<yellow>######## Skipping round !!!!</>");
+                // "<yellow>######## Skipping round !!!!</>"
+                info!("######## Skipping round !!!!");
             }
         }
         self.round = round;
-        for node_state in self.node_states.iter_mut() {
-            node_state.clear();
-        }
-        let inserted = my_state!(self).k.insert(self.my_pid);
-        debug_assert!(inserted);
-        self.my_quorum.clear();
-        self.next_combination_pos.clear();
-        self.frozen_size_checked = 0;
-    }
-
-    // TODO: Allow can_commit to run for other proposals ?
-    // TODO: Speedup for e-paxos / paxos ?
-    fn can_commit(&mut self) -> bool {
-        let k_size = my_state!(self).k.len();
-        debug_assert!(k_size <= self.nb_nodes);
-        if k_size < self.majority {
-            return false;
-        }
-        let unknown_nodes = self.nb_nodes - k_size;
-        let trivial_frozen = self.majority;
-        let minority = self.nb_nodes - self.majority;
-        let min_frozen = (k_size - minority).max(self.frozen_size_checked + 1); // Skip already checked ones
-
-        /* When new nodes appear, if we already checked combinations of up to k-1 frozen,
-        then we know that sets of up to k frozen nodes that include some new nodes are fine
-        (thanks to the monotonicity of the score function & min_frozen increasing with new nodes)
-        thus we only need to refresh my_quorum when reaching k+1 frozen bellow */
-        if self.frozen_size_checked + 1 < min_frozen {
-            // Note: this will trigger a refresh of my_quorum
-            self.next_combination_pos.clear();
-            self.frozen_size_checked = min_frozen - 1;
-        }
-
-        for frozen in min_frozen..trivial_frozen {
-            let max_others_score = 2 * unknown_nodes - (self.majority - frozen);
-            let to_know = self.majority.min(((max_others_score + frozen) / 2) + 1);
-
-            // TODO: If everyone knows a node that knows a majority*, we can:
-            //         - Change this condition to to_know <= frozen + 1
-            //       OR equivalently:
-            //         - Lower trivial_frozen to majority-1
-            //         - Immediately return true if k_size >= fast_quorum
-            //   *: e.g. we're the sole proposer
-            if to_know <= frozen {
-                self.frozen_size_checked = frozen;
-                self.next_combination_pos.clear();
-                continue;
-            }
-            if self.next_combination_pos.is_empty() {
-                if self.my_quorum.len() != k_size {
-                    self.my_quorum.clear();
-                    self.my_quorum.extend(my_state!(self).k.iter());
-                    // Optimisation: Put bigger knowledge first to help early skip
-                    // Note: !x == (usize::MAX - x)
-                    self.my_quorum
-                        .sort_by_key(|a| !self.node_states[*a].k.len());
-
-                    // println!("Reordering my_k len: {}", self.my_k.len());
-                    // for pid in self.my_k.iter() {
-                    //     println!("Knowledge of {}: {:?}", pid, my_knowledge[*pid])
-                    // }
-                }
-                self.next_combination_pos.extend(0..frozen);
-            }
-            debug_assert_eq!(self.next_combination_pos.len(), frozen);
-            loop {
-                // TODO: Save intermediate known set to reduce recomputations ? (is it worth it ?)
-                let known = &mut self._bitset_scratchpad;
-                known.clear();
-                let mut unused_knowledge = frozen;
-                for pos in self.next_combination_pos.iter() {
-                    let pid = self.my_quorum[*pos];
-                    known.union_with(&self.node_states[pid].k);
-                    unused_knowledge -= 1;
-                    // Optimisation: Early skip
-                    if known.len() >= to_know {
-                        break;
-                    }
-                }
-
-                if known.len() < to_know {
-                    return false;
-                }
-
-                let changed_suffix_size =
-                    self.next_combination(self.my_quorum.len(), unused_knowledge);
-                if changed_suffix_size == 0 {
-                    break;
-                }
-            }
-            // Save combinations that are checked
-            self.frozen_size_checked = frozen;
-            self.next_combination_pos.clear();
-        } // for frozen
-        true
-    } // fn can_commit
-
-    #[inline]
-    fn next_combination(&mut self, positions: usize, unused: usize) -> usize {
-        debug_assert!(positions < self.nb_nodes);
-        let pos = &mut self.next_combination_pos;
-        let len = pos.len();
-        debug_assert!(len < self.majority);
-
-        // Optimisation: Skip combinations that only change the unused nodes
-        let min_to_move = 1.max(unused + 1);
-        for suffix_size in min_to_move..=len {
-            let suffix_start = len - suffix_size;
-            // Can we move the last "suffix_size" positions ?
-            if pos[suffix_start] + suffix_size < positions {
-                // Yes: Move them and return
-                let new_pos = pos[suffix_start] + 1;
-                for j in 0..suffix_size {
-                    pos[suffix_start + j] = new_pos + j;
-                }
-                return suffix_size;
-            }
-        }
-        0
-    }
-
-    fn try_adopt(&mut self) -> Option<usize> {
-        let frozen_count = self.node_states.iter().filter(|x| x.frozen).count();
-        if frozen_count < self.majority {
-            return None;
-        }
-
-        let mut max_score = 0usize;
-        let mut max_score_v = None;
-        for some_node in self.node_states.iter() {
-            if !some_node.frozen {
-                continue;
-            }
-            let v = some_node.v_uid;
-            // For all v in the frozen set
-            if v == max_score_v {
-                continue;
-            }
-
-            let mut v_frozen_count = 0;
-            self._bitset_scratchpad.clear();
-            for node in self.node_states.iter() {
-                if !node.frozen || v != node.v_uid {
-                    continue;
-                }
-                v_frozen_count += 1;
-                self._bitset_scratchpad.union_with(&node.k);
-            }
-            let v_known_count = self._bitset_scratchpad.len();
-            debug_assert!(v_frozen_count <= v_known_count);
-
-            if v_known_count > self.majority {
-                return v;
-            }
-
-            let score = v_known_count * 2 - v_frozen_count;
-
-            if score > max_score {
-                max_score = score;
-                max_score_v = v;
-            }
-        }
-        debug_assert!(max_score_v.is_some());
-        max_score_v
+        self.step = 0;
+        self.round_state.clear();
     }
 }

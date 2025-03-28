@@ -1,6 +1,5 @@
 use bit_set::BitSet;
 use serde::{Deserialize, Serialize};
-use std::fmt;
 
 pub type Knowledge = BitSet;
 
@@ -24,20 +23,5 @@ impl NodeState {
             k: BitSet::with_capacity(nb_nodes),
             frozen: false,
         }
-    }
-}
-
-pub struct StateDisplay<'a>(pub &'a [NodeState]);
-
-impl<'a> fmt::Display for StateDisplay<'a> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        // write!(f, "[")?;
-        for (i, state) in self.0.iter().enumerate() {
-            if let Some(v_uid) = state.v_uid {
-                write!(f, "\n  {}: uid={}, k={:?}", i, v_uid, state.k)?;
-            }
-        }
-        // write!(f, "\n]")?;
-        Ok(())
     }
 }
