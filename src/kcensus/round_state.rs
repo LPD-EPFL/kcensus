@@ -1,4 +1,4 @@
-use crate::node_state::{Knowledge, NodeState};
+use crate::kcensus::node_state::{Knowledge, NodeState};
 use log::trace;
 use std::fmt;
 
@@ -47,8 +47,10 @@ impl RoundState {
         for node_state in self.node_states.iter_mut() {
             node_state.clear();
         }
+        // Alternatively, the following could be set in set_my_v
         let inserted = my_state!(self).k.insert(self.my_pid);
         debug_assert!(inserted);
+
         self.my_quorum.clear();
         self.next_combination_pos.clear();
         self.frozen_size_checked = 0;
@@ -98,6 +100,19 @@ impl RoundState {
         orig_kl < my_state!(self).k.len()
     }
 
+    pub fn partial_learn(&mut self, learner: usize, about: usize) {
+        self.node_states[learner].k.insert(about);
+        my_state!(self).k.insert(about);
+    }
+
+    pub fn learn(&mut self, learner: usize, about: &Knowledge) {
+        self.node_states[learner].k.union_with(about);
+    }
+
+    pub fn knows(&self, learner: usize, about: usize) -> bool {
+        self.node_states[learner].k[about]
+    }
+
     pub fn try_adopt(&mut self) -> Option<usize> {
         let frozen_count = self.node_states.iter().filter(|x| x.frozen).count();
         if frozen_count < self.majority {
@@ -144,7 +159,7 @@ impl RoundState {
     }
 
     // TODO: Allow can_commit to run for other proposals ?
-    // TODO: Speedup for e-paxos / paxos ?
+    // TODO: Speedup for e-paxos / paxos scenarios ?
     pub fn can_commit(&mut self) -> bool {
         let k_size = my_state!(self).k.len();
         debug_assert!(k_size <= self.nb_nodes);
@@ -175,7 +190,7 @@ impl RoundState {
             //       OR equivalently:
             //         - Lower trivial_frozen to majority-1
             //         - Immediately return true if k_size >= fast_quorum
-            //   *: e.g. we're the sole proposer
+            //   *: e.g. if we're the sole proposer
             if to_know <= frozen {
                 self.frozen_size_checked = frozen;
                 self.next_combination_pos.clear();

@@ -1,4 +1,4 @@
-use crate::kcensus::{KVal, Request};
+use crate::value::{KVal, Request};
 use std::time::Duration;
 use tokio::sync::mpsc::Sender;
 use tokio::time::Instant;

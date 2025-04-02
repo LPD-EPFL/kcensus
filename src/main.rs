@@ -1,11 +1,13 @@
 use crate::connector::Connector;
+use crate::kcensus::propagation::compute_propagation_graphs;
 use crate::kcensus::{KCensus, NbNodes, Pid};
+use crate::message::Message;
+use crate::topology::from_toml;
 use crate::value::Request;
 use clap::Parser;
 use futures::prelude::stream::select_all;
 use futures::TryStreamExt;
-use log::info;
-use message::Message;
+use log::{debug, info};
 use std::collections::HashMap;
 use std::io;
 use tokio::sync::mpsc;
@@ -16,18 +18,17 @@ mod connector;
 mod delayer;
 mod kcensus;
 mod message;
-mod node_state;
 mod requester;
-mod round_state;
+mod topology;
 mod value;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Args {
-    #[arg(short, long, default_value_t = 3)]
-    nb_nodes: usize,
     #[arg(short, long)]
     pid: usize,
+    #[arg(short, long)]
+    config: String,
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -35,8 +36,11 @@ async fn main() -> io::Result<()> {
     env_logger::init();
 
     let args = Args::parse();
-    let nb_nodes = args.nb_nodes;
     let my_pid = args.pid;
+    let topology = from_toml(&args.config);
+    debug!("Loaded topology:{}", topology);
+    let nb_nodes = topology.regions.len();
+    let propagation_graphs = compute_propagation_graphs(&topology);
 
     let mut sinks = HashMap::with_capacity(nb_nodes - 1);
     let mut streams = Vec::with_capacity(nb_nodes - 1);
@@ -61,13 +65,14 @@ async fn main() -> io::Result<()> {
     let (delayed_tx, delayed_rx) = mpsc::channel(1);
 
     let delayer_task =
-        tokio::task::spawn(delayer::delayer(nb_nodes, my_pid, input_stream, delayed_tx));
+        tokio::task::spawn(delayer::delayer(topology, my_pid, input_stream, delayed_tx));
 
     let kcensus = KCensus::new(
         NbNodes(nb_nodes),
         Pid(my_pid),
         ReceiverStream::new(delayed_rx),
         sinks,
+        propagation_graphs,
     );
 
     let (request_tx, request_rx) = mpsc::channel(1);

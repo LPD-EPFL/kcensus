@@ -1,9 +1,11 @@
 use crate::connector::DeSink;
+use crate::kcensus::message::RoundCommand::{Commit, Spread};
+use crate::kcensus::message::{KCensusMsg, KCensusMsgWithSource, RoundCommand};
+use crate::kcensus::propagation::PropagationGraphs;
+use crate::kcensus::round_state::RoundState;
 use crate::message::Message::{Done, KCensusMessage};
-use crate::message::RoundCommand::{Commit, Spread};
-use crate::message::{KCensusMsg, KCensusMsgWithSource, Message, MsgWithSource, RoundCommand};
-use crate::round_state::RoundState;
-pub(crate) use crate::value::{KVal, Request};
+use crate::message::MsgWithSource;
+use crate::value::{KVal, Request};
 use futures::{SinkExt, StreamExt};
 use log::{debug, info};
 use std::collections::HashMap;
@@ -11,6 +13,11 @@ use std::io;
 use tokio::select;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio_stream::wrappers::ReceiverStream;
+
+pub mod message;
+pub mod node_state;
+pub mod propagation;
+mod round_state;
 
 pub struct KCensus<St, Sk> {
     // Settings
@@ -20,6 +27,9 @@ pub struct KCensus<St, Sk> {
     // Connections
     in_stream: St,
     out_sinks: HashMap<usize, Sk>,
+
+    // Propagation graphs
+    propagation_graphs: PropagationGraphs,
 
     // Overall state
     slot: usize,
@@ -41,6 +51,7 @@ impl KCensus<ReceiverStream<MsgWithSource>, DeSink> {
         my_pid: Pid,
         in_stream: ReceiverStream<MsgWithSource>,
         out_sinks: HashMap<usize, DeSink>,
+        propagation_graphs: PropagationGraphs,
     ) -> Self {
         let nb_nodes = nb_nodes.0;
         Self {
@@ -49,6 +60,8 @@ impl KCensus<ReceiverStream<MsgWithSource>, DeSink> {
 
             in_stream,
             out_sinks,
+
+            propagation_graphs,
 
             slot: 0,
             max_seen_slot: 0,
@@ -79,7 +92,7 @@ impl KCensus<ReceiverStream<MsgWithSource>, DeSink> {
                     let msg = self.queued_messages.remove(i);
                     match self.process_message(msg.msg, msg.src).await? {
                         Some(value) => {
-                            tx.send(value).await.expect("Sending value");
+                            tx.send(value).await.expect("Sending commited value");
                             continue 'main_loop; // Restart from the beginning of the queue
                         }
                         None => (),
@@ -143,7 +156,7 @@ impl KCensus<ReceiverStream<MsgWithSource>, DeSink> {
 
                     match self.process_message(msg, src).await? {
                         Some(value) => {
-                            tx.send(value).await.expect("Sending value");
+                            tx.send(value).await.expect("Sending commited value");
                             continue 'main_loop; // Restart from the beginning of the queue
                         }
                         None => (),
@@ -345,8 +358,8 @@ impl KCensus<ReceiverStream<MsgWithSource>, DeSink> {
             // "<#2FB82F>Commited \"{}\" in slot {}.</>"
             debug!("Commited \"{}\" in slot {}.", value.value.val, self.slot);
         } else {
+            // "<#2FB82F>Commited \"{}\" in slot {} (round {}) from state:</> <#B8E8B8>{}</>"
             debug!(
-                // "<#2FB82F>Commited \"{}\" in slot {} (round {}) from state:</> <#B8E8B8>{}</>"
                 "Commited \"{}\" in slot {} (round {}) from state: {}",
                 value.value.val, self.slot, self.round, self.round_state,
             );
