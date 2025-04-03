@@ -31,7 +31,7 @@ impl Display for Topology {
             write!(f, "\n{i}: \"{}\":", self.regions[i])?;
             write!(f, "\n  - raw_latencies: {:?}", self.link_latencies[i])?;
             write!(f, "\n  - path_latencies: {:?}", self.path_latencies[i])?;
-            write!(f, "\n  - path_to: {:?}", self.next_to[i])?;
+            write!(f, "\n  - path_to: {:?}", self.next_src[i])?;
         }
         Ok(())
     }

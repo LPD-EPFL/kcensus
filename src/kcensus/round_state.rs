@@ -1,6 +1,14 @@
 use crate::kcensus::node_state::{Knowledge, NodeState};
+use crate::kcensus::propagation::MessageId;
 use log::trace;
+use std::collections::HashSet;
 use std::fmt;
+
+macro_rules! my_state {
+    ($self:ident) => {
+        $self.node_states[$self.my_pid]
+    };
+}
 
 pub struct RoundState {
     nb_nodes: usize,
@@ -9,17 +17,14 @@ pub struct RoundState {
 
     node_states: Vec<NodeState>,
 
+    proposers: Vec<usize>,
+    received_msgs: HashSet<MessageId>,
+
     // can_commit optimizations / scratchpads
     my_quorum: Vec<usize>,
     next_combination_pos: Vec<usize>,
     frozen_size_checked: usize,
     _bitset_scratchpad: Knowledge,
-}
-
-macro_rules! my_state {
-    ($self:ident) => {
-        $self.node_states[$self.my_pid]
-    };
 }
 
 impl RoundState {
@@ -36,6 +41,9 @@ impl RoundState {
 
             node_states,
 
+            proposers: Vec::with_capacity(nb_nodes),
+            received_msgs: HashSet::with_capacity(nb_nodes),
+
             my_quorum: Vec::with_capacity(nb_nodes),
             next_combination_pos: Vec::with_capacity(majority - 1),
             frozen_size_checked: 0,
@@ -51,6 +59,9 @@ impl RoundState {
         let inserted = my_state!(self).k.insert(self.my_pid);
         debug_assert!(inserted);
 
+        self.proposers.clear();
+        self.received_msgs.clear();
+
         self.my_quorum.clear();
         self.next_combination_pos.clear();
         self.frozen_size_checked = 0;
@@ -65,6 +76,15 @@ impl RoundState {
         my_state!(self).v_uid = Some(v_uid);
     }
 
+    pub fn get_v(&self, pid: usize) -> Option<usize> {
+        self.node_states[pid].v_uid
+    }
+
+    pub fn set_v(&mut self, pid: usize, v_uid: usize) {
+        debug_assert!(self.node_states[pid].v_uid.unwrap_or(v_uid) == v_uid);
+        self.node_states[pid].v_uid = Some(v_uid);
+    }
+
     pub fn am_i_frozen(&self) -> bool {
         my_state!(self).frozen
     }
@@ -75,6 +95,38 @@ impl RoundState {
 
     pub fn get_node_states(&self) -> &Vec<NodeState> {
         &self.node_states
+    }
+
+    pub fn new_proposer(&mut self, pid: usize) -> bool {
+        if self.proposers.contains(&pid) {
+            return false;
+        }
+        // Note: Can only propose if I didn't see other proposals
+        assert!(pid != self.my_pid || self.proposers.len() == 0);
+        self.proposers.push(pid);
+        true
+    }
+
+    pub fn multiple_proposers(&self) -> bool {
+        self.proposers.len() > 1
+    }
+
+    pub fn proposers(&self) -> &[usize] {
+        &self.proposers
+    }
+
+    pub fn am_i_proposer(&self) -> bool {
+        // Note: Can only propose if I didn't see other proposals
+        self.proposers.len() > 0 && self.proposers[0] == self.my_pid
+    }
+
+    pub fn receive_msg(&mut self, msg: MessageId) {
+        let inserted = self.received_msgs.insert(msg);
+        debug_assert!(inserted);
+    }
+
+    pub fn can_send(&mut self, dependencies: &HashSet<MessageId>) -> bool {
+        self.received_msgs.is_superset(&dependencies)
     }
 
     pub fn learn_from(
@@ -110,7 +162,7 @@ impl RoundState {
     }
 
     pub fn knows(&self, learner: usize, about: usize) -> bool {
-        self.node_states[learner].k[about]
+        self.node_states[learner].k.contains(about)
     }
 
     pub fn try_adopt(&mut self) -> Option<usize> {
