@@ -2,8 +2,10 @@ use crate::kcensus::node_state::Knowledge;
 use crate::kcensus::round_state::RoundState;
 use crate::topology::Topology;
 use bit_set::BitSet;
+use log::trace;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::fmt::{Display, Formatter};
 use std::time::Duration;
 
 type ProcId = usize;
@@ -12,15 +14,40 @@ type ProcId = usize;
 pub struct MessageId {
     pub proposer: ProcId,
     pub src: ProcId,
+    pub dest: ProcId,
     time: Duration,
+}
+
+impl Display for MessageId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "(p{} at {:?}: {} -> {})",
+            self.proposer, self.time, self.src, self.dest
+        )
+    }
 }
 
 #[derive(Debug)]
 pub struct MessageInfo {
     dependencies: HashSet<MessageId>,
     needed_by: Vec<MessageId>,
-    dest: Vec<ProcId>,
-    with_value: Vec<bool>,
+    with_value: bool,
+}
+
+impl Display for MessageInfo {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}val={},deps=[", "{", self.with_value)?;
+        for (i, x) in self.dependencies.iter().enumerate() {
+            write!(f, "{}{}", if i == 0 { "" } else { ", " }, x)?;
+        }
+        write!(f, "],needed_by=[")?;
+        for (i, x) in self.needed_by.iter().enumerate() {
+            write!(f, "{}{}", if i == 0 { "" } else { ", " }, x)?;
+        }
+        write!(f, "]{}", "}")?;
+        Ok(())
+    }
 }
 
 impl MessageInfo {
@@ -32,37 +59,45 @@ impl MessageInfo {
         &self.needed_by
     }
 
-    pub fn get_destinations(&self) -> &[ProcId] {
-        &self.dest
-    }
-
-    pub fn get_with_value(&self) -> &[bool] {
-        &self.with_value
+    pub fn get_with_value(&self) -> bool {
+        self.with_value
     }
 }
 
 #[derive(Debug)]
-pub struct PropagationGraphs(Vec<HashMap<MessageId, MessageInfo>>);
+struct PropagationGraph {
+    start_messages: Vec<MessageId>,
+    graph: HashMap<MessageId, MessageInfo>,
+}
+
+#[derive(Debug)]
+pub struct PropagationGraphs(Vec<PropagationGraph>);
 
 impl PropagationGraphs {
     pub fn get_by_id(&self, msg_id: &MessageId) -> &MessageInfo {
-        &self.0[msg_id.proposer][&msg_id]
+        &self.0[msg_id.proposer].graph[&msg_id]
     }
 
-    pub fn get_start(&self, proposer: ProcId) -> (MessageId, &MessageInfo) {
-        let start_id = MessageId {
-            proposer,
-            src: proposer,
-            time: Duration::default(),
-        };
-        (start_id, &self.0[proposer][&start_id])
+    pub fn get_start(&self, proposer: ProcId) -> &[MessageId] {
+        &self.0[proposer].start_messages
     }
 }
 
+#[derive(Debug)]
 struct TriangularPath {
     first: ProcId,
     second: ProcId,
     total_latency: Duration,
+}
+
+impl Display for TriangularPath {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "(p -> {} -> {} -> p: {:?})",
+            self.first, self.second, self.total_latency
+        )
+    }
 }
 
 fn triangle_latency(t: &TriangularPath) -> Duration {
@@ -72,6 +107,7 @@ fn triangle_latency(t: &TriangularPath) -> Duration {
 pub fn compute_propagation_graphs(topology: &Topology) -> PropagationGraphs {
     let mut propagation_graphs = Vec::with_capacity(topology.nb_nodes);
     for proposer in 0..topology.nb_nodes {
+        trace!("proposer: {}", proposer);
         let mut triangular_paths: Vec<TriangularPath> =
             Vec::with_capacity(topology.nb_nodes * topology.nb_nodes);
         for first in 0..topology.nb_nodes {
@@ -88,6 +124,11 @@ pub fn compute_propagation_graphs(topology: &Topology) -> PropagationGraphs {
             }
         }
         triangular_paths.sort_by_key(triangle_latency);
+        // trace!("triangular_paths: {}", triangular_paths.len());
+        trace!(
+            "longest triangular path: {}",
+            triangular_paths.last().unwrap()
+        );
 
         // Used to ensure the raw value is sent to everyone (not for knowledge spreading)
         let mut value_only_paths: Vec<TriangularPath> = Vec::with_capacity(topology.nb_nodes);
@@ -101,6 +142,8 @@ pub fn compute_propagation_graphs(topology: &Topology) -> PropagationGraphs {
             })
         }
         value_only_paths.sort_by_key(triangle_latency);
+        trace!("value_only_paths: {}", value_only_paths.len());
+        trace!("longest value path: {}", value_only_paths.last().unwrap());
 
         // Simulate gossip until commit
         let mut round_state = RoundState::new(topology.nb_nodes, proposer);
@@ -114,18 +157,29 @@ pub fn compute_propagation_graphs(topology: &Topology) -> PropagationGraphs {
         // Truncate at commit time
         triangular_paths.truncate(count);
         let max_latency = triangular_paths[count - 1].total_latency;
+        trace!(
+            "Left after truncate: {} real triangles, {} total",
+            triangular_paths
+                .iter()
+                .filter(|x| x.first != proposer && x.second != proposer && x.first != x.second)
+                .count(),
+            triangular_paths.len()
+        );
+        trace!("longest path: {}", triangular_paths[count - 1]);
 
         // TODO: Some triangles might still not be needed to commit.
         //   Try to check if they are needed for can_commit? (can be merged with bellow logic?)
+        //   (Easy case: detect if e-paxos quorum)
 
         round_state.clear();
         let mut message_times: Vec<Vec<BTreeSet<Duration>>> =
             vec![vec![BTreeSet::new(); topology.nb_nodes]; topology.nb_nodes];
         let mut message_graph: HashMap<MessageId, MessageInfo> = HashMap::new();
+        let mut start_messages: Vec<MessageId> = Vec::new();
         // Remove extra triangles
-        let mut i = count;
-        let mut j = topology.nb_nodes;
-        while topology.nb_nodes < j {
+        let mut i = count; // desc
+        let mut j = 0; // asc
+        while j < topology.nb_nodes {
             let value_only_path = i == 0;
             let t = if !value_only_path {
                 i -= 1;
@@ -138,6 +192,12 @@ pub fn compute_propagation_graphs(topology: &Topology) -> PropagationGraphs {
             if !value_only_path {
                 if round_state.can_commit() {
                     i = 0;
+                    trace!("Messages in graph (without value_only paths): ");
+                    let mut messages = message_graph.iter().collect::<Vec<_>>();
+                    messages.sort_by_key(|(x, _)| (x.time, x.src, x.dest));
+                    for msg in messages.into_iter() {
+                        trace!("    - {}: {}", msg.0, msg.1);
+                    }
                     continue;
                 }
                 if round_state.knows(t.second, t.first) {
@@ -164,25 +224,29 @@ pub fn compute_propagation_graphs(topology: &Topology) -> PropagationGraphs {
             let steps = [t.first, t.second, proposer];
             for step in 0..3 {
                 let goal = steps[step];
-                if step == 2 || step == 1 && goal == proposer {
+                if step > 0 && goal == proposer {
+                    shortest_path_from_proposer = false;
                     shortest_path_to_proposer = true;
                 }
 
                 while current != goal {
                     let src = current;
                     current = topology.next_src[current][goal];
-                    if t.total_latency >= max_latency && value_only_path && goal == proposer {
+                    if t.total_latency > max_latency && value_only_path && goal == proposer {
                         // Go back directly to limit message count
                         current = goal;
                     }
+                    debug_assert!(src != current);
                     k.insert(current);
                     round_state.learn(current, &k);
 
-                    shortest_path_from_proposer &= topology.prev_dest[proposer][current] == src;
-                    let left = topology.path_latencies[current][goal]
-                        + topology.path_latencies[goal][proposer];
-                    let to_prop = topology.path_latencies[current][proposer];
-                    shortest_path_to_proposer |= step == 1 && left == to_prop;
+                    if step > 0 {
+                        shortest_path_from_proposer &= topology.prev_dest[proposer][current] == src;
+                        let left = topology.path_latencies[src][goal]
+                            + topology.path_latencies[goal][proposer];
+                        let to_prop = topology.path_latencies[src][proposer];
+                        shortest_path_to_proposer |= left == to_prop;
+                    }
 
                     let deadline = current_time + max_slack;
                     let msg_id = if let Some(time) = message_times[src][current]
@@ -194,6 +258,7 @@ pub fn compute_propagation_graphs(topology: &Topology) -> PropagationGraphs {
                         let msg_id = MessageId {
                             proposer,
                             src,
+                            dest: current,
                             time: *time,
                         };
                         // Potentially add dependency links:
@@ -206,12 +271,6 @@ pub fn compute_propagation_graphs(topology: &Topology) -> PropagationGraphs {
                                 let prev_msg_info = message_graph.get_mut(&prev_msg_id).unwrap();
                                 prev_msg_info.needed_by.push(msg_id);
                             }
-                        }
-                        // Potentially add destination:
-                        if !message_graph[&msg_id].dest.contains(&current) {
-                            let msg_info = message_graph.get_mut(&msg_id).unwrap();
-                            msg_info.dest.push(current);
-                            msg_info.with_value.push(shortest_path_from_proposer);
                         }
                         msg_id
                     } else {
@@ -228,8 +287,15 @@ pub fn compute_propagation_graphs(topology: &Topology) -> PropagationGraphs {
                         let msg_id = MessageId {
                             proposer,
                             src,
+                            dest: current,
                             time,
                         };
+
+                        if time == Duration::default() {
+                            debug_assert!(src == proposer);
+                            debug_assert!(shortest_path_from_proposer);
+                            start_messages.push(msg_id);
+                        }
 
                         // Potentially add dependency links:
                         let dependencies = match prev_msg_id {
@@ -255,8 +321,7 @@ pub fn compute_propagation_graphs(topology: &Topology) -> PropagationGraphs {
                                 MessageInfo {
                                     dependencies,
                                     needed_by: vec![],
-                                    dest: vec![current],
-                                    with_value: vec![shortest_path_from_proposer],
+                                    with_value: shortest_path_from_proposer,
                                 },
                             )
                             .is_none();
@@ -272,8 +337,12 @@ pub fn compute_propagation_graphs(topology: &Topology) -> PropagationGraphs {
                 }
             }
         }
+
         debug_assert!(propagation_graphs.len() == proposer);
-        propagation_graphs.push(message_graph);
+        propagation_graphs.push(PropagationGraph {
+            start_messages,
+            graph: message_graph,
+        });
     }
     PropagationGraphs(propagation_graphs)
 }

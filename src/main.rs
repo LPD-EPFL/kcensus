@@ -41,7 +41,6 @@ async fn main() -> io::Result<()> {
     debug!("Loaded topology:{}", topology);
     let nb_nodes = topology.regions.len();
     let propagation_graphs = compute_propagation_graphs(&topology);
-    debug!("Propagation Graph:{:?}", propagation_graphs);
 
     let mut sinks = HashMap::with_capacity(nb_nodes - 1);
     let mut streams = Vec::with_capacity(nb_nodes - 1);

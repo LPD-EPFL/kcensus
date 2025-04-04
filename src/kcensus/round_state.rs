@@ -1,6 +1,5 @@
 use crate::kcensus::node_state::{Knowledge, NodeState};
 use crate::kcensus::propagation::MessageId;
-use log::trace;
 use std::collections::HashSet;
 use std::fmt;
 
@@ -257,10 +256,10 @@ impl RoundState {
                     self.my_quorum
                         .sort_by_key(|a| !self.node_states[*a].k.len());
 
-                    trace!("Reordering my_quorum len: {}", self.my_quorum.len());
-                    for pid in self.my_quorum.iter() {
-                        trace!("  - Knowledge of {}: {:?}", pid, self.node_states[*pid].k)
-                    }
+                    // trace!("Reordering my_quorum len: {}", self.my_quorum.len());
+                    // for pid in self.my_quorum.iter() {
+                    //     trace!("  - Knowledge of {}: {:?}", pid, self.node_states[*pid].k)
+                    // }
                 }
                 self.next_combination_pos.extend(0..frozen);
             }

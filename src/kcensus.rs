@@ -456,17 +456,24 @@ impl KCensus<ReceiverStream<MsgWithSource>, DeSink> {
 
     #[inline]
     async fn start_spread(&mut self, value_spreading: bool) -> io::Result<()> {
-        let (_, msg_info) = self.propagation_graphs.get_start(self.my_pid);
-        for i in 0..msg_info.get_destinations().len() {
+        let msg_count = self.propagation_graphs.get_start(self.my_pid).len();
+        for m_i in 0..msg_count {
             // Reborrow
-            let (msg_id, msg_info) = self.propagation_graphs.get_start(self.my_pid);
-            let dest = msg_info.get_destinations()[i];
-            debug_assert!(msg_info.get_with_value()[i]);
+            let msg_id = self.propagation_graphs.get_start(self.my_pid)[m_i];
+            debug_assert!(self.propagation_graphs.get_by_id(&msg_id).get_with_value());
+            debug_assert!(
+                self.propagation_graphs
+                    .get_by_id(&msg_id)
+                    .get_dependencies()
+                    .is_empty()
+            );
+
             let cmd = Spread {
                 msg_id: Some(msg_id),
                 remote_states: self.round_state.get_node_states().clone(),
                 value_spreading,
             };
+            let dest = msg_id.dest;
             self.send_command_to(cmd, dest).await?
         }
         Ok(())
@@ -479,32 +486,30 @@ impl KCensus<ReceiverStream<MsgWithSource>, DeSink> {
         value_spreading: bool,
     ) -> io::Result<()> {
         let prev_msg_info = self.propagation_graphs.get_by_id(&prev_msg_id);
-        for m in 0..prev_msg_info.follow_up_messages().len() {
+        let msg_count = prev_msg_info.follow_up_messages().len();
+        for m_i in 0..msg_count {
             // Reborrow
             let prev_msg_info = self.propagation_graphs.get_by_id(&prev_msg_id);
-            let msg_id = prev_msg_info.follow_up_messages()[m];
+            let msg_id = prev_msg_info.follow_up_messages()[m_i];
             if msg_id.src != self.my_pid {
                 continue;
             }
             let msg_info = self.propagation_graphs.get_by_id(&msg_id);
 
             if !self.round_state.can_send(msg_info.get_dependencies()) {
-                debug_assert!(!msg_info.get_with_value().contains(&true));
+                debug_assert!(!msg_info.get_with_value());
                 continue;
             }
 
             self.round_state.receive_msg(msg_id);
-            for i in 0..msg_info.get_destinations().len() {
-                // Reborrow
-                let msg_info = self.propagation_graphs.get_by_id(&msg_id);
-                let dest = msg_info.get_destinations()[i];
-                let cmd = Spread {
-                    msg_id: Some(msg_id),
-                    remote_states: self.round_state.get_node_states().clone(),
-                    value_spreading: value_spreading && msg_info.get_with_value()[i],
-                };
-                self.send_command_to(cmd, dest).await?;
-            }
+
+            let cmd = Spread {
+                msg_id: Some(msg_id),
+                remote_states: self.round_state.get_node_states().clone(),
+                value_spreading: value_spreading && msg_info.get_with_value(),
+            };
+            let dest = msg_id.dest;
+            self.send_command_to(cmd, dest).await?;
         }
         Ok(())
     }
@@ -516,7 +521,8 @@ impl KCensus<ReceiverStream<MsgWithSource>, DeSink> {
             .get_v(prev_msg_id.proposer)
             .expect("Should have received value from proposer when spreading value");
         let prev_msg_info = self.propagation_graphs.get_by_id(&prev_msg_id);
-        for msg_i in 0..prev_msg_info.follow_up_messages().len() {
+        let msg_count = prev_msg_info.follow_up_messages().len();
+        for msg_i in 0..msg_count {
             // Reborrow
             let prev_msg_info = self.propagation_graphs.get_by_id(&prev_msg_id);
             let msg_id = prev_msg_info.follow_up_messages()[msg_i];
@@ -527,18 +533,14 @@ impl KCensus<ReceiverStream<MsgWithSource>, DeSink> {
 
             self.round_state.receive_msg(msg_id);
 
-            for dest_i in 0..msg_info.get_destinations().len() {
-                // Reborrow
-                let msg_info = self.propagation_graphs.get_by_id(&msg_id);
-                let dest = msg_info.get_destinations()[dest_i];
-                if !msg_info.get_with_value()[dest_i] {
-                    continue;
-                }
-                debug_assert!(self.round_state.can_send(msg_info.get_dependencies()));
-
-                let cmd = SpreadValueOnly { msg_id, value_uid };
-                self.send_command_to(cmd, dest).await?;
+            if !msg_info.get_with_value() {
+                continue;
             }
+            debug_assert!(self.round_state.can_send(msg_info.get_dependencies()));
+
+            let dest = msg_id.dest;
+            let cmd = SpreadValueOnly { msg_id, value_uid };
+            self.send_command_to(cmd, dest).await?;
         }
         Ok(())
     }

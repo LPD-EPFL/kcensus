@@ -29,9 +29,10 @@ impl Display for Topology {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         for i in 0..self.regions.len() {
             write!(f, "\n{i}: \"{}\":", self.regions[i])?;
-            write!(f, "\n  - raw_latencies: {:?}", self.link_latencies[i])?;
+            write!(f, "\n  - link_latencies: {:?}", self.link_latencies[i])?;
             write!(f, "\n  - path_latencies: {:?}", self.path_latencies[i])?;
-            write!(f, "\n  - path_to: {:?}", self.next_src[i])?;
+            write!(f, "\n  - next_src: {:?}", self.next_src[i])?;
+            write!(f, "\n  - prev_dest: {:?}", self.prev_dest[i])?;
         }
         Ok(())
     }
