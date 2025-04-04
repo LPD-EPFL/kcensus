@@ -1,10 +1,8 @@
 use crate::message::{MsgWithDeadline, MsgWithSource};
 use crate::topology::Topology;
-use chrono::Utc;
 use futures::Stream;
 use log::trace;
 use std::collections::VecDeque;
-use std::fmt::Debug;
 use std::io;
 use std::time::Instant;
 use tokio::sync::mpsc::Sender;
