@@ -74,7 +74,7 @@ impl RoundState {
 
     #[inline]
     pub fn set_my_v(&mut self, v_uid: usize) {
-        debug_assert!(self.get_my_v() == None);
+        debug_assert!(self.get_my_v().is_none());
         my_state!(self).v_uid = Some(v_uid);
     }
 

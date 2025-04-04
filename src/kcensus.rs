@@ -105,7 +105,7 @@ impl KCensus<ReceiverStream<MsgWithSource>, DeSink> {
             }
 
             // TODO: (Optim.) peak connection first ?
-            if self.round_state.get_my_v() == None
+            if self.round_state.get_my_v().is_none()
                 && self.max_seen_slot == self.slot
                 && !self.values.is_empty()
             {
@@ -116,7 +116,7 @@ impl KCensus<ReceiverStream<MsgWithSource>, DeSink> {
 
             // Read new messages and/or new local request
             let msg = select! {
-                req = rx.recv(), if self.round_state.get_my_v() == None
+                req = rx.recv(), if self.round_state.get_my_v().is_none()
                 && !done && self.max_seen_slot == self.slot => {
                     match req.unwrap() {
                         Some(req) =>  {
@@ -213,7 +213,7 @@ impl KCensus<ReceiverStream<MsgWithSource>, DeSink> {
                 debug_assert_eq!(round, self.round);
                 let old_proposer_count = self.round_state.proposers().len();
 
-                let no_val_before = self.round_state.get_my_v() == None;
+                let no_val_before = self.round_state.get_my_v().is_none();
                 if no_val_before {
                     debug_assert!(old_proposer_count == 0);
                     debug_assert!(!self.round_state.am_i_frozen());
