@@ -1,6 +1,6 @@
 use crate::connector::DeSink;
-use crate::kcensus::message::RoundCommand::{Commit, Spread, SpreadValueOnly};
-use crate::kcensus::message::{KCensusMsg, KCensusMsgWithSource, RoundCommand};
+use crate::kcensus::message::KCensusMsg::{Commit, Spread, SpreadValueOnly};
+use crate::kcensus::message::{KCensusMsg, KCensusMsgWithSource};
 use crate::kcensus::propagation::{MessageId, PropagationGraphs};
 use crate::kcensus::round_state::RoundState;
 use crate::message::Message::{Done, KCensusMessage};
@@ -109,6 +109,7 @@ impl KCensus<ReceiverStream<MsgWithSource>, DeSink> {
                 && self.max_seen_slot == self.slot
                 && !self.values.is_empty()
             {
+                // TODO: Leader election / only leader should repropose !!!!!!!!!!!!!!!!!!
                 let v_uid = *self.values.keys().min().unwrap();
                 self.repropose_start(v_uid).await?;
             }
@@ -139,31 +140,17 @@ impl KCensus<ReceiverStream<MsgWithSource>, DeSink> {
             match msg.msg {
                 KCensusMessage { msg, value } => {
                     if let Some(v) = value {
-                        if let Commit { .. } = &msg.command {
-                            panic!("Values should never be sent in a commit message");
-                        } else {
-                            match &msg.command {
-                                Spread {
-                                    value_spreading: false,
-                                    ..
-                                } => panic!(
-                                    "Values should never be sent in a spread message with value_included set to false"
-                                ),
-                                Spread { msg_id: None, .. } => panic!(
-                                    "Values should never be sent in a spread message with no msg_id"
-                                ),
-                                _ => {}
-                            }
-                        }
-                        let value_uid = msg.message_v_uid(src);
+                        debug_assert!(msg.should_include_value());
+                        let value_uid = msg.get_v(src);
                         let inserted = self.values.insert(value_uid, v.into_remote_req());
-
                         // TODO: Allow forwarding values ? (could the value already be there ?)
                         debug_assert!(inserted.is_none());
+                    } else {
+                        debug_assert!(!msg.should_include_value());
                     }
 
                     if !self.ready_to_process(&msg, src) {
-                        self.max_seen_slot = self.max_seen_slot.max(msg.slot);
+                        self.max_seen_slot = self.max_seen_slot.max(msg.get_slot());
                         self.queued_messages.push(msg.with_source(src));
                         // TODO: recheck queued messages only if
                         //   "ready_to_process" might have changed
@@ -189,7 +176,7 @@ impl KCensus<ReceiverStream<MsgWithSource>, DeSink> {
     }
 
     fn ready_to_process(&self, msg: &KCensusMsg, src: usize) -> bool {
-        msg.slot <= self.slot && self.values.contains_key(&msg.message_v_uid(src))
+        msg.get_slot() <= self.slot && self.values.contains_key(&msg.get_v(src))
     }
 
     async fn process_message(
@@ -198,26 +185,22 @@ impl KCensus<ReceiverStream<MsgWithSource>, DeSink> {
         src: usize,
     ) -> io::Result<Option<Request>> {
         debug_assert!(self.ready_to_process(&msg, src));
-        let slot = msg.slot;
-        let round = msg.round;
-        let command = msg.command;
+        let msg_v_uid = msg.get_v(src);
 
         // TODO: Ignore some messages if max_seen_slot > slot ?
         // TODO: Handle dead nodes / packet loss ?
-        match command {
+        match msg {
             Spread {
+                slot,
+                round,
                 msg_id,
                 remote_states,
-                value_spreading,
+                with_value,
             } => {
-                let msg_v_uid = remote_states[src]
-                    .v_uid
-                    .expect("Can't spread without v_uid");
                 if slot < self.slot || round < self.round {
-                    if value_spreading {
+                    if with_value {
                         let msg_id = msg_id.expect("Can't spread value without msg_id");
-                        debug_assert_eq!(Some(msg_v_uid), remote_states[msg_id.proposer].v_uid);
-                        self.spread_value_only_from(msg_id).await?;
+                        self.graph_spread_value_only(msg_id, msg_v_uid).await?;
                     }
                     return Ok(None);
                 } else if round > self.round {
@@ -225,28 +208,30 @@ impl KCensus<ReceiverStream<MsgWithSource>, DeSink> {
                 }
                 debug_assert_eq!(slot, self.slot);
                 debug_assert_eq!(round, self.round);
+                let old_proposer_count = self.round_state.proposers().len();
 
                 let no_val_before = self.round_state.get_my_v() == None;
                 if no_val_before {
+                    debug_assert!(old_proposer_count == 0);
                     debug_assert!(!self.round_state.am_i_frozen());
+                    // TODO: pick most popular v_uid instead ?
                     self.round_state.set_my_v(msg_v_uid);
                 }
                 let my_v_uid = self.round_state.get_my_v().unwrap();
 
-                let learned = self.round_state.learn_from(&remote_states, msg_v_uid, src);
-                let new_prop = if let Some(msg_id) = msg_id {
+                let learned = self.round_state.learn_from(&remote_states);
+                let proposer_count = self.round_state.proposers().len();
+
+                if let Some(msg_id) = msg_id {
                     self.round_state.receive_msg(msg_id);
-                    self.round_state.new_proposer(msg_id.proposer)
-                } else {
-                    false
-                };
-                debug_assert!(!(no_val_before && self.round_state.multiple_proposers()));
+                }
 
                 // Can commit ?
-                if self.round_state.am_i_proposer() && self.round_state.can_commit() {
-                    debug_assert!(!value_spreading);
+                // TODO: Make can_commit faster when using graph
+                if self.round_state.i_am_proposer() && self.round_state.can_commit() {
+                    debug_assert!(!with_value); // can't be my value -> there would be a conflict
                     let value_uid = self.round_state.get_my_v().unwrap();
-                    self.broadcast_command(Commit { value_uid }).await?;
+                    self.broadcast(Commit { slot, value_uid }).await?;
                     let value = self.commit_slot(my_v_uid, false);
                     return Ok(Some(value));
                 }
@@ -257,18 +242,20 @@ impl KCensus<ReceiverStream<MsgWithSource>, DeSink> {
                     let orig_frozen = self.round_state.am_i_frozen();
                     self.round_state.freeze();
 
-                    if value_spreading {
+                    if with_value {
+                        debug_assert!(!msg_frozen); // Can't spread value in frozen messages.
                         let msg_id = msg_id.expect("Can't spread value without msg_id");
-                        debug_assert_eq!(Some(msg_v_uid), remote_states[msg_id.proposer].v_uid);
-                        self.spread_value_only_from(msg_id).await?;
+                        self.graph_spread_value_only(msg_id, msg_v_uid).await?;
                     }
 
-                    if self.round_state.am_i_proposer() {
+                    // TODO: only try to adopt if I'm the proposer with lowest id ?
+                    if self.round_state.i_am_proposer() {
                         if let Some(adopted_v) = self.round_state.try_adopt() {
                             // Conflict resolved. Adopting...
                             self.goto_round(self.round + 1);
                             self.round_state.set_my_v(adopted_v); // Needed if we don't repropose
                             // TODO: only repropose if I was the proposer ?
+                            //   (potentially need to broadcast adopt in that case ?)
                             self.repropose_start(adopted_v).await?;
                             return Ok(None);
                         }
@@ -277,42 +264,52 @@ impl KCensus<ReceiverStream<MsgWithSource>, DeSink> {
                     if !orig_frozen {
                         if msg_frozen {
                             // Existing conflict. Spreading to proposers.
-                            for i in 0..self.round_state.proposers().len() {
+                            for i in 0..proposer_count {
                                 self.spread_to(self.round_state.proposers()[i]).await?;
                             }
                         } else {
                             // New conflict. Freezing others...
                             self.spread_to_all().await?;
                         }
-                        return Ok(None);
+                    } else {
+                        // Spread to new proposers only
+                        for i in old_proposer_count..proposer_count {
+                            self.spread_to(self.round_state.proposers()[i]).await?;
+                        }
                     }
+                    return Ok(None);
                 }
 
-                if let Some(msg_id) = msg_id {
-                    if new_prop && self.round_state.multiple_proposers() {
-                        if value_spreading {
-                            self.spread_value_only_from(msg_id).await?;
-                        }
-                        // Only share knowledge with new proposer
-                        self.spread_to(msg_id.proposer).await?;
-                    } else {
-                        self.spread_from(msg_id, value_spreading).await?;
-                    }
-                } else if no_val_before {
-                    panic!("Weird: new value from msg without id ?");
-                } else if learned {
-                    // Answer proposers only
-                    for i in 0..self.round_state.proposers().len() {
-                        self.spread_to(self.round_state.proposers()[i]).await?;
+                if proposer_count == 1 {
+                    let msg_id = msg_id.expect("Single proposer means messages should have ids");
+                    self.graph_spread(msg_id, with_value).await?;
+                    return Ok(None);
+                }
+
+                // Multiple proposers of the same value
+                debug_assert!(proposer_count > 1);
+                debug_assert!(!with_value);
+
+                if old_proposer_count < 2 {
+                    // Transition to multi-proposer strategy
+                    self.spread_to_all().await?;
+                } else if learned || old_proposer_count < proposer_count {
+                    let start_from = if learned { 0 } else { old_proposer_count };
+                    // Share knowledge with proposers
+                    for i in start_from..proposer_count {
+                        let proposer = self.round_state.proposers()[i];
+                        self.spread_to(proposer).await?;
                     }
                 }
             }
             SpreadValueOnly { msg_id, value_uid } => {
-                self.round_state.set_v(src, value_uid);
-                self.spread_value_only_from(msg_id).await?
+                self.graph_spread_value_only(msg_id, value_uid).await?
             }
-            Commit { value_uid } => {
-                info!("######## Commit msg (from round {}):", round);
+            Commit { slot, value_uid } => {
+                if slot < self.slot {
+                    return Ok(None);
+                }
+                info!("######## Commit msg: value_uid={}", value_uid);
                 let value = self.commit_slot(value_uid, true);
                 return Ok(Some(value));
             }
@@ -372,8 +369,7 @@ impl KCensus<ReceiverStream<MsgWithSource>, DeSink> {
     #[inline]
     async fn inner_propose_start(&mut self, value_uid: usize, with_value: bool) -> io::Result<()> {
         self.round_state.set_my_v(value_uid);
-        let new = self.round_state.new_proposer(self.my_pid);
-        debug_assert!(new);
+        self.round_state.become_proposer();
 
         self.start_spread(with_value).await
     }
@@ -388,74 +384,57 @@ impl KCensus<ReceiverStream<MsgWithSource>, DeSink> {
 
     #[inline]
     async fn inner_send_to(&mut self, msg: Message, pid: usize) -> io::Result<()> {
-        debug_assert_ne!(pid, self.my_pid);
+        if pid == self.my_pid {
+            return Ok(());
+        }
         let sink = self.out_sinks.get_mut(&pid).unwrap();
         sink.send(msg.clone()).await
     }
 
     #[inline]
-    async fn broadcast_command(&mut self, command: RoundCommand) -> io::Result<()> {
-        self.inner_broadcast(KCensusMessage {
-            msg: KCensusMsg {
-                slot: self.slot,
-                round: self.round,
-                command: command.clone(),
-            },
-            value: None,
-        })
-        .await
+    async fn broadcast(&mut self, msg: KCensusMsg) -> io::Result<()> {
+        self.inner_broadcast(KCensusMessage { msg, value: None })
+            .await
     }
 
     #[inline]
-    async fn send_command_to(&mut self, command: RoundCommand, pid: usize) -> io::Result<()> {
-        let value = match &command {
-            Spread {
-                value_spreading: true,
-                ..
-            } => {
-                let value_uid = self.round_state.get_my_v().unwrap();
-                Some(self.values[&value_uid].value.clone())
-            }
-            SpreadValueOnly { value_uid, .. } => Some(self.values[value_uid].value.clone()),
-            _ => None,
+    async fn send_to(&mut self, msg: KCensusMsg, pid: usize) -> io::Result<()> {
+        let value = if msg.should_include_value() {
+            let value_uid = msg.get_v(self.my_pid);
+            Some(self.values[&value_uid].value.clone())
+        } else {
+            None
         };
 
-        self.inner_send_to(
-            KCensusMessage {
-                msg: KCensusMsg {
-                    slot: self.slot,
-                    round: self.round,
-                    command: command.clone(),
-                },
-                value,
-            },
-            pid,
-        )
-        .await
+        self.inner_send_to(KCensusMessage { msg, value }, pid).await
     }
 
     #[inline]
     async fn spread_to(&mut self, pid: usize) -> io::Result<()> {
-        let cmd = Spread {
+        let msg = Spread {
+            slot: self.slot,
+            round: self.round,
             msg_id: None,
-            remote_states: self.round_state.get_node_states().clone(),
-            value_spreading: false,
+            remote_states: self.round_state.clone_node_states(),
+            with_value: false,
         };
-        self.send_command_to(cmd, pid).await
+        self.send_to(msg, pid).await
     }
 
     #[inline]
     async fn spread_to_all(&mut self) -> io::Result<()> {
-        let cmd = Spread {
+        let msg = Spread {
+            slot: self.slot,
+            round: self.round,
             msg_id: None,
-            remote_states: self.round_state.get_node_states().clone(),
-            value_spreading: false,
+            remote_states: self.round_state.clone_node_states(),
+            with_value: false,
         };
-        self.broadcast_command(cmd).await
+        self.broadcast(msg).await
     }
 
     #[inline]
-    async fn start_spread(&mut self, value_spreading: bool) -> io::Result<()> {
+    async fn start_spread(&mut self, with_value: bool) -> io::Result<()> {
         let msg_count = self.propagation_graphs.get_start(self.my_pid).len();
         for m_i in 0..msg_count {
             // Reborrow
@@ -468,29 +447,28 @@ impl KCensus<ReceiverStream<MsgWithSource>, DeSink> {
                     .is_empty()
             );
 
-            let cmd = Spread {
+            let msg = Spread {
+                slot: self.slot,
+                round: self.round,
                 msg_id: Some(msg_id),
-                remote_states: self.round_state.get_node_states().clone(),
-                value_spreading,
+                remote_states: self.round_state.clone_node_states(),
+                with_value,
             };
             let dest = msg_id.dest;
-            self.send_command_to(cmd, dest).await?
+            self.send_to(msg, dest).await?
         }
         Ok(())
     }
 
     #[inline]
-    async fn spread_from(
-        &mut self,
-        prev_msg_id: MessageId,
-        value_spreading: bool,
-    ) -> io::Result<()> {
+    async fn graph_spread(&mut self, prev_msg_id: MessageId, with_value: bool) -> io::Result<()> {
         let prev_msg_info = self.propagation_graphs.get_by_id(&prev_msg_id);
-        let msg_count = prev_msg_info.follow_up_messages().len();
+        let msg_count = prev_msg_info.get_needed_by().len();
         for m_i in 0..msg_count {
             // Reborrow
             let prev_msg_info = self.propagation_graphs.get_by_id(&prev_msg_id);
-            let msg_id = prev_msg_info.follow_up_messages()[m_i];
+            // Potential follow-up message:
+            let msg_id = prev_msg_info.get_needed_by()[m_i];
             if msg_id.src != self.my_pid {
                 continue;
             }
@@ -503,29 +481,32 @@ impl KCensus<ReceiverStream<MsgWithSource>, DeSink> {
 
             self.round_state.receive_msg(msg_id);
 
-            let cmd = Spread {
+            let msg = Spread {
+                slot: self.slot,
+                round: self.round,
                 msg_id: Some(msg_id),
-                remote_states: self.round_state.get_node_states().clone(),
-                value_spreading: value_spreading && msg_info.get_with_value(),
+                remote_states: self.round_state.clone_node_states(),
+                with_value: with_value && msg_info.get_with_value(),
             };
             let dest = msg_id.dest;
-            self.send_command_to(cmd, dest).await?;
+            self.send_to(msg, dest).await?;
         }
         Ok(())
     }
 
     #[inline]
-    async fn spread_value_only_from(&mut self, prev_msg_id: MessageId) -> io::Result<()> {
-        let value_uid = self
-            .round_state
-            .get_v(prev_msg_id.proposer)
-            .expect("Should have received value from proposer when spreading value");
+    async fn graph_spread_value_only(
+        &mut self,
+        prev_msg_id: MessageId,
+        value_uid: usize,
+    ) -> io::Result<()> {
         let prev_msg_info = self.propagation_graphs.get_by_id(&prev_msg_id);
-        let msg_count = prev_msg_info.follow_up_messages().len();
+        let msg_count = prev_msg_info.get_needed_by().len();
         for msg_i in 0..msg_count {
             // Reborrow
             let prev_msg_info = self.propagation_graphs.get_by_id(&prev_msg_id);
-            let msg_id = prev_msg_info.follow_up_messages()[msg_i];
+            // Potential follow-up message:
+            let msg_id = prev_msg_info.get_needed_by()[msg_i];
             if msg_id.src != self.my_pid {
                 continue;
             }
@@ -539,8 +520,8 @@ impl KCensus<ReceiverStream<MsgWithSource>, DeSink> {
             debug_assert!(self.round_state.can_send(msg_info.get_dependencies()));
 
             let dest = msg_id.dest;
-            let cmd = SpreadValueOnly { msg_id, value_uid };
-            self.send_command_to(cmd, dest).await?;
+            let msg = SpreadValueOnly { msg_id, value_uid };
+            self.send_to(msg, dest).await?;
         }
         Ok(())
     }

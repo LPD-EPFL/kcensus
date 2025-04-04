@@ -23,6 +23,7 @@ pub struct MsgWithSource {
 }
 
 impl Message {
+    #[inline]
     pub fn with_source(self, src: usize) -> MsgWithSource {
         MsgWithSource { msg: self, src }
     }
@@ -34,6 +35,7 @@ pub struct MsgWithDeadline {
 }
 
 impl MsgWithSource {
+    #[inline]
     pub fn with_deadline(self, deadline: Instant) -> MsgWithDeadline {
         MsgWithDeadline {
             msg: self,

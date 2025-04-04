@@ -1,0 +1,6 @@
+regions = ["Paris", "London", "Ireland"]
+raw_latencies = [
+    [0, 8.93, 18.07],
+    [9.02, 0, 11],
+    [18.52, 12.74, 0],
+]

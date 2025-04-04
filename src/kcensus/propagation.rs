@@ -51,14 +51,17 @@ impl Display for MessageInfo {
 }
 
 impl MessageInfo {
+    #[inline]
     pub fn get_dependencies(&self) -> &HashSet<MessageId> {
         &self.dependencies
     }
 
-    pub fn follow_up_messages(&self) -> &[MessageId] {
+    #[inline]
+    pub fn get_needed_by(&self) -> &[MessageId] {
         &self.needed_by
     }
 
+    #[inline]
     pub fn get_with_value(&self) -> bool {
         self.with_value
     }
@@ -74,10 +77,12 @@ struct PropagationGraph {
 pub struct PropagationGraphs(Vec<PropagationGraph>);
 
 impl PropagationGraphs {
+    #[inline]
     pub fn get_by_id(&self, msg_id: &MessageId) -> &MessageInfo {
         &self.0[msg_id.proposer].graph[&msg_id]
     }
 
+    #[inline]
     pub fn get_start(&self, proposer: ProcId) -> &[MessageId] {
         &self.0[proposer].start_messages
     }
@@ -142,8 +147,6 @@ pub fn compute_propagation_graphs(topology: &Topology) -> PropagationGraphs {
             })
         }
         value_only_paths.sort_by_key(triangle_latency);
-        trace!("value_only_paths: {}", value_only_paths.len());
-        trace!("longest value path: {}", value_only_paths.last().unwrap());
 
         // Simulate gossip until commit
         let mut round_state = RoundState::new(topology.nb_nodes, proposer);
@@ -166,6 +169,11 @@ pub fn compute_propagation_graphs(topology: &Topology) -> PropagationGraphs {
             triangular_paths.len()
         );
         trace!("longest path: {}", triangular_paths[count - 1]);
+        println!(
+            "{}'s expected commit time: {:?}",
+            proposer,
+            triangular_paths[count - 1].total_latency
+        );
 
         // TODO: Some triangles might still not be needed to commit.
         //   Try to check if they are needed for can_commit? (can be merged with bellow logic?)
@@ -192,7 +200,7 @@ pub fn compute_propagation_graphs(topology: &Topology) -> PropagationGraphs {
             if !value_only_path {
                 if round_state.can_commit() {
                     i = 0;
-                    trace!("Messages in graph (without value_only paths): ");
+                    trace!("Messages in graph (before adding value_only paths): ");
                     let mut messages = message_graph.iter().collect::<Vec<_>>();
                     messages.sort_by_key(|(x, _)| (x.time, x.src, x.dest));
                     for msg in messages.into_iter() {

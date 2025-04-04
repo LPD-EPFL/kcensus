@@ -50,6 +50,7 @@ impl RoundState {
         }
     }
 
+    #[inline]
     pub fn clear(&mut self) {
         for node_state in self.node_states.iter_mut() {
             node_state.clear();
@@ -66,100 +67,105 @@ impl RoundState {
         self.frozen_size_checked = 0;
     }
 
+    #[inline]
     pub fn get_my_v(&self) -> Option<usize> {
         my_state!(self).v_uid
     }
 
+    #[inline]
     pub fn set_my_v(&mut self, v_uid: usize) {
         debug_assert!(self.get_my_v() == None);
         my_state!(self).v_uid = Some(v_uid);
     }
 
-    pub fn get_v(&self, pid: usize) -> Option<usize> {
-        self.node_states[pid].v_uid
-    }
-
-    pub fn set_v(&mut self, pid: usize, v_uid: usize) {
-        debug_assert!(self.node_states[pid].v_uid.unwrap_or(v_uid) == v_uid);
-        self.node_states[pid].v_uid = Some(v_uid);
-    }
-
+    #[inline]
     pub fn am_i_frozen(&self) -> bool {
         my_state!(self).frozen
     }
 
+    #[inline]
     pub fn freeze(&mut self) {
         my_state!(self).frozen = true;
     }
 
-    pub fn get_node_states(&self) -> &Vec<NodeState> {
-        &self.node_states
+    #[inline]
+    pub fn clone_node_states(&self) -> Vec<NodeState> {
+        self.node_states.clone()
     }
 
-    pub fn new_proposer(&mut self, pid: usize) -> bool {
-        if self.proposers.contains(&pid) {
-            return false;
-        }
-        // Note: Can only propose if I didn't see other proposals
-        assert!(pid != self.my_pid || self.proposers.len() == 0);
-        self.proposers.push(pid);
-        true
+    #[inline]
+    pub fn become_proposer(&mut self) {
+        debug_assert!(self.proposers.is_empty());
+        my_state!(self).proposer = true;
+        self.proposers.push(self.my_pid);
     }
 
-    pub fn multiple_proposers(&self) -> bool {
-        self.proposers.len() > 1
-    }
-
+    #[inline]
     pub fn proposers(&self) -> &[usize] {
         &self.proposers
     }
 
-    pub fn am_i_proposer(&self) -> bool {
+    #[inline]
+    pub fn i_am_proposer(&self) -> bool {
         // Note: Can only propose if I didn't see other proposals
-        self.proposers.len() > 0 && self.proposers[0] == self.my_pid
+        debug_assert_eq!(
+            self.proposers.len() > 0 && self.proposers[0] == self.my_pid,
+            my_state!(self).proposer
+        );
+        my_state!(self).proposer
     }
 
+    #[inline]
     pub fn receive_msg(&mut self, msg: MessageId) {
         let inserted = self.received_msgs.insert(msg);
         debug_assert!(inserted);
     }
 
+    #[inline]
     pub fn can_send(&mut self, dependencies: &HashSet<MessageId>) -> bool {
         self.received_msgs.is_superset(&dependencies)
     }
 
-    pub fn learn_from(
-        &mut self,
-        remote_states: &[NodeState],
-        msg_v_uid: usize,
-        src: usize,
-    ) -> bool {
+    #[inline]
+    pub fn learn_from(&mut self, remote_states: &[NodeState]) -> bool {
         let orig_kl = my_state!(self).k.len();
         for pid in 0..self.nb_nodes {
             let local_node_state = &mut self.node_states[pid];
             let remote_node_state = &remote_states[pid];
             local_node_state.k.union_with(&remote_node_state.k);
             if let Some(node_v_uid) = remote_node_state.v_uid {
+                if remote_node_state.proposer && !local_node_state.proposer {
+                    debug_assert_ne!(pid, self.my_pid);
+                    debug_assert!(local_node_state.v_uid.is_none());
+                    self.proposers.push(pid);
+                    local_node_state.proposer = true;
+                }
                 debug_assert_eq!(local_node_state.v_uid.unwrap_or(node_v_uid), node_v_uid);
                 local_node_state.v_uid = Some(node_v_uid);
+            } else {
+                debug_assert!(!remote_node_state.proposer);
             }
             local_node_state.frozen |= remote_node_state.frozen;
-        }
-        if msg_v_uid == self.get_my_v().unwrap() && !self.am_i_frozen() {
-            my_state!(self).k.union_with(&remote_states[src].k);
+            if !self.am_i_frozen() && self.get_my_v() == remote_node_state.v_uid {
+                // Only accumulate into your own knowledge if you're not frozen
+                my_state!(self).k.union_with(&remote_states[pid].k);
+            }
         }
         orig_kl < my_state!(self).k.len()
     }
 
+    #[inline]
     pub fn partial_learn(&mut self, learner: usize, about: usize) {
         self.node_states[learner].k.insert(about);
         my_state!(self).k.insert(about);
     }
 
+    #[inline]
     pub fn learn(&mut self, learner: usize, about: &Knowledge) {
         self.node_states[learner].k.union_with(about);
     }
 
+    #[inline]
     pub fn knows(&self, learner: usize, about: usize) -> bool {
         self.node_states[learner].k.contains(about)
     }
@@ -212,6 +218,7 @@ impl RoundState {
     // TODO: Allow can_commit to run for other proposals ?
     // TODO: Speedup for e-paxos / paxos scenarios ?
     pub fn can_commit(&mut self) -> bool {
+        // TODO: Filter on v_uid instead of using my k ? (helps if frozen or to allow commiting other props)
         let k_size = my_state!(self).k.len();
         debug_assert!(k_size <= self.nb_nodes);
         if k_size < self.majority {

@@ -1,27 +1,42 @@
-use crate::kcensus::message::RoundCommand::{Commit, Spread, SpreadValueOnly};
+use crate::kcensus::message::KCensusMsg::{Commit, Spread, SpreadValueOnly};
 use crate::kcensus::node_state::NodeState;
 use crate::kcensus::propagation::MessageId;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub enum RoundCommand {
+pub enum KCensusMsg {
     // Used to propose & forward, but also to freeze and respond to a freeze
     Spread {
+        slot: usize,
+        round: usize,
         msg_id: Option<MessageId>,
         remote_states: Vec<NodeState>,
-        value_spreading: bool,
+        with_value: bool,
+    },
+    Commit {
+        slot: usize,
+        value_uid: usize,
     },
     SpreadValueOnly {
         msg_id: MessageId,
         value_uid: usize,
     },
-    Commit {
-        value_uid: usize,
-    },
 }
 
-impl RoundCommand {
-    pub fn message_v_uid(&self, src: usize) -> usize {
+#[derive(Debug)]
+pub struct KCensusMsgWithSource {
+    pub msg: KCensusMsg,
+    pub src: usize,
+}
+
+impl KCensusMsg {
+    #[inline]
+    pub fn with_source(self, src: usize) -> KCensusMsgWithSource {
+        KCensusMsgWithSource { msg: self, src }
+    }
+
+    #[inline]
+    pub fn get_v(&self, src: usize) -> usize {
         match self {
             Spread {
                 msg_id,
@@ -37,31 +52,31 @@ impl RoundCommand {
                 }
                 v_uid.expect("v_uid of src should not be None")
             }
-            SpreadValueOnly { value_uid, .. } => *value_uid,
             Commit { value_uid, .. } => *value_uid,
+            SpreadValueOnly { value_uid, .. } => *value_uid,
         }
     }
-}
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct KCensusMsg {
-    pub slot: usize,
-    pub round: usize,
-    pub command: RoundCommand,
-}
-
-#[derive(Debug)]
-pub struct KCensusMsgWithSource {
-    pub msg: KCensusMsg,
-    pub src: usize,
-}
-
-impl KCensusMsg {
-    pub fn with_source(self, src: usize) -> KCensusMsgWithSource {
-        KCensusMsgWithSource { msg: self, src }
+    #[inline]
+    pub fn get_slot(&self) -> usize {
+        match self {
+            Spread { slot, .. } => *slot,
+            Commit { slot, .. } => *slot,
+            SpreadValueOnly { .. } => 0,
+        }
     }
 
-    pub fn message_v_uid(&self, src: usize) -> usize {
-        self.command.message_v_uid(src)
+    #[inline]
+    pub fn should_include_value(&self) -> bool {
+        match self {
+            Spread {
+                msg_id, with_value, ..
+            } => {
+                debug_assert!(!with_value || msg_id.is_some());
+                *with_value
+            }
+            Commit { .. } => false,
+            SpreadValueOnly { .. } => true,
+        }
     }
 }

@@ -8,6 +8,7 @@ pub struct KVal {
 }
 
 impl KVal {
+    #[inline]
     pub fn into_request(self, start_time: Instant) -> Request {
         Request {
             value: self,
@@ -15,6 +16,7 @@ impl KVal {
         }
     }
 
+    #[inline]
     pub fn into_remote_req(self) -> Request {
         Request {
             value: self,
