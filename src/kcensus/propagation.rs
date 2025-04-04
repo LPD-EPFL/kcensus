@@ -79,7 +79,7 @@ pub struct PropagationGraphs(Vec<PropagationGraph>);
 impl PropagationGraphs {
     #[inline]
     pub fn get_by_id(&self, msg_id: &MessageId) -> &MessageInfo {
-        &self.0[msg_id.proposer].graph[&msg_id]
+        &self.0[msg_id.proposer].graph[msg_id]
     }
 
     #[inline]
