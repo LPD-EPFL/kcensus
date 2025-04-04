@@ -86,6 +86,10 @@ impl PropagationGraphs {
     pub fn get_start(&self, proposer: ProcId) -> &[MessageId] {
         &self.0[proposer].start_messages
     }
+
+    pub fn from_topology(topology: &Topology) -> Self {
+        compute_propagation_graphs(topology)
+    }
 }
 
 #[derive(Debug)]
@@ -109,7 +113,7 @@ fn triangle_latency(t: &TriangularPath) -> Duration {
     t.total_latency
 }
 
-pub fn compute_propagation_graphs(topology: &Topology) -> PropagationGraphs {
+fn compute_propagation_graphs(topology: &Topology) -> PropagationGraphs {
     let mut propagation_graphs = Vec::with_capacity(topology.nb_nodes);
     for proposer in 0..topology.nb_nodes {
         trace!("proposer: {}", proposer);

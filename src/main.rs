@@ -1,8 +1,8 @@
 use crate::connector::Connector;
-use crate::kcensus::propagation::compute_propagation_graphs;
+use crate::kcensus::propagation::PropagationGraphs;
 use crate::kcensus::{KCensus, NbNodes, Pid};
 use crate::message::Message;
-use crate::topology::from_toml;
+use crate::topology::Topology;
 use crate::value::Request;
 use chrono::prelude::*;
 use clap::Parser;
@@ -53,10 +53,10 @@ async fn main() -> io::Result<()> {
 
     let args = Args::parse();
     let my_pid = args.pid;
-    let topology = from_toml(&args.config);
+    let topology = Topology::from_toml(&args.config);
     debug!("Loaded topology:{}", topology);
     let nb_nodes = topology.regions.len();
-    let propagation_graphs = compute_propagation_graphs(&topology);
+    let propagation_graphs = PropagationGraphs::from_topology(&topology);
 
     let mut sinks = HashMap::with_capacity(nb_nodes - 1);
     let mut streams = Vec::with_capacity(nb_nodes - 1);
