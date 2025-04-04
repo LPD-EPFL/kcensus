@@ -53,10 +53,10 @@ async fn main() -> io::Result<()> {
 
     let args = Args::parse();
     let my_pid = args.pid;
-    let topology = Topology::from_toml(&args.config);
+    let topology = Topology::from(&args.config);
     debug!("Loaded topology:{}", topology);
     let nb_nodes = topology.regions.len();
-    let propagation_graphs = PropagationGraphs::from_topology(&topology);
+    let propagation_graphs = PropagationGraphs::from(&topology);
 
     let mut sinks = HashMap::with_capacity(nb_nodes - 1);
     let mut streams = Vec::with_capacity(nb_nodes - 1);

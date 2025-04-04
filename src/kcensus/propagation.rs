@@ -86,8 +86,10 @@ impl PropagationGraphs {
     pub fn get_start(&self, proposer: ProcId) -> &[MessageId] {
         &self.0[proposer].start_messages
     }
+}
 
-    pub fn from_topology(topology: &Topology) -> Self {
+impl From<&Topology> for PropagationGraphs {
+    fn from(topology: &Topology) -> Self {
         compute_propagation_graphs(topology)
     }
 }

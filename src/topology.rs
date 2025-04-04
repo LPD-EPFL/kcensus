@@ -38,20 +38,26 @@ impl Display for Topology {
     }
 }
 
-impl Topology {
-    pub fn from_toml(path: &str) -> Self {
-        let mut file = File::open(path).expect("Failed to open toml config");
-        let mut contents = String::new();
-        file.read_to_string(&mut contents)
-            .expect("Failed to read toml config");
-        trace!("Loaded config:\n{}", contents);
-        let config: Config = toml::from_str(&contents).expect("Failed to parse toml config");
-        Self::from_config(config)
+impl From<&String> for Topology {
+    fn from(toml_path: &String) -> Self {
+        from_toml(toml_path)
     }
-    
-    fn from_config(config: Config) -> Self {
+}
+
+impl From<Config> for Topology {
+    fn from(config: Config) -> Self {
         compute_latency(config)
     }
+}
+
+fn from_toml(path: &str) -> Topology {
+    let mut file = File::open(path).expect("Failed to open toml config");
+    let mut contents = String::new();
+    file.read_to_string(&mut contents)
+        .expect("Failed to read toml config");
+    trace!("Loaded config:\n{}", contents);
+    let config: Config = toml::from_str(&contents).expect("Failed to parse toml config");
+    Topology::from(config)
 }
 
 fn compute_latency(config: Config) -> Topology {
