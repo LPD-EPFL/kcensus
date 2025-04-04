@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use tokio::time::Instant;
+use std::time::Instant;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct KVal {

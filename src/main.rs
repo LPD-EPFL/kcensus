@@ -4,14 +4,17 @@ use crate::kcensus::{KCensus, NbNodes, Pid};
 use crate::message::Message;
 use crate::topology::from_toml;
 use crate::value::Request;
+use chrono::prelude::*;
 use clap::Parser;
+use env_logger::fmt::style;
 use futures::prelude::stream::select_all;
 use futures::TryStreamExt;
 use log::{debug, info};
 use std::collections::HashMap;
 use std::io;
+use std::io::Write;
+use std::time::Instant;
 use tokio::sync::mpsc;
-use tokio::time::Instant;
 use tokio_stream::wrappers::ReceiverStream;
 
 mod connector;
@@ -33,7 +36,20 @@ struct Args {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> io::Result<()> {
-    env_logger::init();
+    env_logger::builder()
+        .format(|buf, record| {
+            let time = Utc::now();
+            let level = record.level();
+            let level_style = buf.default_level_style(level);
+            let header_style = style::AnsiColor::BrightBlack.on_default();
+            writeln!(
+                buf,
+                "{header_style}{}{header_style:#} {level_style}{level:<5}{level_style:#} {}",
+                time.format("%S%.6f"),
+                record.args()
+            )
+        })
+        .init();
 
     let args = Args::parse();
     let my_pid = args.pid;

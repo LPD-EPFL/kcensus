@@ -1,13 +1,16 @@
 use crate::message::{MsgWithDeadline, MsgWithSource};
 use crate::topology::Topology;
+use chrono::Utc;
 use futures::Stream;
 use log::trace;
 use std::collections::VecDeque;
+use std::fmt::Debug;
 use std::io;
+use std::time::Instant;
 use tokio::sync::mpsc::Sender;
-use tokio::time::{sleep_until, Instant};
 use tokio::{pin, select};
 use tokio_stream::StreamExt;
+use tokio_timerfd::Delay;
 
 pub async fn delayer<St: Stream<Item = io::Result<MsgWithSource>> + Unpin>(
     topology: Topology,
@@ -15,8 +18,8 @@ pub async fn delayer<St: Stream<Item = io::Result<MsgWithSource>> + Unpin>(
     mut input_stream: St,
     delayed_output: Sender<MsgWithSource>,
 ) -> io::Result<()> {
-    let sleep = sleep_until(Instant::now());
-    pin!(sleep);
+    let delay = Delay::new(Instant::now())?;
+    pin!(delay);
 
     let mut queues: Vec<VecDeque<MsgWithDeadline>> = Vec::with_capacity(topology.nb_nodes);
     for _ in 0..topology.nb_nodes {
@@ -34,7 +37,7 @@ pub async fn delayer<St: Stream<Item = io::Result<MsgWithSource>> + Unpin>(
             .map(|msg| msg.deadline)
             .min();
         if let Some(deadline) = opt_deadline {
-            sleep.as_mut().reset(deadline)
+            delay.as_mut().reset(deadline)
         }
         let is_empty = opt_deadline.is_none();
         if is_empty && stream_ended {
@@ -50,15 +53,17 @@ pub async fn delayer<St: Stream<Item = io::Result<MsgWithSource>> + Unpin>(
 
                 let deadline = Instant::now() + topology.link_latencies[msg.src][my_pid];
 
+                trace!("Queuing message from {}", msg.src);
                 queues[msg.src].push_back(
                     msg.with_deadline(deadline)
                 );
-                trace!("queue_size++ = {}", queues.iter()
-                    .map(|q| q.len()).sum::<usize>());
             }
-            () = &mut sleep, if !is_empty => {
+            res = &mut delay, if !is_empty => {
+                res?;
                 let now = Instant::now();
-                trace!("Slept enough. Consuming messages...");
+                trace!("Overslept by {:?}", now.duration_since(delay.deadline()));
+                trace!("Slept enough. {} queued messages. Consuming...", queues.iter()
+                    .map(|q| q.len()).sum::<usize>());
                 for q in queues.iter_mut() {
                     if let Some(m) = q.front() {
                         if m.deadline < now {

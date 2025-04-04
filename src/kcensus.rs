@@ -120,7 +120,10 @@ impl KCensus<ReceiverStream<MsgWithSource>, DeSink> {
                 && !done && self.max_seen_slot == self.slot => {
                     match req.unwrap() {
                         Some(req) =>  {
+                            debug_assert!(req.start_time.is_some());
+                            let start_time = req.start_time.unwrap();
                             self.propose_start(req).await?;
+                            debug!("local request started after {:?}", start_time.elapsed());
                         }
                         None => {
                             done = true;
