@@ -224,6 +224,19 @@ impl RoundState {
         if k_size < self.majority {
             return false;
         }
+        let e_paxos_threshold = (self.nb_nodes * 3) / 4;
+        if k_size >= e_paxos_threshold {
+            if self.proposers.len() == 1 || k_size > e_paxos_threshold {
+                return true;
+            }
+            if my_state!(self)
+                .k
+                .iter()
+                .all(|pid| self.node_states[pid].k.contains(self.my_pid))
+            {
+                return true;
+            }
+        }
         let unknown_nodes = self.nb_nodes - k_size;
         let trivial_frozen = self.majority;
         let minority = self.nb_nodes - self.majority;
