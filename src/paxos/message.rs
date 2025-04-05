@@ -26,18 +26,7 @@ pub enum PaxosMsg {
     },
 }
 
-#[derive(Debug)]
-pub struct PaxosMsgWithSource {
-    pub msg: PaxosMsg,
-    pub src: usize,
-}
-
 impl PaxosMsg {
-    #[inline]
-    pub fn with_source(self, src: usize) -> PaxosMsgWithSource {
-        PaxosMsgWithSource { msg: self, src }
-    }
-
     #[inline]
     pub fn get_v(&self) -> usize {
         match self {
@@ -57,7 +46,7 @@ impl PaxosMsg {
     }
 
     #[inline]
-    pub fn might_include_value(&self, src: usize) -> bool {
+    pub fn can_include_value(&self, src: usize) -> bool {
         match self {
             Prepare { round, .. } => round.proposer == src,
             Accept { .. } => false,

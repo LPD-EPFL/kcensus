@@ -33,7 +33,7 @@ impl KCensusRoundState {
         for _ in 0..nb_nodes {
             node_states.push(NodeState::new(nb_nodes));
         }
-        Self {
+        let mut x = Self {
             nb_nodes,
             my_pid,
             majority,
@@ -47,7 +47,9 @@ impl KCensusRoundState {
             next_combination_pos: Vec::with_capacity(majority - 1),
             frozen_size_checked: 0,
             _bitset_scratchpad: Knowledge::with_capacity(nb_nodes),
-        }
+        };
+        x.clear();
+        x
     }
 
     #[inline]

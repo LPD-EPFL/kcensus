@@ -23,18 +23,7 @@ pub enum KCensusMsg {
     },
 }
 
-#[derive(Debug)]
-pub struct KCensusMsgWithSource {
-    pub msg: KCensusMsg,
-    pub src: usize,
-}
-
 impl KCensusMsg {
-    #[inline]
-    pub fn with_source(self, src: usize) -> KCensusMsgWithSource {
-        KCensusMsgWithSource { msg: self, src }
-    }
-
     #[inline]
     pub fn get_v(&self, src: usize) -> usize {
         match self {

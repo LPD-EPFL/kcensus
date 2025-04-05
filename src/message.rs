@@ -1,5 +1,4 @@
-use crate::kcensus::message::KCensusMsg;
-use crate::paxos::message::PaxosMsg;
+use crate::consensus::message::ConsensusMessage;
 use crate::value::KVal;
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
@@ -9,12 +8,8 @@ pub enum Message {
     Hello {
         pid: usize,
     },
-    KCensusM {
-        msg: KCensusMsg,
-        value: Option<KVal>,
-    },
-    PaxosM {
-        msg: PaxosMsg,
+    ConsensusM {
+        msg: ConsensusMessage,
         value: Option<KVal>,
     },
     Done,
@@ -26,16 +21,16 @@ pub struct MsgWithSource {
     pub src: usize,
 }
 
+pub struct MsgWithDeadline {
+    pub msg: MsgWithSource,
+    pub deadline: Instant,
+}
+
 impl Message {
     #[inline]
     pub fn with_source(self, src: usize) -> MsgWithSource {
         MsgWithSource { msg: self, src }
     }
-}
-
-pub struct MsgWithDeadline {
-    pub msg: MsgWithSource,
-    pub deadline: Instant,
 }
 
 impl MsgWithSource {

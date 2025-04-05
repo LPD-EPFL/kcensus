@@ -18,6 +18,7 @@ use std::time::Instant;
 use tokio::sync::mpsc;
 
 mod connector;
+mod consensus;
 mod delayer;
 mod kcensus;
 mod message;
@@ -77,7 +78,7 @@ async fn main() -> io::Result<()> {
         streams.push(stream.map_ok(wrap_with_source_pid(pid)))
     }
 
-    let sinks = MultiSink(sinks);
+    let sinks = MultiSink { sinks, my_pid };
 
     let input_stream = select_all(streams);
 
@@ -87,34 +88,35 @@ async fn main() -> io::Result<()> {
     let delayer_task =
         tokio::task::spawn(delayer::delayer(topology, my_pid, input_stream, delayed_tx));
 
-    let kcensus = KCensus::new(nb_nodes, my_pid, sinks, propagation_graphs);
-
     let (request_tx, request_rx) = mpsc::channel(1);
     let (response_tx, mut response_rx) = mpsc::channel(1);
 
-    let kcensus_task = tokio::task::spawn(kcensus.run(delayed_rx, request_rx, response_tx));
+    let mut kcensus_obj = KCensus::new(nb_nodes, my_pid, sinks, propagation_graphs);
+    let kcensus = kcensus_obj.run(delayed_rx, request_rx, response_tx);
 
     let requester_task =
         tokio::task::spawn(requester::simple_requester(nb_nodes, my_pid, request_tx));
 
     let start = Instant::now();
 
-    loop {
-        match response_rx.recv().await {
-            None => break,
-            Some(Request {
-                value,
-                start_time: Some(t),
-            }) => {
-                println!("Decided {} in {:?}.", value.val, t.elapsed());
-            }
-            Some(Request { value, .. }) => {
-                info!("Received val {}.", value.val)
+    let app = async {
+        loop {
+            match response_rx.recv().await {
+                None => break,
+                Some(Request {
+                    value,
+                    start_time: Some(t),
+                }) => {
+                    println!("Decided {} in {:?}.", value.val, t.elapsed());
+                }
+                Some(Request { value, .. }) => {
+                    info!("Received val {}.", value.val)
+                }
             }
         }
-    }
+    };
 
-    kcensus_task.await??;
+    let _ = tokio::join!(app, kcensus);
     println!("Total duration: {:?}", start.elapsed());
 
     requester_task.await?;

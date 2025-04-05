@@ -1,10 +1,12 @@
 use crate::connector::DeSink;
+use crate::consensus::message::ConsensusMessage;
+use crate::consensus::message::ConsensusMsg::KCensusM;
+use crate::kcensus::message::KCensusMsg;
 use crate::kcensus::message::KCensusMsg::{Commit, Spread, SpreadValueOnly};
-use crate::kcensus::message::{KCensusMsg, KCensusMsgWithSource};
 use crate::kcensus::propagation::{MessageId, PropagationGraphs};
 use crate::kcensus::round_state::KCensusRoundState;
-use crate::message::Message::{Done, KCensusM};
-use crate::message::MsgWithSource;
+use crate::message::Message::{ConsensusM, Done};
+use crate::message::{Message, MsgWithSource};
 use crate::multisink::MultiSink;
 use crate::value::{KVal, Request};
 use log::{debug, info};
@@ -31,7 +33,6 @@ pub struct KCensus<Sk> {
 
     // Overall state
     slot: usize,
-    max_seen_slot: usize,
     round: usize,
     values: HashMap<usize, Request>,
 
@@ -41,7 +42,7 @@ pub struct KCensus<Sk> {
 macro_rules! send_msg {
     ($self:ident, $msg:expr, $dest:expr) => {{
         let value = $self.value_for_msg(&$msg);
-        $self.sinks.send(KCensusM { msg: $msg, value }, $dest).await
+        $self.sinks.send(KCensusM($msg), value, $dest).await
     }};
 }
 
@@ -62,7 +63,6 @@ impl KCensus<DeSink> {
             propagation_graphs,
 
             slot: 0,
-            max_seen_slot: 0,
             round: 0,
             values: HashMap::with_capacity(nb_nodes),
 
@@ -71,25 +71,25 @@ impl KCensus<DeSink> {
     }
 
     pub async fn run(
-        mut self,
+        &mut self,
         mut msg_rx: Receiver<MsgWithSource>,
         mut req_rx: Receiver<Option<Request>>,
         resp_tx: Sender<Request>,
     ) -> io::Result<()> {
-        let mut queued_messages: VecDeque<KCensusMsgWithSource> =
-            VecDeque::with_capacity(self.nb_nodes);
-        self.goto_round(0);
+        let mut queued_messages: VecDeque<ConsensusMessage> =
+            VecDeque::with_capacity(self.get_nb_nodes());
         let mut count_done = 0usize;
         let mut done = false;
+        let mut max_queued_slot = 0;
 
         'main_loop: loop {
             // Process queued messages (if possible)
             let mut i = 0usize;
             while i < queued_messages.len() {
                 let msg = &queued_messages[i];
-                if self.ready_to_process(&msg.msg, msg.src) {
+                if self.ready_to_process(msg) {
                     let msg = queued_messages.remove(i).unwrap();
-                    let result = self.process_message(msg.msg, msg.src).await?;
+                    let result = self.process_message(msg).await?;
                     if let Some(value) = result {
                         resp_tx.send(value).await.expect("Sending commited value");
                         continue 'main_loop; // Restart from the beginning of the queue
@@ -99,24 +99,22 @@ impl KCensus<DeSink> {
                 }
             }
 
-            if count_done == self.nb_nodes {
+            if count_done == self.get_nb_nodes() {
                 break 'main_loop;
             }
 
+            let nothing_ongoing = self.get_my_v().is_none() && max_queued_slot <= self.get_slot();
+            let should_repropose = nothing_ongoing && self.has_queued_values();
             // TODO: (Optim.) peak connection first ?
-            if self.round_state.get_my_v().is_none()
-                && self.max_seen_slot == self.slot
-                && !self.values.is_empty()
-            {
+            if should_repropose && self.should_lead() {
                 // TODO: Leader election / only leader should repropose !!!!!!!!!!!!!!!!!!
-                let v_uid = *self.values.keys().min().unwrap();
-                self.repropose_start(v_uid).await?;
+                let (v_uid, opt_value) = self.get_value_to_propose();
+                self.repropose_start(v_uid, opt_value).await?;
             }
 
             // Read new messages and/or new local request
             let msg = select! {
-                req = req_rx.recv(), if self.round_state.get_my_v().is_none()
-                && !done && self.max_seen_slot == self.slot => {
+                req = req_rx.recv(), if nothing_ongoing && !should_repropose && !done => {
                     match req.unwrap() {
                         Some(req) =>  {
                             debug_assert!(req.start_time.is_some());
@@ -126,9 +124,9 @@ impl KCensus<DeSink> {
                         }
                         None => {
                             done = true;
-                            self.sinks.broadcast(Done).await?;
+                            self.inner_broadcast(Done).await?;
                             count_done += 1;
-                            if count_done == self.nb_nodes {
+                            if count_done == self.get_nb_nodes() {
                                 break 'main_loop;
                             }
                         }
@@ -137,29 +135,26 @@ impl KCensus<DeSink> {
                 }
                 opt_msg = msg_rx.recv() => opt_msg.unwrap(),
             };
-            let src = msg.src;
 
             match msg.msg {
-                KCensusM { msg, value } => {
+                ConsensusM { msg, value } => {
                     if let Some(v) = value {
                         debug_assert!(msg.should_include_value());
-                        let value_uid = msg.get_v(src);
-                        let inserted = self.values.insert(value_uid, v.into_remote_req());
-                        // TODO: Allow forwarding values ? (could the value already be there ?)
-                        debug_assert!(inserted.is_none());
+                        let value_uid = msg.get_v();
+                        self.store_remote_value(value_uid, v);
                     } else {
                         debug_assert!(!msg.should_include_value());
                     }
 
-                    if !self.ready_to_process(&msg, src) {
-                        self.max_seen_slot = self.max_seen_slot.max(msg.get_slot());
-                        queued_messages.push_back(msg.with_source(src));
+                    if !self.ready_to_process(&msg) {
+                        max_queued_slot = max_queued_slot.max(msg.get_slot());
+                        queued_messages.push_back(msg);
                         // TODO: recheck queued messages only if
                         //   "ready_to_process" might have changed
                         continue 'main_loop;
                     }
 
-                    let result = self.process_message(msg, src).await?;
+                    let result = self.process_message(msg).await?;
                     if let Some(value) = result {
                         resp_tx.send(value).await.expect("Sending commited value");
                         continue 'main_loop; // Restart from the beginning of the queue
@@ -173,19 +168,20 @@ impl KCensus<DeSink> {
         req_rx.close();
         msg_rx.close();
         Ok(())
+    } // run
+
+    fn ready_to_process(&self, msg: &ConsensusMessage) -> bool {
+        msg.get_slot() <= self.slot && self.values.contains_key(&msg.get_v())
     }
 
-    fn ready_to_process(&self, msg: &KCensusMsg, src: usize) -> bool {
-        msg.get_slot() <= self.slot && self.values.contains_key(&msg.get_v(src))
-    }
-
-    async fn process_message(
-        &mut self,
-        msg: KCensusMsg,
-        src: usize,
-    ) -> io::Result<Option<Request>> {
-        debug_assert!(self.ready_to_process(&msg, src));
-        let msg_v_uid = msg.get_v(src);
+    async fn process_message(&mut self, msg: ConsensusMessage) -> io::Result<Option<Request>> {
+        debug_assert!(self.ready_to_process(&msg));
+        let msg_v_uid = msg.get_v();
+        let src = msg.src;
+        let msg = match msg.msg {
+            KCensusM(msg) => msg,
+            x => panic!("Unexpected message type: {:?}", x),
+        };
 
         // TODO: Ignore some messages if max_seen_slot > slot ?
         // TODO: Handle dead nodes / packet loss ?
@@ -256,7 +252,7 @@ impl KCensus<DeSink> {
                             self.round_state.set_my_v(adopted_v); // Needed if we don't repropose
                             // TODO: only repropose if I was the proposer ?
                             //   (potentially need to broadcast adopt in that case ?)
-                            self.repropose_start(adopted_v).await?;
+                            self.repropose_start(adopted_v, None).await?;
                             return Ok(None);
                         }
                     }
@@ -331,7 +327,6 @@ impl KCensus<DeSink> {
             );
         }
         self.slot += 1;
-        self.max_seen_slot = self.max_seen_slot.max(self.slot);
         self.goto_round(0);
         value
     }
@@ -362,8 +357,15 @@ impl KCensus<DeSink> {
     }
 
     #[inline]
-    async fn repropose_start(&mut self, value_uid: usize) -> io::Result<()> {
-        self.inner_propose_start(value_uid, false).await
+    async fn repropose_start(&mut self, value_uid: usize, value: Option<KVal>) -> io::Result<()> {
+        let with_value = match value {
+            Some(value) => {
+                self.values.insert(value_uid, value.into_remote_req());
+                true
+            }
+            None => false,
+        };
+        self.inner_propose_start(value_uid, with_value).await
     }
 
     #[inline]
@@ -387,7 +389,7 @@ impl KCensus<DeSink> {
     #[inline]
     async fn broadcast(&mut self, msg: KCensusMsg) -> io::Result<()> {
         let value = self.value_for_msg(&msg);
-        self.sinks.broadcast(KCensusM { msg, value }).await
+        self.sinks.broadcast(KCensusM(msg), value).await
     }
 
     #[inline]
@@ -495,5 +497,39 @@ impl KCensus<DeSink> {
             send_msg!(self, msg, msg_id.dest)?;
         }
         Ok(())
+    }
+
+    fn get_nb_nodes(&self) -> usize {
+        self.nb_nodes
+    }
+
+    fn get_my_v(&self) -> Option<usize> {
+        self.round_state.get_my_v()
+    }
+
+    fn get_slot(&self) -> usize {
+        self.slot
+    }
+
+    fn has_queued_values(&self) -> bool {
+        !self.values.is_empty()
+    }
+
+    fn should_lead(&self) -> bool {
+        self.my_pid == 0
+    }
+
+    fn get_value_to_propose(&self) -> (usize, Option<KVal>) {
+        (*self.values.keys().min().unwrap(), None)
+    }
+
+    async fn inner_broadcast(&mut self, msg: Message) -> io::Result<()> {
+        self.sinks.inner_broadcast(msg).await
+    }
+
+    fn store_remote_value(&mut self, value_uid: usize, v: KVal) {
+        // TODO: Allow forwarding values ? (could the value already be there ?)
+        let inserted = self.values.insert(value_uid, v.into_remote_req());
+        debug_assert!(inserted.is_none());
     }
 }
