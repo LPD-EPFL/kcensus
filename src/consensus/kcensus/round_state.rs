@@ -1,5 +1,5 @@
-use crate::kcensus::node_state::{Knowledge, NodeState};
-use crate::kcensus::propagation::MessageId;
+use crate::consensus::kcensus::node_state::{Knowledge, NodeState};
+use crate::consensus::kcensus::propagation::MessageId;
 use std::collections::HashSet;
 use std::fmt;
 

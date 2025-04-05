@@ -1,6 +1,6 @@
+use crate::consensus::kcensus::message::KCensusMsg;
 use crate::consensus::message::ConsensusMsg::{KCensusM, PaxosM};
-use crate::kcensus::message::KCensusMsg;
-use crate::paxos::message::PaxosMsg;
+use crate::consensus::paxos::message::PaxosMsg;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

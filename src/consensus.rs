@@ -8,7 +8,9 @@ use std::io;
 use tokio::select;
 use tokio::sync::mpsc::{Receiver, Sender};
 
+pub mod kcensus;
 pub mod message;
+mod paxos;
 
 pub trait Consensus {
     async fn run(

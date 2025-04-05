@@ -1,13 +1,13 @@
 use crate::connector::DeSink;
+use crate::consensus::kcensus::message::KCensusMsg;
+use crate::consensus::kcensus::message::KCensusMsg::{Commit, Spread, SpreadValueOnly};
+use crate::consensus::kcensus::propagation::{MessageId, PropagationGraphs};
+use crate::consensus::kcensus::round_state::KCensusRoundState;
 use crate::consensus::message::ConsensusMessage;
 use crate::consensus::message::ConsensusMsg::KCensusM;
 use crate::consensus::Consensus;
-use crate::kcensus::message::KCensusMsg;
-use crate::kcensus::message::KCensusMsg::{Commit, Spread, SpreadValueOnly};
-use crate::kcensus::propagation::{MessageId, PropagationGraphs};
-use crate::kcensus::round_state::KCensusRoundState;
 use crate::message::Message;
-use crate::multisink::MultiSink;
+use crate::multi_sink::MultiSink;
 use crate::value::{KVal, Request};
 use log::{debug, info};
 use std::collections::HashMap;

@@ -1,4 +1,4 @@
-use crate::paxos::message::PaxosRound;
+use crate::consensus::paxos::message::PaxosRound;
 use bit_set::BitSet;
 
 #[derive(Copy, Clone, Debug)]

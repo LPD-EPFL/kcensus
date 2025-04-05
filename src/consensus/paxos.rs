@@ -1,6 +1,6 @@
-use crate::multisink::MultiSink;
-use crate::paxos::message::PaxosRound;
-use crate::paxos::round_state::PaxosRoundState;
+use crate::consensus::paxos::message::PaxosRound;
+use crate::consensus::paxos::round_state::PaxosRoundState;
+use crate::multi_sink::MultiSink;
 use crate::value::Request;
 use std::collections::HashMap;
 

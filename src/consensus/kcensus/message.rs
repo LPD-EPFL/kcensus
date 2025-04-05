@@ -1,6 +1,6 @@
-use crate::kcensus::message::KCensusMsg::{Commit, Spread, SpreadValueOnly};
-use crate::kcensus::node_state::NodeState;
-use crate::kcensus::propagation::MessageId;
+use crate::consensus::kcensus::message::KCensusMsg::{Commit, Spread, SpreadValueOnly};
+use crate::consensus::kcensus::node_state::NodeState;
+use crate::consensus::kcensus::propagation::MessageId;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

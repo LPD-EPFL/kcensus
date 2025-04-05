@@ -1,5 +1,5 @@
-use crate::kcensus::node_state::Knowledge;
-use crate::kcensus::round_state::KCensusRoundState;
+use crate::consensus::kcensus::node_state::Knowledge;
+use crate::consensus::kcensus::round_state::KCensusRoundState;
 use crate::topology::Topology;
 use bit_set::BitSet;
 use log::trace;

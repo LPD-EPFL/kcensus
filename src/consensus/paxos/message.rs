@@ -1,4 +1,4 @@
-use crate::paxos::message::PaxosMsg::{Accept, Commit, Prepare};
+use crate::consensus::paxos::message::PaxosMsg::{Accept, Commit, Prepare};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Default, Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
