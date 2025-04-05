@@ -1,4 +1,5 @@
 use crate::connector::Connector;
+use crate::consensus::Consensus;
 use crate::kcensus::propagation::PropagationGraphs;
 use crate::kcensus::KCensus;
 use crate::message::Message;

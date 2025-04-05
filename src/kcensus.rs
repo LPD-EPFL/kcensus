@@ -1,19 +1,17 @@
 use crate::connector::DeSink;
 use crate::consensus::message::ConsensusMessage;
 use crate::consensus::message::ConsensusMsg::KCensusM;
+use crate::consensus::Consensus;
 use crate::kcensus::message::KCensusMsg;
 use crate::kcensus::message::KCensusMsg::{Commit, Spread, SpreadValueOnly};
 use crate::kcensus::propagation::{MessageId, PropagationGraphs};
 use crate::kcensus::round_state::KCensusRoundState;
-use crate::message::Message::{ConsensusM, Done};
-use crate::message::{Message, MsgWithSource};
+use crate::message::Message;
 use crate::multisink::MultiSink;
 use crate::value::{KVal, Request};
 use log::{debug, info};
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::io;
-use tokio::select;
-use tokio::sync::mpsc::{Receiver, Sender};
 
 pub mod message;
 pub mod node_state;
@@ -70,110 +68,174 @@ impl KCensus<DeSink> {
         }
     }
 
-    pub async fn run(
-        &mut self,
-        mut msg_rx: Receiver<MsgWithSource>,
-        mut req_rx: Receiver<Option<Request>>,
-        resp_tx: Sender<Request>,
-    ) -> io::Result<()> {
-        let mut queued_messages: VecDeque<ConsensusMessage> =
-            VecDeque::with_capacity(self.get_nb_nodes());
-        let mut count_done = 0usize;
-        let mut done = false;
-        let mut max_queued_slot = 0;
-
-        'main_loop: loop {
-            // Process queued messages (if possible)
-            let mut i = 0usize;
-            while i < queued_messages.len() {
-                let msg = &queued_messages[i];
-                if self.ready_to_process(msg) {
-                    let msg = queued_messages.remove(i).unwrap();
-                    let result = self.process_message(msg).await?;
-                    if let Some(value) = result {
-                        resp_tx.send(value).await.expect("Sending commited value");
-                        continue 'main_loop; // Restart from the beginning of the queue
-                    }
-                } else {
-                    i += 1;
-                }
-            }
-
-            if count_done == self.get_nb_nodes() {
-                break 'main_loop;
-            }
-
-            let nothing_ongoing = self.get_my_v().is_none() && max_queued_slot <= self.get_slot();
-            let should_repropose = nothing_ongoing && self.has_queued_values();
-            // TODO: (Optim.) peak connection first ?
-            if should_repropose && self.should_lead() {
-                // TODO: Leader election / only leader should repropose !!!!!!!!!!!!!!!!!!
-                let (v_uid, opt_value) = self.get_value_to_propose();
-                self.repropose_start(v_uid, opt_value).await?;
-            }
-
-            // Read new messages and/or new local request
-            let msg = select! {
-                req = req_rx.recv(), if nothing_ongoing && !should_repropose && !done => {
-                    match req.unwrap() {
-                        Some(req) =>  {
-                            debug_assert!(req.start_time.is_some());
-                            let start_time = req.start_time.unwrap();
-                            self.propose_start(req).await?;
-                            debug!("local request started after {:?}", start_time.elapsed());
-                        }
-                        None => {
-                            done = true;
-                            self.inner_broadcast(Done).await?;
-                            count_done += 1;
-                            if count_done == self.get_nb_nodes() {
-                                break 'main_loop;
-                            }
-                        }
-                    }
-                    msg_rx.recv().await.unwrap()
-                }
-                opt_msg = msg_rx.recv() => opt_msg.unwrap(),
-            };
-
-            match msg.msg {
-                ConsensusM { msg, value } => {
-                    if let Some(v) = value {
-                        debug_assert!(msg.should_include_value());
-                        let value_uid = msg.get_v();
-                        self.store_remote_value(value_uid, v);
-                    } else {
-                        debug_assert!(!msg.should_include_value());
-                    }
-
-                    if !self.ready_to_process(&msg) {
-                        max_queued_slot = max_queued_slot.max(msg.get_slot());
-                        queued_messages.push_back(msg);
-                        // TODO: recheck queued messages only if
-                        //   "ready_to_process" might have changed
-                        continue 'main_loop;
-                    }
-
-                    let result = self.process_message(msg).await?;
-                    if let Some(value) = result {
-                        resp_tx.send(value).await.expect("Sending commited value");
-                        continue 'main_loop; // Restart from the beginning of the queue
-                    }
-                }
-                Done => count_done += 1,
-                _ => panic!("Unexpected message type"),
-            }
-        } // 'main_loop: loop
-
-        req_rx.close();
-        msg_rx.close();
-        Ok(())
-    } // run
-
-    fn ready_to_process(&self, msg: &ConsensusMessage) -> bool {
-        msg.get_slot() <= self.slot && self.values.contains_key(&msg.get_v())
+    #[inline]
+    fn commit_slot(&mut self, value_uid: usize, commit_msg: bool) -> Request {
+        let value = self.values.remove(&value_uid).unwrap();
+        if commit_msg {
+            // "<#2FB82F>Commited \"{}\" in slot {}.</>"
+            debug!("Commited \"{}\" in slot {}.", value.value.val, self.slot);
+        } else {
+            // "<#2FB82F>Commited \"{}\" in slot {} (round {}) from state:</> <#B8E8B8>{}</>"
+            debug!(
+                "Commited \"{}\" in slot {} (round {}) from state: {}",
+                value.value.val, self.slot, self.round, self.round_state,
+            );
+        }
+        self.slot += 1;
+        self.goto_round(0);
+        value
     }
 
+    #[inline]
+    fn goto_round(&mut self, round: usize) {
+        if round != 0 {
+            debug!(
+                // "<#FF4F4F>Can not commit in round {} from state:</> <#EFBFBF>{}</>"
+                "Can not commit in round {} from state: {}",
+                self.round, self.round_state,
+            );
+            if round > self.round + 1 {
+                // "<yellow>######## Skipping round !!!!</>"
+                info!("######## Skipping round !!!!");
+            }
+        }
+        self.round = round;
+        self.round_state.clear();
+    }
+
+    #[inline]
+    async fn inner_propose_start(&mut self, value_uid: usize, with_value: bool) -> io::Result<()> {
+        self.round_state.set_my_v(value_uid);
+        self.round_state.become_proposer();
+
+        self.start_spread(with_value).await
+    }
+
+    #[inline]
+    fn value_for_msg(&self, msg: &KCensusMsg) -> Option<KVal> {
+        if msg.should_include_value() {
+            let value_uid = msg.get_v(self.my_pid);
+            Some(self.values[&value_uid].value.clone())
+        } else {
+            None
+        }
+    }
+
+    #[inline]
+    async fn broadcast(&mut self, msg: KCensusMsg) -> io::Result<()> {
+        let value = self.value_for_msg(&msg);
+        self.sinks.broadcast(KCensusM(msg), value).await
+    }
+
+    #[inline]
+    async fn spread_to(&mut self, dest: usize) -> io::Result<()> {
+        let msg = Spread {
+            slot: self.slot,
+            round: self.round,
+            msg_id: None,
+            remote_states: self.round_state.clone_node_states(),
+            with_value: false,
+        };
+        send_msg!(self, msg, dest)
+    }
+
+    #[inline]
+    async fn spread_to_all(&mut self) -> io::Result<()> {
+        let msg = Spread {
+            slot: self.slot,
+            round: self.round,
+            msg_id: None,
+            remote_states: self.round_state.clone_node_states(),
+            with_value: false,
+        };
+        self.broadcast(msg).await
+    }
+
+    #[inline]
+    async fn start_spread(&mut self, with_value: bool) -> io::Result<()> {
+        for msg_id in self.propagation_graphs.get_start(self.my_pid).iter() {
+            debug_assert!(self.propagation_graphs.get_by_id(msg_id).get_with_value());
+            debug_assert!(
+                self.propagation_graphs
+                    .get_by_id(msg_id)
+                    .get_dependencies()
+                    .is_empty()
+            );
+
+            let msg = Spread {
+                slot: self.slot,
+                round: self.round,
+                msg_id: Some(*msg_id),
+                remote_states: self.round_state.clone_node_states(),
+                with_value,
+            };
+            let dest = msg_id.dest;
+            send_msg!(self, msg, dest)?;
+        }
+        Ok(())
+    }
+
+    #[inline]
+    async fn graph_spread(&mut self, prev_msg_id: MessageId, with_value: bool) -> io::Result<()> {
+        let prev_msg_info = self.propagation_graphs.get_by_id(&prev_msg_id);
+        // Potential follow-up messages:
+        for msg_id in prev_msg_info.get_needed_by().iter() {
+            if msg_id.src != self.my_pid {
+                continue;
+            }
+            let msg_info = self.propagation_graphs.get_by_id(msg_id);
+
+            if !self.round_state.can_send(msg_info.get_dependencies()) {
+                debug_assert!(!msg_info.get_with_value());
+                continue;
+            }
+
+            self.round_state.receive_msg(*msg_id);
+
+            let msg = Spread {
+                slot: self.slot,
+                round: self.round,
+                msg_id: Some(*msg_id),
+                remote_states: self.round_state.clone_node_states(),
+                with_value: with_value && msg_info.get_with_value(),
+            };
+            send_msg!(self, msg, msg_id.dest)?;
+        }
+        Ok(())
+    }
+
+    #[inline]
+    async fn graph_spread_value_only(
+        &mut self,
+        prev_msg_id: MessageId,
+        value_uid: usize,
+    ) -> io::Result<()> {
+        let prev_msg_info = self.propagation_graphs.get_by_id(&prev_msg_id);
+        // Potential follow-up messages:
+        for msg_id in prev_msg_info.get_needed_by() {
+            if msg_id.src != self.my_pid {
+                continue;
+            }
+            let msg_info = self.propagation_graphs.get_by_id(msg_id);
+
+            self.round_state.receive_msg(*msg_id);
+
+            if !msg_info.get_with_value() {
+                continue;
+            }
+            debug_assert!(self.round_state.can_send(msg_info.get_dependencies()));
+
+            let msg = SpreadValueOnly {
+                msg_id: *msg_id,
+                value_uid,
+            };
+            send_msg!(self, msg, msg_id.dest)?;
+        }
+        Ok(())
+    }
+}
+
+impl Consensus for KCensus<DeSink> {
     async fn process_message(&mut self, msg: ConsensusMessage) -> io::Result<Option<Request>> {
         debug_assert!(self.ready_to_process(&msg));
         let msg_v_uid = msg.get_v();
@@ -314,44 +376,8 @@ impl KCensus<DeSink> {
     } // fn process_message
 
     #[inline]
-    fn commit_slot(&mut self, value_uid: usize, commit_msg: bool) -> Request {
-        let value = self.values.remove(&value_uid).unwrap();
-        if commit_msg {
-            // "<#2FB82F>Commited \"{}\" in slot {}.</>"
-            debug!("Commited \"{}\" in slot {}.", value.value.val, self.slot);
-        } else {
-            // "<#2FB82F>Commited \"{}\" in slot {} (round {}) from state:</> <#B8E8B8>{}</>"
-            debug!(
-                "Commited \"{}\" in slot {} (round {}) from state: {}",
-                value.value.val, self.slot, self.round, self.round_state,
-            );
-        }
-        self.slot += 1;
-        self.goto_round(0);
-        value
-    }
-
-    #[inline]
-    fn goto_round(&mut self, round: usize) {
-        if round != 0 {
-            debug!(
-                // "<#FF4F4F>Can not commit in round {} from state:</> <#EFBFBF>{}</>"
-                "Can not commit in round {} from state: {}",
-                self.round, self.round_state,
-            );
-            if round > self.round + 1 {
-                // "<yellow>######## Skipping round !!!!</>"
-                info!("######## Skipping round !!!!");
-            }
-        }
-        self.round = round;
-        self.round_state.clear();
-    }
-
-    #[inline]
     async fn propose_start(&mut self, req: Request) -> io::Result<()> {
-        let value_uid = self.my_pid + (self.slot * self.nb_nodes);
-        self.values.insert(value_uid, req);
+        let value_uid = self.store_new_value(req);
 
         self.inner_propose_start(value_uid, true).await
     }
@@ -360,176 +386,58 @@ impl KCensus<DeSink> {
     async fn repropose_start(&mut self, value_uid: usize, value: Option<KVal>) -> io::Result<()> {
         let with_value = match value {
             Some(value) => {
-                self.values.insert(value_uid, value.into_remote_req());
+                self.store_remote_value(value_uid, value);
                 true
             }
             None => false,
         };
+
         self.inner_propose_start(value_uid, with_value).await
-    }
-
-    #[inline]
-    async fn inner_propose_start(&mut self, value_uid: usize, with_value: bool) -> io::Result<()> {
-        self.round_state.set_my_v(value_uid);
-        self.round_state.become_proposer();
-
-        self.start_spread(with_value).await
-    }
-
-    #[inline]
-    fn value_for_msg(&self, msg: &KCensusMsg) -> Option<KVal> {
-        if msg.should_include_value() {
-            let value_uid = msg.get_v(self.my_pid);
-            Some(self.values[&value_uid].value.clone())
-        } else {
-            None
-        }
-    }
-
-    #[inline]
-    async fn broadcast(&mut self, msg: KCensusMsg) -> io::Result<()> {
-        let value = self.value_for_msg(&msg);
-        self.sinks.broadcast(KCensusM(msg), value).await
-    }
-
-    #[inline]
-    async fn spread_to(&mut self, dest: usize) -> io::Result<()> {
-        let msg = Spread {
-            slot: self.slot,
-            round: self.round,
-            msg_id: None,
-            remote_states: self.round_state.clone_node_states(),
-            with_value: false,
-        };
-        send_msg!(self, msg, dest)
-    }
-
-    #[inline]
-    async fn spread_to_all(&mut self) -> io::Result<()> {
-        let msg = Spread {
-            slot: self.slot,
-            round: self.round,
-            msg_id: None,
-            remote_states: self.round_state.clone_node_states(),
-            with_value: false,
-        };
-        self.broadcast(msg).await
-    }
-
-    #[inline]
-    async fn start_spread(&mut self, with_value: bool) -> io::Result<()> {
-        for msg_id in self.propagation_graphs.get_start(self.my_pid).iter() {
-            debug_assert!(self.propagation_graphs.get_by_id(msg_id).get_with_value());
-            debug_assert!(
-                self.propagation_graphs
-                    .get_by_id(msg_id)
-                    .get_dependencies()
-                    .is_empty()
-            );
-
-            let msg = Spread {
-                slot: self.slot,
-                round: self.round,
-                msg_id: Some(*msg_id),
-                remote_states: self.round_state.clone_node_states(),
-                with_value,
-            };
-            let dest = msg_id.dest;
-            send_msg!(self, msg, dest)?;
-        }
-        Ok(())
-    }
-
-    #[inline]
-    async fn graph_spread(&mut self, prev_msg_id: MessageId, with_value: bool) -> io::Result<()> {
-        let prev_msg_info = self.propagation_graphs.get_by_id(&prev_msg_id);
-        // Potential follow-up messages:
-        for msg_id in prev_msg_info.get_needed_by().iter() {
-            if msg_id.src != self.my_pid {
-                continue;
-            }
-            let msg_info = self.propagation_graphs.get_by_id(msg_id);
-
-            if !self.round_state.can_send(msg_info.get_dependencies()) {
-                debug_assert!(!msg_info.get_with_value());
-                continue;
-            }
-
-            self.round_state.receive_msg(*msg_id);
-
-            let msg = Spread {
-                slot: self.slot,
-                round: self.round,
-                msg_id: Some(*msg_id),
-                remote_states: self.round_state.clone_node_states(),
-                with_value: with_value && msg_info.get_with_value(),
-            };
-            send_msg!(self, msg, msg_id.dest)?;
-        }
-        Ok(())
-    }
-
-    #[inline]
-    async fn graph_spread_value_only(
-        &mut self,
-        prev_msg_id: MessageId,
-        value_uid: usize,
-    ) -> io::Result<()> {
-        let prev_msg_info = self.propagation_graphs.get_by_id(&prev_msg_id);
-        // Potential follow-up messages:
-        for msg_id in prev_msg_info.get_needed_by() {
-            if msg_id.src != self.my_pid {
-                continue;
-            }
-            let msg_info = self.propagation_graphs.get_by_id(msg_id);
-
-            self.round_state.receive_msg(*msg_id);
-
-            if !msg_info.get_with_value() {
-                continue;
-            }
-            debug_assert!(self.round_state.can_send(msg_info.get_dependencies()));
-
-            let msg = SpreadValueOnly {
-                msg_id: *msg_id,
-                value_uid,
-            };
-            send_msg!(self, msg, msg_id.dest)?;
-        }
-        Ok(())
     }
 
     fn get_nb_nodes(&self) -> usize {
         self.nb_nodes
     }
 
-    fn get_my_v(&self) -> Option<usize> {
-        self.round_state.get_my_v()
-    }
-
     fn get_slot(&self) -> usize {
         self.slot
     }
 
-    fn has_queued_values(&self) -> bool {
-        !self.values.is_empty()
+    fn get_my_v(&self) -> Option<usize> {
+        self.round_state.get_my_v()
     }
 
     fn should_lead(&self) -> bool {
         self.my_pid == 0
     }
 
-    fn get_value_to_propose(&self) -> (usize, Option<KVal>) {
-        (*self.values.keys().min().unwrap(), None)
-    }
-
     async fn inner_broadcast(&mut self, msg: Message) -> io::Result<()> {
         self.sinks.inner_broadcast(msg).await
+    }
+
+    fn store_new_value(&mut self, req: Request) -> usize {
+        let value_uid = self.my_pid + (self.slot * self.nb_nodes);
+        // TODO: Allow forwarding values ? (could the value already be there ?)
+        let inserted = self.values.insert(value_uid, req);
+        debug_assert!(inserted.is_none());
+        value_uid
     }
 
     fn store_remote_value(&mut self, value_uid: usize, v: KVal) {
         // TODO: Allow forwarding values ? (could the value already be there ?)
         let inserted = self.values.insert(value_uid, v.into_remote_req());
         debug_assert!(inserted.is_none());
+    }
+
+    fn knows_value(&self, v_uid: usize) -> bool {
+        self.values.contains_key(&v_uid)
+    }
+
+    fn has_queued_values(&self) -> bool {
+        !self.values.is_empty()
+    }
+
+    fn get_value_to_propose(&self) -> (usize, Option<KVal>) {
+        (*self.values.keys().min().unwrap(), None)
     }
 }
