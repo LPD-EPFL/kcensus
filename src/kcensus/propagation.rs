@@ -1,5 +1,5 @@
 use crate::kcensus::node_state::Knowledge;
-use crate::kcensus::round_state::RoundState;
+use crate::kcensus::round_state::KCensusRoundState;
 use crate::topology::Topology;
 use bit_set::BitSet;
 use log::trace;
@@ -37,7 +37,7 @@ pub struct MessageInfo {
 
 impl Display for MessageInfo {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}val={},deps=[", "{", self.with_value)?;
+        write!(f, "{{val={},deps=[", self.with_value)?;
         for (i, x) in self.dependencies.iter().enumerate() {
             write!(f, "{}{}", if i == 0 { "" } else { ", " }, x)?;
         }
@@ -45,7 +45,7 @@ impl Display for MessageInfo {
         for (i, x) in self.needed_by.iter().enumerate() {
             write!(f, "{}{}", if i == 0 { "" } else { ", " }, x)?;
         }
-        write!(f, "]{}", "}")?;
+        write!(f, "]}}")?;
         Ok(())
     }
 }
@@ -155,7 +155,7 @@ fn compute_propagation_graphs(topology: &Topology) -> PropagationGraphs {
         value_only_paths.sort_by_key(triangle_latency);
 
         // Simulate gossip until commit
-        let mut round_state = RoundState::new(topology.nb_nodes, proposer);
+        let mut round_state = KCensusRoundState::new(topology.nb_nodes, proposer);
         let mut count = 0;
         while !round_state.can_commit() {
             let t = &triangular_paths[count];
@@ -235,20 +235,19 @@ fn compute_propagation_graphs(topology: &Topology) -> PropagationGraphs {
             let mut shortest_path_from_proposer = true;
             let mut shortest_path_to_proposer = false;
 
-            let steps = [t.first, t.second, proposer];
-            for step in 0..3 {
-                let goal = steps[step];
-                if step > 0 && goal == proposer {
+            let checkpoints = [t.first, t.second, proposer];
+            for (step, target) in checkpoints.into_iter().enumerate() {
+                if step > 0 && target == proposer {
                     shortest_path_from_proposer = false;
                     shortest_path_to_proposer = true;
                 }
 
-                while current != goal {
+                while current != target {
                     let src = current;
-                    current = topology.next_src[current][goal];
-                    if t.total_latency > max_latency && value_only_path && goal == proposer {
+                    current = topology.next_src[current][target];
+                    if t.total_latency > max_latency && value_only_path && target == proposer {
                         // Go back directly to limit message count
-                        current = goal;
+                        current = target;
                     }
                     debug_assert!(src != current);
                     k.insert(current);
@@ -256,8 +255,9 @@ fn compute_propagation_graphs(topology: &Topology) -> PropagationGraphs {
 
                     if step > 0 {
                         shortest_path_from_proposer &= topology.prev_dest[proposer][current] == src;
-                        let left = topology.path_latencies[src][goal]
-                            + topology.path_latencies[goal][proposer];
+
+                        let left = topology.path_latencies[src][target]
+                            + topology.path_latencies[target][proposer];
                         let to_prop = topology.path_latencies[src][proposer];
                         shortest_path_to_proposer |= left == to_prop;
                     }

@@ -1,4 +1,5 @@
 use crate::kcensus::message::KCensusMsg;
+use crate::paxos::message::PaxosMsg;
 use crate::value::KVal;
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
@@ -8,9 +9,12 @@ pub enum Message {
     Hello {
         pid: usize,
     },
-    // TODO: Add path-graph to spread messages
-    KCensusMessage {
+    KCensusM {
         msg: KCensusMsg,
+        value: Option<KVal>,
+    },
+    PaxosM {
+        msg: PaxosMsg,
         value: Option<KVal>,
     },
     Done,

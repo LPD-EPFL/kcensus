@@ -9,7 +9,7 @@ macro_rules! my_state {
     };
 }
 
-pub struct RoundState {
+pub struct KCensusRoundState {
     nb_nodes: usize,
     my_pid: usize,
     majority: usize,
@@ -26,7 +26,7 @@ pub struct RoundState {
     _bitset_scratchpad: Knowledge,
 }
 
-impl RoundState {
+impl KCensusRoundState {
     pub fn new(nb_nodes: usize, my_pid: usize) -> Self {
         let majority = (nb_nodes / 2) + 1;
         let mut node_states = Vec::with_capacity(nb_nodes);
@@ -109,7 +109,7 @@ impl RoundState {
     pub fn i_am_proposer(&self) -> bool {
         // Note: Can only propose if I didn't see other proposals
         debug_assert_eq!(
-            self.proposers.len() > 0 && self.proposers[0] == self.my_pid,
+            !self.proposers.is_empty() && self.proposers[0] == self.my_pid,
             my_state!(self).proposer
         );
         my_state!(self).proposer
@@ -123,15 +123,14 @@ impl RoundState {
 
     #[inline]
     pub fn can_send(&mut self, dependencies: &HashSet<MessageId>) -> bool {
-        self.received_msgs.is_superset(&dependencies)
+        self.received_msgs.is_superset(dependencies)
     }
 
     #[inline]
     pub fn learn_from(&mut self, remote_states: &[NodeState]) -> bool {
         let orig_kl = my_state!(self).k.len();
-        for pid in 0..self.nb_nodes {
+        for (pid, remote_node_state) in remote_states.iter().enumerate() {
             let local_node_state = &mut self.node_states[pid];
-            let remote_node_state = &remote_states[pid];
             local_node_state.k.union_with(&remote_node_state.k);
             if let Some(node_v_uid) = remote_node_state.v_uid {
                 if remote_node_state.proposer && !local_node_state.proposer {
@@ -341,7 +340,7 @@ impl RoundState {
     }
 }
 
-impl fmt::Display for RoundState {
+impl fmt::Display for KCensusRoundState {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         // write!(f, "[")?;
         for (i, state) in self.node_states.iter().enumerate() {

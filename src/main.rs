@@ -1,7 +1,8 @@
 use crate::connector::Connector;
 use crate::kcensus::propagation::PropagationGraphs;
-use crate::kcensus::{KCensus, NbNodes, Pid};
+use crate::kcensus::KCensus;
 use crate::message::Message;
+use crate::multisink::MultiSink;
 use crate::topology::Topology;
 use crate::value::Request;
 use chrono::prelude::*;
@@ -15,12 +16,13 @@ use std::io;
 use std::io::Write;
 use std::time::Instant;
 use tokio::sync::mpsc;
-use tokio_stream::wrappers::ReceiverStream;
 
 mod connector;
 mod delayer;
 mod kcensus;
 mod message;
+mod multisink;
+mod paxos;
 mod requester;
 mod topology;
 mod value;
@@ -75,6 +77,8 @@ async fn main() -> io::Result<()> {
         streams.push(stream.map_ok(wrap_with_source_pid(pid)))
     }
 
+    let sinks = MultiSink(sinks);
+
     let input_stream = select_all(streams);
 
     // TODO: Channel buffer size ?
@@ -83,18 +87,12 @@ async fn main() -> io::Result<()> {
     let delayer_task =
         tokio::task::spawn(delayer::delayer(topology, my_pid, input_stream, delayed_tx));
 
-    let kcensus = KCensus::new(
-        NbNodes(nb_nodes),
-        Pid(my_pid),
-        ReceiverStream::new(delayed_rx),
-        sinks,
-        propagation_graphs,
-    );
+    let kcensus = KCensus::new(nb_nodes, my_pid, sinks, propagation_graphs);
 
     let (request_tx, request_rx) = mpsc::channel(1);
     let (response_tx, mut response_rx) = mpsc::channel(1);
 
-    let kcensus_task = tokio::task::spawn(kcensus.run(request_rx, response_tx));
+    let kcensus_task = tokio::task::spawn(kcensus.run(delayed_rx, request_rx, response_tx));
 
     let requester_task =
         tokio::task::spawn(requester::simple_requester(nb_nodes, my_pid, request_tx));

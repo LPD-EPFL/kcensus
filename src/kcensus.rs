@@ -2,31 +2,29 @@ use crate::connector::DeSink;
 use crate::kcensus::message::KCensusMsg::{Commit, Spread, SpreadValueOnly};
 use crate::kcensus::message::{KCensusMsg, KCensusMsgWithSource};
 use crate::kcensus::propagation::{MessageId, PropagationGraphs};
-use crate::kcensus::round_state::RoundState;
-use crate::message::Message::{Done, KCensusMessage};
-use crate::message::{Message, MsgWithSource};
-use crate::value::Request;
-use futures::{SinkExt, StreamExt};
+use crate::kcensus::round_state::KCensusRoundState;
+use crate::message::Message::{Done, KCensusM};
+use crate::message::MsgWithSource;
+use crate::multisink::MultiSink;
+use crate::value::{KVal, Request};
 use log::{debug, info};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io;
 use tokio::select;
 use tokio::sync::mpsc::{Receiver, Sender};
-use tokio_stream::wrappers::ReceiverStream;
 
 pub mod message;
 pub mod node_state;
 pub mod propagation;
 mod round_state;
 
-pub struct KCensus<St, Sk> {
+pub struct KCensus<Sk> {
     // Settings
     nb_nodes: usize,
     my_pid: usize,
 
     // Connections
-    in_stream: St,
-    out_sinks: HashMap<usize, Sk>,
+    sinks: MultiSink<Sk>,
 
     // Propagation graphs
     propagation_graphs: PropagationGraphs,
@@ -35,48 +33,51 @@ pub struct KCensus<St, Sk> {
     slot: usize,
     max_seen_slot: usize,
     round: usize,
-    queued_messages: Vec<KCensusMsgWithSource>,
     values: HashMap<usize, Request>,
 
-    round_state: RoundState,
+    round_state: KCensusRoundState,
 }
 
-pub struct NbNodes(pub usize);
-pub struct Pid(pub usize);
+macro_rules! send_msg {
+    ($self:ident, $msg:expr, $dest:expr) => {{
+        let value = $self.value_for_msg(&$msg);
+        $self.sinks.send(KCensusM { msg: $msg, value }, $dest).await
+    }};
+}
 
-impl KCensus<ReceiverStream<MsgWithSource>, DeSink> {
+impl KCensus<DeSink> {
     pub fn new(
-        nb_nodes: NbNodes,
-        my_pid: Pid,
-        in_stream: ReceiverStream<MsgWithSource>,
-        out_sinks: HashMap<usize, DeSink>,
+        nb_nodes: usize,
+        my_pid: usize,
+        sinks: MultiSink<DeSink>,
         propagation_graphs: PropagationGraphs,
     ) -> Self {
-        let nb_nodes = nb_nodes.0;
+        assert!(my_pid < nb_nodes);
         Self {
             nb_nodes,
-            my_pid: my_pid.0,
+            my_pid,
 
-            in_stream,
-            out_sinks,
+            sinks,
 
             propagation_graphs,
 
             slot: 0,
             max_seen_slot: 0,
             round: 0,
-            queued_messages: Vec::with_capacity(nb_nodes),
             values: HashMap::with_capacity(nb_nodes),
 
-            round_state: RoundState::new(nb_nodes, my_pid.0),
+            round_state: KCensusRoundState::new(nb_nodes, my_pid),
         }
     }
 
     pub async fn run(
         mut self,
-        mut rx: Receiver<Option<Request>>,
-        tx: Sender<Request>,
+        mut msg_rx: Receiver<MsgWithSource>,
+        mut req_rx: Receiver<Option<Request>>,
+        resp_tx: Sender<Request>,
     ) -> io::Result<()> {
+        let mut queued_messages: VecDeque<KCensusMsgWithSource> =
+            VecDeque::with_capacity(self.nb_nodes);
         self.goto_round(0);
         let mut count_done = 0usize;
         let mut done = false;
@@ -84,16 +85,14 @@ impl KCensus<ReceiverStream<MsgWithSource>, DeSink> {
         'main_loop: loop {
             // Process queued messages (if possible)
             let mut i = 0usize;
-            while i < self.queued_messages.len() {
-                let msg = &self.queued_messages[i];
+            while i < queued_messages.len() {
+                let msg = &queued_messages[i];
                 if self.ready_to_process(&msg.msg, msg.src) {
-                    let msg = self.queued_messages.remove(i);
-                    match self.process_message(msg.msg, msg.src).await? {
-                        Some(value) => {
-                            tx.send(value).await.expect("Sending commited value");
-                            continue 'main_loop; // Restart from the beginning of the queue
-                        }
-                        None => (),
+                    let msg = queued_messages.remove(i).unwrap();
+                    let result = self.process_message(msg.msg, msg.src).await?;
+                    if let Some(value) = result {
+                        resp_tx.send(value).await.expect("Sending commited value");
+                        continue 'main_loop; // Restart from the beginning of the queue
                     }
                 } else {
                     i += 1;
@@ -116,7 +115,7 @@ impl KCensus<ReceiverStream<MsgWithSource>, DeSink> {
 
             // Read new messages and/or new local request
             let msg = select! {
-                req = rx.recv(), if self.round_state.get_my_v().is_none()
+                req = req_rx.recv(), if self.round_state.get_my_v().is_none()
                 && !done && self.max_seen_slot == self.slot => {
                     match req.unwrap() {
                         Some(req) =>  {
@@ -127,21 +126,21 @@ impl KCensus<ReceiverStream<MsgWithSource>, DeSink> {
                         }
                         None => {
                             done = true;
-                            self.inner_broadcast(Done).await?;
+                            self.sinks.broadcast(Done).await?;
                             count_done += 1;
                             if count_done == self.nb_nodes {
                                 break 'main_loop;
                             }
                         }
                     }
-                    self.in_stream.next().await.unwrap()
+                    msg_rx.recv().await.unwrap()
                 }
-                opt_msg = self.in_stream.next() => opt_msg.unwrap(),
+                opt_msg = msg_rx.recv() => opt_msg.unwrap(),
             };
             let src = msg.src;
 
             match msg.msg {
-                KCensusMessage { msg, value } => {
+                KCensusM { msg, value } => {
                     if let Some(v) = value {
                         debug_assert!(msg.should_include_value());
                         let value_uid = msg.get_v(src);
@@ -154,18 +153,16 @@ impl KCensus<ReceiverStream<MsgWithSource>, DeSink> {
 
                     if !self.ready_to_process(&msg, src) {
                         self.max_seen_slot = self.max_seen_slot.max(msg.get_slot());
-                        self.queued_messages.push(msg.with_source(src));
+                        queued_messages.push_back(msg.with_source(src));
                         // TODO: recheck queued messages only if
                         //   "ready_to_process" might have changed
                         continue 'main_loop;
                     }
 
-                    match self.process_message(msg, src).await? {
-                        Some(value) => {
-                            tx.send(value).await.expect("Sending commited value");
-                            continue 'main_loop; // Restart from the beginning of the queue
-                        }
-                        None => (),
+                    let result = self.process_message(msg, src).await?;
+                    if let Some(value) = result {
+                        resp_tx.send(value).await.expect("Sending commited value");
+                        continue 'main_loop; // Restart from the beginning of the queue
                     }
                 }
                 Done => count_done += 1,
@@ -173,8 +170,8 @@ impl KCensus<ReceiverStream<MsgWithSource>, DeSink> {
             }
         } // 'main_loop: loop
 
-        rx.close();
-        self.in_stream.close();
+        req_rx.close();
+        msg_rx.close();
         Ok(())
     }
 
@@ -378,42 +375,23 @@ impl KCensus<ReceiverStream<MsgWithSource>, DeSink> {
     }
 
     #[inline]
-    async fn inner_broadcast(&mut self, msg: Message) -> io::Result<()> {
-        for (_, sink) in self.out_sinks.iter_mut() {
-            sink.send(msg.clone()).await?;
-        }
-        Ok(())
-    }
-
-    #[inline]
-    async fn inner_send_to(&mut self, msg: Message, pid: usize) -> io::Result<()> {
-        if pid == self.my_pid {
-            return Ok(());
-        }
-        let sink = self.out_sinks.get_mut(&pid).unwrap();
-        sink.send(msg.clone()).await
-    }
-
-    #[inline]
-    async fn broadcast(&mut self, msg: KCensusMsg) -> io::Result<()> {
-        self.inner_broadcast(KCensusMessage { msg, value: None })
-            .await
-    }
-
-    #[inline]
-    async fn send_to(&mut self, msg: KCensusMsg, pid: usize) -> io::Result<()> {
-        let value = if msg.should_include_value() {
+    fn value_for_msg(&self, msg: &KCensusMsg) -> Option<KVal> {
+        if msg.should_include_value() {
             let value_uid = msg.get_v(self.my_pid);
             Some(self.values[&value_uid].value.clone())
         } else {
             None
-        };
-
-        self.inner_send_to(KCensusMessage { msg, value }, pid).await
+        }
     }
 
     #[inline]
-    async fn spread_to(&mut self, pid: usize) -> io::Result<()> {
+    async fn broadcast(&mut self, msg: KCensusMsg) -> io::Result<()> {
+        let value = self.value_for_msg(&msg);
+        self.sinks.broadcast(KCensusM { msg, value }).await
+    }
+
+    #[inline]
+    async fn spread_to(&mut self, dest: usize) -> io::Result<()> {
         let msg = Spread {
             slot: self.slot,
             round: self.round,
@@ -421,7 +399,7 @@ impl KCensus<ReceiverStream<MsgWithSource>, DeSink> {
             remote_states: self.round_state.clone_node_states(),
             with_value: false,
         };
-        self.send_to(msg, pid).await
+        send_msg!(self, msg, dest)
     }
 
     #[inline]
@@ -438,14 +416,11 @@ impl KCensus<ReceiverStream<MsgWithSource>, DeSink> {
 
     #[inline]
     async fn start_spread(&mut self, with_value: bool) -> io::Result<()> {
-        let msg_count = self.propagation_graphs.get_start(self.my_pid).len();
-        for m_i in 0..msg_count {
-            // Reborrow
-            let msg_id = self.propagation_graphs.get_start(self.my_pid)[m_i];
-            debug_assert!(self.propagation_graphs.get_by_id(&msg_id).get_with_value());
+        for msg_id in self.propagation_graphs.get_start(self.my_pid).iter() {
+            debug_assert!(self.propagation_graphs.get_by_id(msg_id).get_with_value());
             debug_assert!(
                 self.propagation_graphs
-                    .get_by_id(&msg_id)
+                    .get_by_id(msg_id)
                     .get_dependencies()
                     .is_empty()
             );
@@ -453,12 +428,12 @@ impl KCensus<ReceiverStream<MsgWithSource>, DeSink> {
             let msg = Spread {
                 slot: self.slot,
                 round: self.round,
-                msg_id: Some(msg_id),
+                msg_id: Some(*msg_id),
                 remote_states: self.round_state.clone_node_states(),
                 with_value,
             };
             let dest = msg_id.dest;
-            self.send_to(msg, dest).await?
+            send_msg!(self, msg, dest)?;
         }
         Ok(())
     }
@@ -466,33 +441,28 @@ impl KCensus<ReceiverStream<MsgWithSource>, DeSink> {
     #[inline]
     async fn graph_spread(&mut self, prev_msg_id: MessageId, with_value: bool) -> io::Result<()> {
         let prev_msg_info = self.propagation_graphs.get_by_id(&prev_msg_id);
-        let msg_count = prev_msg_info.get_needed_by().len();
-        for m_i in 0..msg_count {
-            // Reborrow
-            let prev_msg_info = self.propagation_graphs.get_by_id(&prev_msg_id);
-            // Potential follow-up message:
-            let msg_id = prev_msg_info.get_needed_by()[m_i];
+        // Potential follow-up messages:
+        for msg_id in prev_msg_info.get_needed_by().iter() {
             if msg_id.src != self.my_pid {
                 continue;
             }
-            let msg_info = self.propagation_graphs.get_by_id(&msg_id);
+            let msg_info = self.propagation_graphs.get_by_id(msg_id);
 
             if !self.round_state.can_send(msg_info.get_dependencies()) {
                 debug_assert!(!msg_info.get_with_value());
                 continue;
             }
 
-            self.round_state.receive_msg(msg_id);
+            self.round_state.receive_msg(*msg_id);
 
             let msg = Spread {
                 slot: self.slot,
                 round: self.round,
-                msg_id: Some(msg_id),
+                msg_id: Some(*msg_id),
                 remote_states: self.round_state.clone_node_states(),
                 with_value: with_value && msg_info.get_with_value(),
             };
-            let dest = msg_id.dest;
-            self.send_to(msg, dest).await?;
+            send_msg!(self, msg, msg_id.dest)?;
         }
         Ok(())
     }
@@ -504,27 +474,25 @@ impl KCensus<ReceiverStream<MsgWithSource>, DeSink> {
         value_uid: usize,
     ) -> io::Result<()> {
         let prev_msg_info = self.propagation_graphs.get_by_id(&prev_msg_id);
-        let msg_count = prev_msg_info.get_needed_by().len();
-        for msg_i in 0..msg_count {
-            // Reborrow
-            let prev_msg_info = self.propagation_graphs.get_by_id(&prev_msg_id);
-            // Potential follow-up message:
-            let msg_id = prev_msg_info.get_needed_by()[msg_i];
+        // Potential follow-up messages:
+        for msg_id in prev_msg_info.get_needed_by() {
             if msg_id.src != self.my_pid {
                 continue;
             }
-            let msg_info = self.propagation_graphs.get_by_id(&msg_id);
+            let msg_info = self.propagation_graphs.get_by_id(msg_id);
 
-            self.round_state.receive_msg(msg_id);
+            self.round_state.receive_msg(*msg_id);
 
             if !msg_info.get_with_value() {
                 continue;
             }
             debug_assert!(self.round_state.can_send(msg_info.get_dependencies()));
 
-            let dest = msg_id.dest;
-            let msg = SpreadValueOnly { msg_id, value_uid };
-            self.send_to(msg, dest).await?;
+            let msg = SpreadValueOnly {
+                msg_id: *msg_id,
+                value_uid,
+            };
+            send_msg!(self, msg, msg_id.dest)?;
         }
         Ok(())
     }
