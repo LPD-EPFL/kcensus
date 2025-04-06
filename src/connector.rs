@@ -15,6 +15,11 @@ pub struct Connector {
     listener: TcpListener,
 }
 
+type WrappedStream = FramedRead<OwnedReadHalf, LengthDelimitedCodec>;
+type WrappedSink = FramedWrite<OwnedWriteHalf, LengthDelimitedCodec>;
+type SerStream = Framed<WrappedStream, Message, (), Bincode<Message, ()>>;
+pub type DeSink = Framed<WrappedSink, (), Message, Bincode<(), Message>>;
+
 impl Connector {
     pub async fn new(my_pid: usize) -> io::Result<Self> {
         // TODO: Load addresses from config
@@ -51,11 +56,6 @@ impl Connector {
         }
     }
 }
-
-type WrappedStream = FramedRead<OwnedReadHalf, LengthDelimitedCodec>;
-type WrappedSink = FramedWrite<OwnedWriteHalf, LengthDelimitedCodec>;
-type SerStream = Framed<WrappedStream, Message, (), Bincode<Message, ()>>;
-pub type DeSink = Framed<WrappedSink, (), Message, Bincode<(), Message>>;
 
 fn wrap_stream(stream: TcpStream) -> (SerStream, DeSink) {
     let (read, write) = stream.into_split();

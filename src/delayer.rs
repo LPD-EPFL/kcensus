@@ -65,7 +65,8 @@ pub async fn delayer<St: Stream<Item = io::Result<MsgWithSource>> + Unpin>(
                 for q in queues.iter_mut() {
                     if let Some(m) = q.front() {
                         if m.deadline < now {
-                            if delayed_output.send(q.pop_front().unwrap().msg).await.is_err() {
+                            let res = delayed_output.send(q.pop_front().unwrap().msg).await;
+                            if res.is_err() {
                                 return Ok(())
                             }
                         }

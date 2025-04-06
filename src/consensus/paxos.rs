@@ -49,117 +49,6 @@ impl Paxos<DeSink> {
             round_state: PaxosRoundState::new(nb_nodes, my_pid),
         }
     }
-
-    #[inline]
-    fn commit_slot(&mut self, value_uid: usize, commit_msg: bool) -> Request {
-        let value = self.values.remove(&value_uid).unwrap();
-        if commit_msg {
-            // "<#2FB82F>Commited \"{}\" in slot {}.</>"
-            debug!("Commited \"{:?}\" in slot {}.", value.value.val, self.slot);
-        } else {
-            // "<#2FB82F>Commited \"{}\" in slot {} (round {}) from state:</> <#B8E8B8>{}</>"
-            debug!(
-                "Commited \"{:?}\" in slot {} (round {})",
-                value.value.val, self.slot, self.round
-            );
-        }
-        self.slot += 1;
-        self.goto_round(PaxosRound::default());
-        self.round_state.full_clear();
-        value
-    }
-
-    #[inline]
-    fn goto_round(&mut self, round: PaxosRound) {
-        if round != PaxosRound::default() {
-            debug!(
-                // "<#FF4F4F>Can not commit in round {} from state:</> <#EFBFBF>{}</>"
-                "Can not commit in round {}",
-                self.round,
-            );
-            if round.round_group > self.round.round_group + 1 {
-                // "<yellow>######## Skipping round !!!!</>"
-                debug!("######## Skipping round !!!!");
-            }
-        }
-        self.round = round;
-        self.round_state.next_round();
-    }
-
-    #[inline]
-    fn value_for_msg(&mut self, msg: &PaxosMsg, with_value: bool) -> Option<KVal> {
-        if with_value {
-            Some(self.values[&msg.get_v()].value.clone())
-        } else {
-            None
-        }
-    }
-
-    async fn send(&mut self, msg: PaxosMsg, dest: usize) -> io::Result<()> {
-        self.sinks.send(PaxosM(msg), None, dest).await
-    }
-
-    #[inline]
-    async fn broadcast(&mut self, msg: PaxosMsg, with_value: bool) -> io::Result<()> {
-        let value = self.value_for_msg(&msg, with_value);
-        self.sinks.broadcast(PaxosM(msg), value).await
-    }
-
-    async fn propose(&mut self, value_uid: usize, with_value: bool) -> io::Result<()> {
-        self.goto_round(self.round.next_proposer_round(self.my_pid));
-        let round_value = RoundValue::new(self.round, value_uid);
-        self.round_state.propose_v(round_value);
-        let msg = if self.round != PaxosRound::default() {
-            Prepare {
-                slot: self.slot,
-                round: self.round,
-                round_value,
-            }
-        } else {
-            Accept {
-                slot: self.slot,
-                round: self.round,
-                value_uid: round_value.v_uid,
-            }
-        };
-        self.broadcast(msg, with_value).await
-    }
-
-    async fn answer_prepare(&mut self, src: usize) -> io::Result<()> {
-        let msg = Prepare {
-            slot: self.slot,
-            round: self.round,
-            round_value: self.round_state.get_round_value().unwrap(),
-        };
-        self.send(msg, src).await
-    }
-
-    async fn broadcast_accept(&mut self) -> io::Result<()> {
-        let msg = Accept {
-            slot: self.slot,
-            round: self.round,
-            value_uid: self.round_state.get_v().unwrap(),
-        };
-        self.broadcast(msg, false).await
-    }
-
-    async fn answer_accept(&mut self) -> io::Result<()> {
-        let src = self.round.proposer;
-        let msg = Accept {
-            slot: self.slot,
-            round: self.round,
-            value_uid: self.round_state.get_v().unwrap(),
-        };
-        self.send(msg, src).await
-    }
-
-    async fn broadcast_commit(&mut self) -> io::Result<()> {
-        let msg = Commit {
-            slot: self.slot,
-            value_uid: self.round_state.get_v().unwrap(),
-        };
-        self.broadcast(msg, false).await
-    }
 }
 
 impl Consensus for Paxos<DeSink> {
@@ -319,5 +208,118 @@ impl Consensus for Paxos<DeSink> {
     #[inline]
     fn get_value_to_repropose(&self) -> usize {
         *self.values.keys().min().unwrap()
+    }
+}
+
+impl Paxos<DeSink> {
+    #[inline]
+    fn commit_slot(&mut self, value_uid: usize, commit_msg: bool) -> Request {
+        let value = self.values.remove(&value_uid).unwrap();
+        if commit_msg {
+            // "<#2FB82F>Commited \"{}\" in slot {}.</>"
+            debug!("Commited \"{:?}\" in slot {}.", value.value.val, self.slot);
+        } else {
+            // "<#2FB82F>Commited \"{}\" in slot {} (round {}) from state:</> <#B8E8B8>{}</>"
+            debug!(
+                "Commited \"{:?}\" in slot {} (round {})",
+                value.value.val, self.slot, self.round
+            );
+        }
+        self.slot += 1;
+        self.goto_round(PaxosRound::default());
+        self.round_state.full_clear();
+        value
+    }
+
+    #[inline]
+    fn goto_round(&mut self, round: PaxosRound) {
+        if round != PaxosRound::default() {
+            debug!(
+                // "<#FF4F4F>Can not commit in round {} from state:</> <#EFBFBF>{}</>"
+                "Can not commit in round {}",
+                self.round,
+            );
+            if round.round_group > self.round.round_group + 1 {
+                // "<yellow>######## Skipping round !!!!</>"
+                debug!("######## Skipping round !!!!");
+            }
+        }
+        self.round = round;
+        self.round_state.next_round();
+    }
+
+    #[inline]
+    fn value_for_msg(&mut self, msg: &PaxosMsg, with_value: bool) -> Option<KVal> {
+        if with_value {
+            Some(self.values[&msg.get_v()].value.clone())
+        } else {
+            None
+        }
+    }
+
+    async fn send(&mut self, msg: PaxosMsg, dest: usize) -> io::Result<()> {
+        self.sinks.send(PaxosM(msg), None, dest).await
+    }
+
+    #[inline]
+    async fn broadcast(&mut self, msg: PaxosMsg, with_value: bool) -> io::Result<()> {
+        let value = self.value_for_msg(&msg, with_value);
+        self.sinks.broadcast(PaxosM(msg), value).await
+    }
+
+    async fn propose(&mut self, value_uid: usize, with_value: bool) -> io::Result<()> {
+        self.goto_round(self.round.next_proposer_round(self.my_pid));
+        let round_value = RoundValue::new(self.round, value_uid);
+        self.round_state.propose_v(round_value);
+        let msg = if self.round != PaxosRound::default() {
+            Prepare {
+                slot: self.slot,
+                round: self.round,
+                round_value,
+            }
+        } else {
+            Accept {
+                slot: self.slot,
+                round: self.round,
+                value_uid: round_value.v_uid,
+            }
+        };
+        self.broadcast(msg, with_value).await
+    }
+
+    async fn answer_prepare(&mut self, src: usize) -> io::Result<()> {
+        let msg = Prepare {
+            slot: self.slot,
+            round: self.round,
+            round_value: self.round_state.get_round_value().unwrap(),
+        };
+        self.send(msg, src).await
+    }
+
+    async fn broadcast_accept(&mut self) -> io::Result<()> {
+        let msg = Accept {
+            slot: self.slot,
+            round: self.round,
+            value_uid: self.round_state.get_v().unwrap(),
+        };
+        self.broadcast(msg, false).await
+    }
+
+    async fn answer_accept(&mut self) -> io::Result<()> {
+        let src = self.round.proposer;
+        let msg = Accept {
+            slot: self.slot,
+            round: self.round,
+            value_uid: self.round_state.get_v().unwrap(),
+        };
+        self.send(msg, src).await
+    }
+
+    async fn broadcast_commit(&mut self) -> io::Result<()> {
+        let msg = Commit {
+            slot: self.slot,
+            value_uid: self.round_state.get_v().unwrap(),
+        };
+        self.broadcast(msg, false).await
     }
 }

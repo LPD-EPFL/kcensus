@@ -88,6 +88,7 @@ impl PaxosRoundState {
         self.accepted += 1;
     }
 
+    #[inline]
     pub fn is_prepared(&self) -> bool {
         self.prepared >= self.majority
     }

@@ -8,36 +8,10 @@ pub struct PaxosRound {
     pub proposer: usize,
 }
 
-impl PaxosRound {
-    pub(crate) fn next_proposer_round(&self, my_pid: usize) -> PaxosRound {
-        let round_group = if my_pid >= self.proposer {
-            self.round_group
-        } else {
-            self.round_group + 1
-        };
-        PaxosRound {
-            round_group,
-            proposer: my_pid,
-        }
-    }
-}
-
-impl Display for PaxosRound {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}.{}", self.round_group, self.proposer)
-    }
-}
-
 #[derive(Copy, Clone, Debug, Serialize, Deserialize)]
 pub struct RoundValue {
     pub round: PaxosRound,
     pub v_uid: usize,
-}
-
-impl RoundValue {
-    pub fn new(round: PaxosRound, v_uid: usize) -> Self {
-        Self { round, v_uid }
-    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -57,6 +31,28 @@ pub enum PaxosMsg {
         slot: usize,
         value_uid: usize,
     },
+}
+
+impl PaxosRound {
+    #[inline]
+    pub(crate) fn next_proposer_round(&self, my_pid: usize) -> PaxosRound {
+        let round_group = if my_pid >= self.proposer {
+            self.round_group
+        } else {
+            self.round_group + 1
+        };
+        PaxosRound {
+            round_group,
+            proposer: my_pid,
+        }
+    }
+}
+
+impl RoundValue {
+    #[inline]
+    pub fn new(round: PaxosRound, v_uid: usize) -> Self {
+        Self { round, v_uid }
+    }
 }
 
 impl PaxosMsg {
@@ -85,5 +81,11 @@ impl PaxosMsg {
             Accept { round, .. } => round.proposer == src && *round == PaxosRound::default(),
             _ => false,
         }
+    }
+}
+
+impl Display for PaxosRound {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}.{}", self.round_group, self.proposer)
     }
 }
