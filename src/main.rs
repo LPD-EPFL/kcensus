@@ -110,8 +110,12 @@ async fn main() -> io::Result<()> {
     // TODO: Channel buffer size ?
     let (delayed_tx, delayed_rx) = mpsc::channel(1);
 
-    let delayer_task =
-        tokio::task::spawn(delayer::delayer(topology.clone(), my_pid, input_stream, delayed_tx));
+    let delayer_task = tokio::task::spawn(delayer::delayer(
+        topology.clone(),
+        my_pid,
+        input_stream,
+        delayed_tx,
+    ));
 
     let (client_request_tx, mut client_request_rx) = mpsc::channel(1);
     let (client_response_tx, client_response_rx) = mpsc::channel(1);
@@ -157,10 +161,18 @@ async fn main() -> io::Result<()> {
     });
 
     let app = async {
-        let mut num_committed = if let Algo::Unreplicated = args.algo { my_pid } else { 0 };
+        let mut num_committed = if let Algo::Unreplicated = args.algo {
+            my_pid
+        } else {
+            0
+        };
         num_committed_watch_tx.send(num_committed).ok(); // Client not listening for back pressure
         while let Some(req) = committed_request_rx.recv().await {
-            num_committed += if let Algo::Unreplicated = args.algo { nb_nodes } else { 1 };
+            num_committed += if let Algo::Unreplicated = args.algo {
+                nb_nodes
+            } else {
+                1
+            };
             trace!("About to execute committed request: {:?}", req);
             let response = if let Some(cassandra) = cassandra.as_ref() {
                 cassandra.execute(req.request).await
@@ -208,16 +220,33 @@ async fn main() -> io::Result<()> {
                 let leader = (0..topology.nb_nodes)
                     .min_by_key(|&potential_leader| {
                         let mut pings: Vec<_> = (0..topology.nb_nodes)
-                            .map(|client| topology.link_latencies[potential_leader][client] + topology.link_latencies[client][potential_leader])
+                            .map(|client| {
+                                topology.link_latencies[potential_leader][client]
+                                    + topology.link_latencies[client][potential_leader]
+                            })
                             .collect();
                         pings.sort();
-                        pings[pings.len()/2]
-                    }).expect("There should be a leader");
-                let leader_ping = topology.link_latencies[leader][my_pid] + topology.link_latencies[my_pid][leader];
+                        pings[pings.len() / 2]
+                    })
+                    .expect("There should be a leader");
+                let leader_ping = topology.link_latencies[leader][my_pid]
+                    + topology.link_latencies[my_pid][leader];
                 println!("leader_ping: {:?}", leader_ping);
-                while let Some(request) = client_request_rx.recv().await.expect("Unreplicated server failed to recv client Request") {
-                    tokio_timerfd::sleep(leader_ping).await.expect("Unreplicated server failed to sleep");
-                    committed_request_tx.send(CommittedRequest{request, local: true}).await.expect("Unreplicated server failed to send CommittedRequest");
+                while let Some(request) = client_request_rx
+                    .recv()
+                    .await
+                    .expect("Unreplicated server failed to recv client Request")
+                {
+                    tokio_timerfd::sleep(leader_ping)
+                        .await
+                        .expect("Unreplicated server failed to sleep");
+                    committed_request_tx
+                        .send(CommittedRequest {
+                            request,
+                            local: true,
+                        })
+                        .await
+                        .expect("Unreplicated server failed to send CommittedRequest");
                 }
                 drop(committed_request_tx); // So the app stops
                 drop(delayed_rx); // So the delayer stops
