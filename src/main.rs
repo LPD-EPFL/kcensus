@@ -224,9 +224,8 @@ async fn main() -> io::Result<()> {
                         rtts[rtts.len() / 2]
                     })
                     .expect("There should be a leader");
-                let leader_ping = topology.link_latencies[leader][my_pid]
-                    + topology.link_latencies[my_pid][leader];
-                println!("leader_ping: {:?}", leader_ping);
+                let leader_ping = topology.rtts[leader][my_pid];
+                println!("leader ping: {:?}", leader_ping);
                 while let Some(request) = client_request_rx
                     .recv()
                     .await
