@@ -1,8 +1,8 @@
-use std::time::Duration;
 use scylla::client::{session::Session, session_builder::SessionBuilder};
 use scylla::statement::prepared::PreparedStatement;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::{Sender, Receiver};
+use tokio::sync::watch::{Receiver as WatchReceiver};
 use tokio::time::Instant;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -72,24 +72,29 @@ impl PreparedHandler {
     }
 }
 
-pub struct Client {}
+pub struct Client {
+    pub nb_nodes: usize,
+    pub my_pid: usize,
+    pub client_request_tx: Sender<Option<Request>>,
+    pub client_response_rx: Receiver<Response>,
+    pub num_committed_watch_rx: WatchReceiver<usize>,
+}
 
 impl Client {
-    pub async fn run(self, nb_nodes: usize, my_pid: usize, client_request_tx: Sender<Option<Request>>, mut client_response_rx: Receiver<Response>) {
-        let start = Instant::now() + Duration::from_millis((50 + my_pid * 200) as u64);
-        let mut interval =
-            tokio::time::interval_at(start, Duration::from_millis((200 * nb_nodes) as u64));
+    pub async fn run(mut self) {
         for i in 0..10 {
-            interval.tick().await;
+            while *self.num_committed_watch_rx.borrow_and_update() % self.nb_nodes != self.my_pid {
+                self.num_committed_watch_rx.changed().await.expect("Couldn't read backpressure");
+            }
             let generated = Instant::now();
-            client_request_tx
-                .send(Request::Put {key: "single-key".into(), value: format!("v{}.{}!", my_pid, i)}.into())
+            self.client_request_tx
+                .send(Request::Put {key: "single-key".into(), value: format!("v{}.{}!", self.my_pid, i)}.into())
                 .await
                 .expect("Client failed to queue request");
-            let response = client_response_rx.recv().await.expect("Client failed to receive response");
+            let response = self.client_response_rx.recv().await.expect("Client failed to receive response");
             let responded = Instant::now();
             println!("Executed {:?} in {:?}", response, responded.duration_since(generated));
         };
-        client_request_tx.send(None).await.expect("Client failed to enqueue None request");
+        self.client_request_tx.send(None).await.expect("Client failed to enqueue None request");
     }
 }

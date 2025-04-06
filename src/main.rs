@@ -4,6 +4,7 @@ use crate::consensus::Consensus;
 use crate::message::Message;
 use crate::multi_sink::MultiSink;
 use crate::topology::Topology;
+use crate::value::CommittedRequest;
 use chrono::prelude::*;
 use clap::Parser;
 use consensus::kcensus::propagation::PropagationGraphs;
@@ -16,8 +17,7 @@ use std::collections::HashMap;
 use std::io;
 use std::io::Write;
 use std::time::Instant;
-use tokio::sync::mpsc;
-use crate::value::CommittedRequest;
+use tokio::sync::{mpsc, watch};
 
 mod connector;
 mod consensus;
@@ -102,6 +102,7 @@ async fn main() -> io::Result<()> {
     let (client_request_tx, client_request_rx) = mpsc::channel(1);
     let (client_response_tx, client_response_rx) = mpsc::channel(1);
     let (committed_request_tx, mut committed_request_rx) = mpsc::channel::<CommittedRequest<cassandra::Request>>(1);
+    let (num_committed_watch_tx, num_committed_watch_rx) = watch::channel(0usize);
 
     let cassandra = if let Some(uri) = args.db {
         // docker run --name cassandra -p 9042:9042 -d cassandra
@@ -118,12 +119,20 @@ async fn main() -> io::Result<()> {
 
     let client_task =
         tokio::task::spawn(async move {
-            let client = cassandra::Client {};
-            client.run(nb_nodes, my_pid, client_request_tx, client_response_rx).await;
+            let client = cassandra::Client {
+                nb_nodes,
+                my_pid,
+                client_request_tx,
+                client_response_rx,
+                num_committed_watch_rx,
+            };
+            client.run().await;
         });
 
     let app = async {
+        let mut num_committed = 0;
         while let Some(req) = committed_request_rx.recv().await {
+            num_committed += 1;
             trace!("About to execute committed request: {:?}", req);
             let response = if let Some(cassandra) = cassandra.as_ref() {
                 cassandra.execute(req.request).await
@@ -136,6 +145,7 @@ async fn main() -> io::Result<()> {
             if req.local {
                 client_response_tx.send(response).await.expect("Server failed to enqueue client Response");
             }
+            num_committed_watch_tx.send(num_committed).ok(); // Client not listening for back pressure
         }
     };
 
