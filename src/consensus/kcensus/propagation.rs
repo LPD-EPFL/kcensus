@@ -138,11 +138,7 @@ fn compute_propagation_graphs(topology: &Topology) -> PropagationGraphs {
         let e_paxos_quorum = ((topology.nb_nodes * 3) / 4).max(majority);
         epaxos_latencies.push(proposer_round_trips[e_paxos_quorum]);
         let multi_paxos_latency: Duration = (0..topology.nb_nodes)
-            .map(|requester| {
-                topology.link_latencies[requester][proposer]
-                    + proposer_round_trips[majority]
-                    + topology.link_latencies[proposer][requester]
-            })
+            .map(|requester| topology.rtts[requester][proposer] + proposer_round_trips[majority])
             .sum();
         let multi_paxos_latency =
             Duration::from_secs_f64(multi_paxos_latency.as_secs_f64() / topology.nb_nodes as f64);
