@@ -1,4 +1,5 @@
 use crate::consensus::paxos::message::PaxosMsg::{Accept, Commit, Prepare};
+use crate::consensus::paxos::message::RoundValue::{EPaxosV, PaxosV};
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 
@@ -9,9 +10,15 @@ pub struct PaxosRound {
 }
 
 #[derive(Copy, Clone, Debug, Serialize, Deserialize)]
-pub struct RoundValue {
-    pub round: PaxosRound,
-    pub v_uid: usize,
+pub enum RoundValue {
+    EPaxosV {
+        proposer: usize,
+        v_uid: usize,
+    },
+    PaxosV {
+        round: Option<PaxosRound>,
+        v_uid: usize,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -50,8 +57,27 @@ impl PaxosRound {
 
 impl RoundValue {
     #[inline]
-    pub fn new(round: PaxosRound, v_uid: usize) -> Self {
-        Self { round, v_uid }
+    pub fn new_paxos_value(round: Option<PaxosRound>, v_uid: usize) -> Self {
+        PaxosV { round, v_uid }
+    }
+
+    #[inline]
+    pub fn new_epaxos_value(proposer: usize, v_uid: usize) -> Self {
+        EPaxosV { proposer, v_uid }
+    }
+
+    pub fn get_v(&self) -> usize {
+        match self {
+            PaxosV { v_uid, .. } => *v_uid,
+            EPaxosV { v_uid, .. } => *v_uid,
+        }
+    }
+
+    pub fn get_round(&self) -> Option<PaxosRound> {
+        match self {
+            PaxosV { round, .. } => *round,
+            EPaxosV { .. } => None,
+        }
     }
 }
 
@@ -59,7 +85,7 @@ impl PaxosMsg {
     #[inline]
     pub fn get_v(&self) -> usize {
         match self {
-            Prepare { round_value, .. } => round_value.v_uid,
+            Prepare { round_value, .. } => round_value.get_v(),
             Accept { value_uid, .. } => *value_uid,
             Commit { value_uid, .. } => *value_uid,
         }

@@ -74,17 +74,23 @@ struct PropagationGraph {
 }
 
 #[derive(Debug)]
-pub struct PropagationGraphs(Vec<PropagationGraph>);
+pub struct PropagationGraphs {
+    graphs: Vec<PropagationGraph>,
+    pub kcensus_latencies: Vec<Duration>,
+    pub paxos_latencies: Vec<Duration>,
+    pub epaxos_latencies: Vec<Duration>,
+    pub multi_paxos_latencies: Vec<Duration>,
+}
 
 impl PropagationGraphs {
     #[inline]
     pub fn get_by_id(&self, msg_id: &MessageId) -> &MessageInfo {
-        &self.0[msg_id.proposer].graph[msg_id]
+        &self.graphs[msg_id.proposer].graph[msg_id]
     }
 
     #[inline]
     pub fn get_start(&self, proposer: ProcId) -> &[MessageId] {
-        &self.0[proposer].start_messages
+        &self.graphs[proposer].start_messages
     }
 }
 
@@ -116,9 +122,36 @@ fn triangle_latency(t: &TriangularPath) -> Duration {
 }
 
 fn compute_propagation_graphs(topology: &Topology) -> PropagationGraphs {
+    let mut paxos_latencies = Vec::with_capacity(topology.nb_nodes);
+    let mut epaxos_latencies = Vec::with_capacity(topology.nb_nodes);
+    let mut multi_paxos_latencies = Vec::with_capacity(topology.nb_nodes);
+    let mut kcensus_latencies = Vec::with_capacity(topology.nb_nodes);
     let mut propagation_graphs = Vec::with_capacity(topology.nb_nodes);
+
     for proposer in 0..topology.nb_nodes {
         trace!("proposer: {}", proposer);
+
+        let mut proposer_round_trips: Vec<_> = (0..topology.nb_nodes)
+            .map(|node| {
+                topology.link_latencies[proposer][node] + topology.link_latencies[node][proposer]
+            })
+            .collect();
+        proposer_round_trips.sort();
+        let majority = 1 + topology.nb_nodes / 2;
+        paxos_latencies.push(proposer_round_trips[majority] * 2);
+        let e_paxos_quorum = ((topology.nb_nodes * 3) / 4).max(majority);
+        epaxos_latencies.push(proposer_round_trips[e_paxos_quorum]);
+        let multi_paxos_latency: Duration = (0..topology.nb_nodes)
+            .map(|requester| {
+                topology.link_latencies[requester][proposer]
+                    + proposer_round_trips[majority]
+                    + topology.link_latencies[proposer][requester]
+            })
+            .sum();
+        let multi_paxos_latency =
+            Duration::from_secs_f64(multi_paxos_latency.as_secs_f64() / topology.nb_nodes as f64);
+        multi_paxos_latencies.push(multi_paxos_latency);
+
         let mut triangular_paths: Vec<TriangularPath> =
             Vec::with_capacity(topology.nb_nodes * topology.nb_nodes);
         for first in 0..topology.nb_nodes {
@@ -175,11 +208,8 @@ fn compute_propagation_graphs(topology: &Topology) -> PropagationGraphs {
             triangular_paths.len()
         );
         trace!("longest path: {}", triangular_paths[count - 1]);
-        println!(
-            "{}'s expected commit time: {:?}",
-            proposer,
-            triangular_paths[count - 1].total_latency
-        );
+
+        kcensus_latencies.push(max_latency);
 
         // TODO: Some triangles might still not be needed to commit.
         //   Try to check if they are needed for can_commit? (can be merged with bellow logic?)
@@ -358,5 +388,12 @@ fn compute_propagation_graphs(topology: &Topology) -> PropagationGraphs {
             graph: message_graph,
         });
     }
-    PropagationGraphs(propagation_graphs)
+
+    PropagationGraphs {
+        graphs: propagation_graphs,
+        kcensus_latencies,
+        paxos_latencies,
+        epaxos_latencies,
+        multi_paxos_latencies,
+    }
 }

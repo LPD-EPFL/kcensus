@@ -224,12 +224,12 @@ impl KCensusRoundState {
         if k_size < self.majority {
             return false;
         }
-        let e_paxos_threshold = (self.nb_nodes * 3) / 4;
+        let e_paxos_quorum = (self.nb_nodes * 3) / 4;
         let everyone_knows_me = my_state!(self)
             .k
             .iter()
             .all(|pid| self.node_states[pid].k.contains(self.my_pid));
-        if k_size >= e_paxos_threshold && (everyone_knows_me || k_size > e_paxos_threshold) {
+        if k_size >= e_paxos_quorum && (everyone_knows_me || k_size > e_paxos_quorum) {
             return true;
         }
         let unknown_nodes = self.nb_nodes - k_size;

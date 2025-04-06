@@ -19,6 +19,7 @@ use std::io::Write;
 use std::time::Instant;
 use tokio::sync::{mpsc, watch};
 
+mod cassandra;
 mod connector;
 mod consensus;
 mod delayer;
@@ -26,7 +27,6 @@ mod message;
 mod multi_sink;
 mod topology;
 mod value;
-mod cassandra;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -35,7 +35,7 @@ struct Args {
     pid: usize,
     #[arg(short, long)]
     config: String,
-    #[arg(short, long, help="Cassandra URI, mocked otherwise")]
+    #[arg(short, long, help = "Cassandra URI, mocked otherwise")]
     db: Option<String>,
     #[arg(short, long, default_value_t = Algo::KCensus, value_enum)]
     algo: Algo,
@@ -43,9 +43,9 @@ struct Args {
     requests: usize,
     #[arg(short, long, default_value_t = Ingress::RoundRobin, value_enum)]
     ingress: Ingress,
-    #[arg(short, long, default_value_t = 10f32, value_name="TARGET_REQ/S")]
+    #[arg(short, long, default_value_t = 10f32, value_name = "TARGET_REQ/S")]
     throughput: f32,
-    #[arg(short, long, default_value_t = 0.5f32, value_name="WRITE_RATIO")]
+    #[arg(short, long, default_value_t = 0.5f32, value_name = "WRITE_RATIO")]
     writes: f32,
 }
 
@@ -60,7 +60,7 @@ enum Algo {
 enum Ingress {
     RoundRobin,
     Exponential,
-    Constant
+    Constant,
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -115,7 +115,8 @@ async fn main() -> io::Result<()> {
 
     let (client_request_tx, mut client_request_rx) = mpsc::channel(1);
     let (client_response_tx, client_response_rx) = mpsc::channel(1);
-    let (committed_request_tx, mut committed_request_rx) = mpsc::channel::<CommittedRequest<cassandra::Request>>(1);
+    let (committed_request_tx, mut committed_request_rx) =
+        mpsc::channel::<CommittedRequest<cassandra::Request>>(1);
     let (num_committed_watch_tx, num_committed_watch_rx) = watch::channel(0usize);
 
     let cassandra = if let Some(uri) = args.db {
@@ -131,24 +132,29 @@ async fn main() -> io::Result<()> {
 
     let start = Instant::now();
 
-    let client_task =
-        tokio::task::spawn(async move {
-            let client = cassandra::Client {
-                my_pid,
-                client_request_tx,
-                client_response_rx,
-                num_committed_watch_rx,
-            };
-            client.run(cassandra::Workload {
+    let client_task = tokio::task::spawn(async move {
+        let client = cassandra::Client {
+            my_pid,
+            client_request_tx,
+            client_response_rx,
+            num_committed_watch_rx,
+        };
+        client
+            .run(cassandra::Workload {
                 nb_requests: args.requests,
                 rw_ratio: args.writes,
                 interval: match args.ingress {
-                    Ingress::RoundRobin => cassandra::RequestInterval::RoundRobin {nb_nodes},
-                    Ingress::Exponential => cassandra::RequestInterval::new_exponential(args.throughput),
-                    Ingress::Constant => cassandra::RequestInterval::Constant {reqs_per_second: args.throughput},
-                }
-            }).await;
-        });
+                    Ingress::RoundRobin => cassandra::RequestInterval::RoundRobin { nb_nodes },
+                    Ingress::Exponential => {
+                        cassandra::RequestInterval::new_exponential(args.throughput)
+                    }
+                    Ingress::Constant => cassandra::RequestInterval::Constant {
+                        reqs_per_second: args.throughput,
+                    },
+                },
+            })
+            .await;
+    });
 
     let app = async {
         let mut num_committed = if let Algo::Unreplicated = args.algo { my_pid } else { 0 };
@@ -158,14 +164,22 @@ async fn main() -> io::Result<()> {
             trace!("About to execute committed request: {:?}", req);
             let response = if let Some(cassandra) = cassandra.as_ref() {
                 cassandra.execute(req.request).await
-            } else { // We mock Cassandra
+            } else {
+                // We mock Cassandra
                 match req.request {
-                    cassandra::Request::Put { key, value } => { cassandra::Response::Put { key, value } }
-                    cassandra::Request::Get { key } => { cassandra::Response::Get { key, value: None } }
+                    cassandra::Request::Put { key, value } => {
+                        cassandra::Response::Put { key, value }
+                    }
+                    cassandra::Request::Get { key } => {
+                        cassandra::Response::Get { key, value: None }
+                    }
                 }
             };
             if req.local {
-                client_response_tx.send(response).await.expect("Server failed to enqueue client Response");
+                client_response_tx
+                    .send(response)
+                    .await
+                    .expect("Server failed to enqueue client Response");
             }
             num_committed_watch_tx.send(num_committed).ok(); // Client not listening for back pressure
         }
@@ -173,7 +187,11 @@ async fn main() -> io::Result<()> {
 
     match args.algo {
         Algo::KCensus => {
-            let mut kcensus_obj = KCensus::new(nb_nodes, my_pid, sinks, PropagationGraphs::from(&topology));
+            let propagation_graphs = PropagationGraphs::from(&topology);
+            let mut leader_prio: Vec<_> = (0..nb_nodes).collect();
+            leader_prio.sort_by_key(|pid| propagation_graphs.kcensus_latencies[*pid]);
+            let mut kcensus_obj =
+                KCensus::new(nb_nodes, my_pid, sinks, propagation_graphs, leader_prio);
             let kcensus = kcensus_obj.run(delayed_rx, client_request_rx, committed_request_tx);
             let _ = tokio::join!(app, kcensus);
         }

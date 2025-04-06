@@ -22,7 +22,7 @@ pub struct KCensus<Sk> {
     // Settings
     nb_nodes: usize,
     my_pid: usize,
-    leader: usize,
+    leader_priority: Vec<usize>,
 
     // Connections
     sinks: MultiSink<Sk>,
@@ -51,13 +51,13 @@ impl KCensus<DeSink> {
         my_pid: usize,
         sinks: MultiSink<DeSink>,
         propagation_graphs: PropagationGraphs,
-        leader: usize,
+        leader_priority: Vec<usize>,
     ) -> Self {
         assert!(my_pid < nb_nodes);
         Self {
             nb_nodes,
             my_pid,
-            leader,
+            leader_priority,
 
             sinks,
 
@@ -145,14 +145,21 @@ impl Consensus for KCensus<DeSink> {
 
                     // TODO: only try to adopt if I'm the proposer with lowest id ?
                     if self.round_state.i_am_proposer() {
-                        if let Some(adopted_v) = self.round_state.try_adopt() {
-                            // Conflict resolved. Adopting...
-                            self.goto_round(self.round + 1);
-                            self.round_state.set_my_v(adopted_v); // Needed if we don't repropose
-                            // TODO: only repropose if I was the proposer ?
-                            //   (potentially need to broadcast adopt in that case ?)
-                            self.repropose_start(adopted_v).await?;
-                            return Ok(None);
+                        let min_proposer = *self
+                            .leader_priority
+                            .iter()
+                            .find(|leader| self.round_state.proposers().contains(leader))
+                            .unwrap();
+                        if min_proposer == self.my_pid {
+                            if let Some(adopted_v) = self.round_state.try_adopt() {
+                                // Conflict resolved. Adopting...
+                                self.goto_round(self.round + 1);
+                                self.round_state.set_my_v(adopted_v); // Needed if we don't repropose
+                                // TODO: only repropose if I was the proposer ?
+                                //   (potentially need to broadcast adopt in that case ?)
+                                self.repropose_start(adopted_v).await?;
+                                return Ok(None);
+                            }
                         }
                     }
 
@@ -242,7 +249,7 @@ impl Consensus for KCensus<DeSink> {
 
     #[inline]
     fn should_lead(&self) -> bool {
-        self.my_pid == self.leader
+        self.my_pid == self.leader_priority[0]
     }
 
     #[inline]

@@ -1,10 +1,11 @@
 use crate::connector::DeSink;
 use crate::consensus::message::ConsensusMessage;
 use crate::consensus::message::ConsensusMsg::PaxosM;
+use crate::consensus::paxos::epaxos_round_state::EPaxosRoundState;
 use crate::consensus::paxos::message::PaxosMsg::Commit;
 use crate::consensus::paxos::message::PaxosMsg::{Accept, Prepare};
 use crate::consensus::paxos::message::{PaxosMsg, PaxosRound};
-use crate::consensus::paxos::round_state::PaxosRoundState;
+use crate::consensus::paxos::paxos_round_state::PaxosRoundState;
 use crate::consensus::Consensus;
 use crate::message::Message::Done;
 use crate::multi_sink::MultiSink;
@@ -14,8 +15,9 @@ use message::RoundValue;
 use std::collections::HashMap;
 use std::io;
 
+mod epaxos_round_state;
 pub mod message;
-mod round_state;
+mod paxos_round_state;
 
 pub struct Paxos<Sk> {
     // Settings
@@ -30,7 +32,8 @@ pub struct Paxos<Sk> {
     round: PaxosRound,
     values: HashMap<usize, Request>,
 
-    round_state: PaxosRoundState,
+    paxos_state: PaxosRoundState,
+    epaxos_state: EPaxosRoundState,
 }
 
 impl Paxos<DeSink> {
@@ -46,7 +49,8 @@ impl Paxos<DeSink> {
             round: PaxosRound::default(),
             values: HashMap::with_capacity(nb_nodes),
 
-            round_state: PaxosRoundState::new(nb_nodes, my_pid),
+            paxos_state: PaxosRoundState::new(nb_nodes, my_pid),
+            epaxos_state: EPaxosRoundState::new(nb_nodes, my_pid),
         }
     }
 }
@@ -77,7 +81,7 @@ impl Consensus for Paxos<DeSink> {
                     self.goto_round(round);
 
                     if self.get_my_v().is_none() {
-                        self.round_state.propose_v(round_value)
+                        self.paxos_state.propose_v(round_value)
                     }
                     self.answer_prepare(src).await?;
                     return Ok(None);
@@ -86,9 +90,9 @@ impl Consensus for Paxos<DeSink> {
                 debug_assert!(round.proposer == self.my_pid);
                 debug_assert!(round == self.round);
 
-                if !self.round_state.is_prepared() {
-                    self.round_state.receive_promise(src, round_value);
-                    if self.round_state.is_prepared() {
+                if !self.paxos_state.is_prepared() {
+                    self.paxos_state.receive_promise(src, round_value);
+                    if self.paxos_state.is_prepared() {
                         self.broadcast_accept().await?;
                         return Ok(None);
                     }
@@ -109,16 +113,16 @@ impl Consensus for Paxos<DeSink> {
                 debug_assert_eq!(round, self.round);
 
                 if round.proposer != self.my_pid {
-                    self.round_state
-                        .accept_v(src, RoundValue::new(round, value_uid));
+                    self.paxos_state
+                        .accept_v(src, RoundValue::new_paxos_value(Some(round), value_uid));
                     self.answer_accept().await?;
                     return Ok(None);
                 }
 
                 debug_assert!(round.proposer == self.my_pid);
-                self.round_state.receive_accepted(src);
+                self.paxos_state.receive_accepted(src);
 
-                if self.round_state.can_commit() {
+                if self.paxos_state.can_commit() {
                     self.broadcast_commit().await?;
                     info!("Commited: value_uid={}", value_uid);
                     let value = self.commit_slot(value_uid, true);
@@ -161,7 +165,7 @@ impl Consensus for Paxos<DeSink> {
 
     #[inline]
     fn get_my_v(&self) -> Option<usize> {
-        self.round_state.get_v()
+        self.paxos_state.get_v()
     }
 
     #[inline]
@@ -227,7 +231,7 @@ impl Paxos<DeSink> {
         }
         self.slot += 1;
         self.goto_round(PaxosRound::default());
-        self.round_state.full_clear();
+        self.paxos_state.full_clear();
         value
     }
 
@@ -245,7 +249,7 @@ impl Paxos<DeSink> {
             }
         }
         self.round = round;
-        self.round_state.next_round();
+        self.paxos_state.next_round();
     }
 
     #[inline]
@@ -269,8 +273,8 @@ impl Paxos<DeSink> {
 
     async fn propose(&mut self, value_uid: usize, with_value: bool) -> io::Result<()> {
         self.goto_round(self.round.next_proposer_round(self.my_pid));
-        let round_value = RoundValue::new(self.round, value_uid);
-        self.round_state.propose_v(round_value);
+        let round_value = RoundValue::new_paxos_value(None, value_uid);
+        self.paxos_state.propose_v(round_value);
         let msg = if self.round != PaxosRound::default() {
             Prepare {
                 slot: self.slot,
@@ -281,7 +285,7 @@ impl Paxos<DeSink> {
             Accept {
                 slot: self.slot,
                 round: self.round,
-                value_uid: round_value.v_uid,
+                value_uid: round_value.get_v(),
             }
         };
         self.broadcast(msg, with_value).await
@@ -291,7 +295,7 @@ impl Paxos<DeSink> {
         let msg = Prepare {
             slot: self.slot,
             round: self.round,
-            round_value: self.round_state.get_round_value().unwrap(),
+            round_value: self.paxos_state.get_round_value().unwrap(),
         };
         self.send(msg, src).await
     }
@@ -300,7 +304,7 @@ impl Paxos<DeSink> {
         let msg = Accept {
             slot: self.slot,
             round: self.round,
-            value_uid: self.round_state.get_v().unwrap(),
+            value_uid: self.paxos_state.get_v().unwrap(),
         };
         self.broadcast(msg, false).await
     }
@@ -310,7 +314,7 @@ impl Paxos<DeSink> {
         let msg = Accept {
             slot: self.slot,
             round: self.round,
-            value_uid: self.round_state.get_v().unwrap(),
+            value_uid: self.paxos_state.get_v().unwrap(),
         };
         self.send(msg, src).await
     }
@@ -318,7 +322,7 @@ impl Paxos<DeSink> {
     async fn broadcast_commit(&mut self) -> io::Result<()> {
         let msg = Commit {
             slot: self.slot,
-            value_uid: self.round_state.get_v().unwrap(),
+            value_uid: self.paxos_state.get_v().unwrap(),
         };
         self.broadcast(msg, false).await
     }
