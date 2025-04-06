@@ -35,17 +35,31 @@ struct Args {
     pid: usize,
     #[arg(short, long)]
     config: String,
-    #[arg(short, long)]
+    #[arg(short, long, help="Cassandra URI, mocked otherwise")]
     db: Option<String>,
-    #[arg(short, long, default_value_t, value_enum)]
+    #[arg(short, long, default_value_t = Algo::KCensus, value_enum)]
     algo: Algo,
+    #[arg(short, long, default_value_t = 10)]
+    requests: usize,
+    #[arg(short, long, default_value_t = Ingress::RoundRobin, value_enum)]
+    ingress: Ingress,
+    #[arg(short, long, default_value_t = 10f32, value_name="TARGET_REQ/S")]
+    throughput: f32,
+    #[arg(short, long, default_value_t = 0.5f32, value_name="WRITE_RATIO")]
+    writes: f32,
 }
 
-#[derive(clap::ValueEnum, Clone, Default, Debug)]
+#[derive(clap::ValueEnum, Clone, Debug)]
 enum Algo {
-    #[default]
     KCensus,
     Paxos,
+}
+
+#[derive(clap::ValueEnum, Clone, Debug)]
+enum Ingress {
+    RoundRobin,
+    Exponential,
+    Constant
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -120,13 +134,20 @@ async fn main() -> io::Result<()> {
     let client_task =
         tokio::task::spawn(async move {
             let client = cassandra::Client {
-                nb_nodes,
                 my_pid,
                 client_request_tx,
                 client_response_rx,
                 num_committed_watch_rx,
             };
-            client.run().await;
+            client.run(cassandra::Workload {
+                nb_requests: args.requests,
+                rw_ratio: args.writes,
+                interval: match args.ingress {
+                    Ingress::RoundRobin => cassandra::RequestInterval::RoundRobin {nb_nodes},
+                    Ingress::Exponential => cassandra::RequestInterval::new_exponential(args.throughput),
+                    Ingress::Constant => cassandra::RequestInterval::Constant {reqs_per_second: args.throughput},
+                }
+            }).await;
         });
 
     let app = async {

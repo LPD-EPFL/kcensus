@@ -1,3 +1,5 @@
+use std::time::Duration;
+use rand_distr::{Exp, Distribution};
 use scylla::client::{session::Session, session_builder::SessionBuilder};
 use scylla::statement::prepared::PreparedStatement;
 use serde::{Deserialize, Serialize};
@@ -73,27 +75,70 @@ impl PreparedHandler {
 }
 
 pub struct Client {
-    pub nb_nodes: usize,
     pub my_pid: usize,
     pub client_request_tx: Sender<Option<Request>>,
     pub client_response_rx: Receiver<Response>,
     pub num_committed_watch_rx: WatchReceiver<usize>,
 }
 
+pub enum RequestInterval {
+    RoundRobin {nb_nodes: usize}, // 1 request at a time, alternating among nodes
+    Exponential {distribution: Exp<f32>},
+    Constant {reqs_per_second: f32},
+}
+
+impl RequestInterval {
+    pub fn new_exponential(throughput: f32) -> Self {
+        RequestInterval::Exponential {distribution: Exp::new(throughput).expect("Failed to create exponential distribution")}
+    }
+}
+
+impl RequestInterval {
+    fn next(&mut self, last: &Instant) -> Instant {
+        match self {
+            RequestInterval::RoundRobin { .. } => { Instant::now() }
+            RequestInterval::Exponential { distribution } => { *last + Duration::from_secs_f32(distribution.sample(&mut rand::rng())) }
+            RequestInterval::Constant { reqs_per_second } => { *last + Duration::from_secs_f32(1. / *reqs_per_second) }
+        }
+    }
+}
+
+pub struct Workload {
+    pub nb_requests: usize,
+    pub rw_ratio: f32, // 0 = 100% reads, 1 = 100 %writes
+    pub interval: RequestInterval,
+}
+
 impl Client {
-    pub async fn run(mut self) {
-        for i in 0..10 {
-            while *self.num_committed_watch_rx.borrow_and_update() % self.nb_nodes != self.my_pid {
-                self.num_committed_watch_rx.changed().await.expect("Couldn't read backpressure");
+    pub async fn run(mut self, mut workload: Workload) {
+        let mut request_generated = Instant::now();
+        for i in 0..workload.nb_requests {
+            if let RequestInterval::RoundRobin {nb_nodes} = workload.interval {
+                while *self.num_committed_watch_rx.borrow_and_update() % nb_nodes != self.my_pid {
+                    self.num_committed_watch_rx.changed().await.expect("Couldn't read back pressure");
+                }
             }
-            let generated = Instant::now();
+            let request = if rand::random_range(0. ..1.) < workload.rw_ratio {
+                Request::Put {key: "single-key".into(), value: format!("v{}.{}!", self.my_pid, i)}
+            } else {
+                Request::Get {key: "single-key".into() }
+            };
+            request_generated = workload.interval.next(&request_generated);
+            let time_before_generation = request_generated.saturating_duration_since(Instant::now());
+            if !time_before_generation.is_zero() {
+                tokio_timerfd::sleep(time_before_generation).await.expect("Failed to sleep");
+            }
+            let issued = Instant::now();
             self.client_request_tx
-                .send(Request::Put {key: "single-key".into(), value: format!("v{}.{}!", self.my_pid, i)}.into())
+                .send(request.into())
                 .await
                 .expect("Client failed to queue request");
             let response = self.client_response_rx.recv().await.expect("Client failed to receive response");
             let responded = Instant::now();
-            println!("Executed {:?} in {:?}", response, responded.duration_since(generated));
+            let request_latency = responded.duration_since(request_generated);
+            let request_queueing = issued.duration_since(request_generated);
+            let request_processing = responded.duration_since(request_generated);
+            println!("Executed {:?} in {:?} (queued {:?}, processed in {:?})", response, request_latency, request_queueing, request_processing );
         };
         self.client_request_tx.send(None).await.expect("Client failed to enqueue None request");
     }
