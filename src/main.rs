@@ -4,7 +4,6 @@ use crate::consensus::Consensus;
 use crate::message::Message;
 use crate::multi_sink::MultiSink;
 use crate::topology::Topology;
-use crate::value::Request;
 use chrono::prelude::*;
 use clap::Parser;
 use consensus::kcensus::propagation::PropagationGraphs;
@@ -12,22 +11,22 @@ use consensus::kcensus::KCensus;
 use env_logger::fmt::style;
 use futures::prelude::stream::select_all;
 use futures::TryStreamExt;
-use log::{debug, info};
-use serde::Serialize;
+use log::{debug, trace};
 use std::collections::HashMap;
 use std::io;
 use std::io::Write;
 use std::time::Instant;
 use tokio::sync::mpsc;
+use crate::value::CommittedRequest;
 
 mod connector;
 mod consensus;
 mod delayer;
 mod message;
 mod multi_sink;
-mod requester;
 mod topology;
 mod value;
+mod cassandra;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -37,10 +36,12 @@ struct Args {
     #[arg(short, long)]
     config: String,
     #[arg(short, long)]
+    db: Option<String>,
+    #[arg(short, long)]
     algo: Algo,
 }
 
-#[derive(clap::ValueEnum, Clone, Default, Debug, Serialize)]
+#[derive(clap::ValueEnum, Clone, Default, Debug)]
 enum Algo {
     #[default]
     KCensus,
@@ -98,27 +99,42 @@ async fn main() -> io::Result<()> {
     let delayer_task =
         tokio::task::spawn(delayer::delayer(topology, my_pid, input_stream, delayed_tx));
 
-    let (request_tx, request_rx) = mpsc::channel(1);
-    let (response_tx, mut response_rx) = mpsc::channel(1);
+    let (client_request_tx, client_request_rx) = mpsc::channel(1);
+    let (client_response_tx, client_response_rx) = mpsc::channel(1);
+    let (committed_request_tx, mut committed_request_rx) = mpsc::channel::<CommittedRequest<cassandra::Request>>(1);
 
-    let requester_task =
-        tokio::task::spawn(requester::simple_requester(nb_nodes, my_pid, request_tx));
+    let cassandra = if let Some(uri) = args.db {
+        // docker run --name cassandra -p 9042:9042 -d cassandra
+        // -db 127.0.0.1:9042
+        // docker stop cassandra && docker rm cassandra
+        let cassandra = cassandra::Handler::new(&uri).await;
+        cassandra.reset_database().await;
+        cassandra.prepare().await.into()
+    } else {
+        None
+    };
 
     let start = Instant::now();
 
+    let client_task =
+        tokio::task::spawn(async move {
+            let client = cassandra::Client {};
+            client.run(nb_nodes, my_pid, client_request_tx, client_response_rx).await;
+        });
+
     let app = async {
-        loop {
-            match response_rx.recv().await {
-                None => break,
-                Some(Request {
-                    value,
-                    start_time: Some(t),
-                }) => {
-                    println!("Decided {} in {:?}.", value.val, t.elapsed());
+        while let Some(req) = committed_request_rx.recv().await {
+            trace!("About to execute committed request: {:?}", req);
+            let response = if let Some(cassandra) = cassandra.as_ref() {
+                cassandra.execute(req.request).await
+            } else { // We mock Cassandra
+                match req.request {
+                    cassandra::Request::Put { key, value } => { cassandra::Response::Put { key, value } }
+                    cassandra::Request::Get { key } => { cassandra::Response::Get { key, value: None } }
                 }
-                Some(Request { value, .. }) => {
-                    info!("Received val {}.", value.val)
-                }
+            };
+            if req.local {
+                client_response_tx.send(response).await.expect("Server failed to enqueue client Response");
             }
         }
     };
@@ -126,19 +142,19 @@ async fn main() -> io::Result<()> {
     match args.algo {
         Algo::KCensus => {
             let mut kcensus_obj = KCensus::new(nb_nodes, my_pid, sinks, propagation_graphs);
-            let kcensus = kcensus_obj.run(delayed_rx, request_rx, response_tx);
+            let kcensus = kcensus_obj.run(delayed_rx, client_request_rx, committed_request_tx);
             let _ = tokio::join!(app, kcensus);
         }
         Algo::Paxos => {
             let mut paxos_obj = Paxos::new(nb_nodes, my_pid, sinks);
-            let paxos = paxos_obj.run(delayed_rx, request_rx, response_tx);
+            let paxos = paxos_obj.run(delayed_rx, client_request_rx, committed_request_tx);
             let _ = tokio::join!(app, paxos);
         }
     };
 
     println!("Total duration: {:?}", start.elapsed());
 
-    requester_task.await?;
+    client_task.await?;
     delayer_task.await??;
     Ok(())
 }

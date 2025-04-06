@@ -1,18 +1,21 @@
-use serde::{Deserialize, Serialize};
-use std::time::Instant;
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct KVal {
-    pub val: String,
-    pub proposer: usize,
+    pub val: Vec<u8>,
 }
 
 impl KVal {
     #[inline]
-    pub fn into_request(self, start_time: Instant) -> Request {
+    pub fn new<ApplicationRequest: Serialize>(application_request: &ApplicationRequest) -> Self {
+        Self{val: bincode::serialize(application_request).expect("Failed to serialize application request")}
+    }
+
+    #[inline]
+    pub fn into_local_req(self) -> Request {
         Request {
             value: self,
-            start_time: Some(start_time),
+            local: true,
         }
     }
 
@@ -20,12 +23,27 @@ impl KVal {
     pub fn into_remote_req(self) -> Request {
         Request {
             value: self,
-            start_time: None,
+            local: false,
         }
     }
 }
 
 pub struct Request {
     pub value: KVal,
-    pub start_time: Option<Instant>,
+    pub local: bool,
+}
+
+#[derive(Debug)]
+pub struct CommittedRequest<ApplicationRequest> {
+    pub request: ApplicationRequest,
+    pub local: bool,
+}
+
+impl <ApplicationRequest: DeserializeOwned> From<Request> for CommittedRequest<ApplicationRequest> {
+    fn from(request: Request) -> Self {
+        Self {
+            request: bincode::deserialize::<ApplicationRequest>(&request.value.val).expect("Failed to deserialize committed request"),
+            local: request.local
+        }
+    }
 }

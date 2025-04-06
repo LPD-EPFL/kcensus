@@ -1,10 +1,10 @@
 use crate::consensus::message::ConsensusMessage;
 use crate::message::Message::{ConsensusM, Done};
 use crate::message::MsgWithSource;
-use crate::value::{KVal, Request};
-use log::debug;
+use crate::value::{CommittedRequest, KVal, Request};
 use std::collections::VecDeque;
 use std::io;
+use serde::{Serialize, de::DeserializeOwned};
 use tokio::select;
 use tokio::sync::mpsc::{Receiver, Sender};
 
@@ -13,11 +13,11 @@ pub mod message;
 pub mod paxos;
 
 pub trait Consensus {
-    async fn run(
+    async fn run<ApplicationRequest: Serialize + DeserializeOwned>(
         &mut self,
         mut msg_rx: Receiver<MsgWithSource>,
-        mut req_rx: Receiver<Option<Request>>,
-        resp_tx: Sender<Request>,
+        mut client_request_rx: Receiver<Option<ApplicationRequest>>,
+        committed_request_tx: Sender<CommittedRequest<ApplicationRequest>>,
     ) -> io::Result<()> {
         let mut queued_messages: VecDeque<ConsensusMessage> =
             VecDeque::with_capacity(self.get_nb_nodes());
@@ -33,8 +33,8 @@ pub trait Consensus {
                 if self.ready_to_process(msg) {
                     let msg = queued_messages.remove(i).unwrap();
                     let result = self.process_message(msg).await?;
-                    if let Some(value) = result {
-                        resp_tx.send(value).await.expect("Sending commited value");
+                    if let Some(request) = result {
+                        committed_request_tx.send(request.into()).await.expect("Sending commited value");
                         continue 'main_loop; // Restart from the beginning of the queue
                     }
                 } else {
@@ -61,13 +61,10 @@ pub trait Consensus {
 
             // Read new messages and/or new local request
             let msg = select! {
-                req = req_rx.recv(), if nothing_ongoing && !should_repropose && !done => {
+                req = client_request_rx.recv(), if nothing_ongoing && !should_repropose && !done => {
                     match req.unwrap() {
                         Some(req) =>  {
-                            debug_assert!(req.start_time.is_some());
-                            let start_time = req.start_time.unwrap();
-                            self.propose_start(req).await?;
-                            debug!("local request started after {:?}", start_time.elapsed());
+                            self.propose_start(KVal::new(&req).into_local_req()).await?;
                         }
                         None => {
                             done = true;
@@ -103,7 +100,7 @@ pub trait Consensus {
 
                     let result = self.process_message(msg).await?;
                     if let Some(value) = result {
-                        resp_tx.send(value).await.expect("Sending commited value");
+                        committed_request_tx.send(value.into()).await.expect("Sending commited value");
                         continue 'main_loop; // Restart from the beginning of the queue
                     }
                 }
@@ -112,7 +109,7 @@ pub trait Consensus {
             }
         } // 'main_loop: loop
 
-        req_rx.close();
+        client_request_rx.close();
         msg_rx.close();
         Ok(())
     } // run

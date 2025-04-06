@@ -54,11 +54,11 @@ impl Paxos<DeSink> {
         let value = self.values.remove(&value_uid).unwrap();
         if commit_msg {
             // "<#2FB82F>Commited \"{}\" in slot {}.</>"
-            debug!("Commited \"{}\" in slot {}.", value.value.val, self.slot);
+            debug!("Commited \"{:?}\" in slot {}.", value.value.val, self.slot);
         } else {
             // "<#2FB82F>Commited \"{}\" in slot {} (round {}) from state:</> <#B8E8B8>{}</>"
             debug!(
-                "Commited \"{}\" in slot {} (round {})",
+                "Commited \"{:?}\" in slot {} (round {})",
                 value.value.val, self.slot, self.round
             );
         }
