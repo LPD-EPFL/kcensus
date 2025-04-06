@@ -23,6 +23,7 @@ pub struct Topology {
     pub path_latencies: Vec<Vec<Duration>>,
     pub prev_dest: Vec<Vec<usize>>,
     pub next_src: Vec<Vec<usize>>,
+    pub rtts: Vec<Vec<Duration>>,
 }
 
 impl Display for Topology {
@@ -33,6 +34,7 @@ impl Display for Topology {
             write!(f, "\n  - path_latencies: {:?}", self.path_latencies[i])?;
             write!(f, "\n  - next_src: {:?}", self.next_src[i])?;
             write!(f, "\n  - prev_dest: {:?}", self.prev_dest[i])?;
+            write!(f, "\n  - rtts: {:?}", self.rtts[i])?;
         }
         Ok(())
     }
@@ -106,6 +108,14 @@ fn compute_latency(config: Config) -> Topology {
         }
     }
 
+    let rtts = (0..nb_nodes)
+        .map(|src| {
+            (0..nb_nodes)
+                .map(|dest| link_latencies[src][dest] + link_latencies[dest][src])
+                .collect()
+        })
+        .collect();
+
     Topology {
         nb_nodes,
         regions,
@@ -113,5 +123,6 @@ fn compute_latency(config: Config) -> Topology {
         path_latencies,
         prev_dest,
         next_src,
+        rtts,
     }
 }

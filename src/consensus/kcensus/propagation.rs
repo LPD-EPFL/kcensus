@@ -131,11 +131,7 @@ fn compute_propagation_graphs(topology: &Topology) -> PropagationGraphs {
     for proposer in 0..topology.nb_nodes {
         trace!("proposer: {}", proposer);
 
-        let mut proposer_round_trips: Vec<_> = (0..topology.nb_nodes)
-            .map(|node| {
-                topology.link_latencies[proposer][node] + topology.link_latencies[node][proposer]
-            })
-            .collect();
+        let mut proposer_round_trips = topology.rtts[proposer].clone();
         proposer_round_trips.sort();
         let majority = 1 + topology.nb_nodes / 2;
         paxos_latencies.push(proposer_round_trips[majority] * 2);

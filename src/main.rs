@@ -219,14 +219,9 @@ async fn main() -> io::Result<()> {
                 // The leader is the node with the lowest median ping.
                 let leader = (0..topology.nb_nodes)
                     .min_by_key(|&potential_leader| {
-                        let mut pings: Vec<_> = (0..topology.nb_nodes)
-                            .map(|client| {
-                                topology.link_latencies[potential_leader][client]
-                                    + topology.link_latencies[client][potential_leader]
-                            })
-                            .collect();
-                        pings.sort();
-                        pings[pings.len() / 2]
+                        let mut rtts = topology.rtts[potential_leader].clone();
+                        rtts.sort();
+                        rtts[rtts.len() / 2]
                     })
                     .expect("There should be a leader");
                 let leader_ping = topology.link_latencies[leader][my_pid]
