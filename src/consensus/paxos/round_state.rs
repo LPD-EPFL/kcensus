@@ -1,17 +1,5 @@
-use crate::consensus::paxos::message::PaxosRound;
+use crate::consensus::paxos::message::RoundValue;
 use bit_set::BitSet;
-
-#[derive(Copy, Clone, Debug)]
-pub struct RoundValue {
-    round: PaxosRound,
-    v_uid: usize,
-}
-
-impl RoundValue {
-    pub fn new(round: PaxosRound, v_uid: usize) -> Self {
-        Self { round, v_uid }
-    }
-}
 
 pub struct PaxosRoundState {
     my_pid: usize,
@@ -59,6 +47,11 @@ impl PaxosRoundState {
     pub fn full_clear(&mut self) {
         self.next_round();
         self.max_round_value = None;
+    }
+
+    #[inline]
+    pub fn get_round_value(&self) -> Option<RoundValue> {
+        self.max_round_value
     }
 
     #[inline]

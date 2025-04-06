@@ -28,13 +28,25 @@ impl Display for PaxosRound {
     }
 }
 
+#[derive(Copy, Clone, Debug, Serialize, Deserialize)]
+pub struct RoundValue {
+    pub round: PaxosRound,
+    pub v_uid: usize,
+}
+
+impl RoundValue {
+    pub fn new(round: PaxosRound, v_uid: usize) -> Self {
+        Self { round, v_uid }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum PaxosMsg {
     // Used to propose & forward, but also to freeze and respond to a freeze
     Prepare {
         slot: usize,
         round: PaxosRound,
-        value_uid: usize,
+        round_value: RoundValue,
     },
     Accept {
         slot: usize,
@@ -51,7 +63,7 @@ impl PaxosMsg {
     #[inline]
     pub fn get_v(&self) -> usize {
         match self {
-            Prepare { value_uid, .. } => *value_uid,
+            Prepare { round_value, .. } => round_value.v_uid,
             Accept { value_uid, .. } => *value_uid,
             Commit { value_uid, .. } => *value_uid,
         }
@@ -70,8 +82,8 @@ impl PaxosMsg {
     pub fn can_include_value(&self, src: usize) -> bool {
         match self {
             Prepare { round, .. } => round.proposer == src,
-            Accept { .. } => false,
-            Commit { .. } => false,
+            Accept { round, .. } => round.proposer == src && *round == PaxosRound::default(),
+            _ => false,
         }
     }
 }

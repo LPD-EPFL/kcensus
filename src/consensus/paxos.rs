@@ -4,12 +4,13 @@ use crate::consensus::message::ConsensusMsg::PaxosM;
 use crate::consensus::paxos::message::PaxosMsg::Commit;
 use crate::consensus::paxos::message::PaxosMsg::{Accept, Prepare};
 use crate::consensus::paxos::message::{PaxosMsg, PaxosRound};
-use crate::consensus::paxos::round_state::{PaxosRoundState, RoundValue};
+use crate::consensus::paxos::round_state::PaxosRoundState;
 use crate::consensus::Consensus;
 use crate::message::Message::Done;
 use crate::multi_sink::MultiSink;
 use crate::value::{KVal, Request};
-use log::{debug, info};
+use log::{debug, info, trace};
+use message::RoundValue;
 use std::collections::HashMap;
 use std::io;
 
@@ -104,18 +105,22 @@ impl Paxos<DeSink> {
         self.sinks.broadcast(PaxosM(msg), value).await
     }
 
-    async fn propose_and_broadcast_prepare(
-        &mut self,
-        value_uid: usize,
-        with_value: bool,
-    ) -> io::Result<()> {
+    async fn propose(&mut self, value_uid: usize, with_value: bool) -> io::Result<()> {
         self.goto_round(self.round.next_proposer_round(self.my_pid));
-        self.round_state
-            .propose_v(RoundValue::new(self.round, value_uid));
-        let msg = Prepare {
-            slot: self.slot,
-            round: self.round,
-            value_uid,
+        let round_value = RoundValue::new(self.round, value_uid);
+        self.round_state.propose_v(round_value);
+        let msg = if self.round != PaxosRound::default() {
+            Prepare {
+                slot: self.slot,
+                round: self.round,
+                round_value,
+            }
+        } else {
+            Accept {
+                slot: self.slot,
+                round: self.round,
+                value_uid: round_value.v_uid,
+            }
         };
         self.broadcast(msg, with_value).await
     }
@@ -124,7 +129,7 @@ impl Paxos<DeSink> {
         let msg = Prepare {
             slot: self.slot,
             round: self.round,
-            value_uid: self.round_state.get_v().unwrap(),
+            round_value: self.round_state.get_round_value().unwrap(),
         };
         self.send(msg, src).await
     }
@@ -165,12 +170,13 @@ impl Consensus for Paxos<DeSink> {
             PaxosM(msg) => msg,
             x => panic!("Unexpected message type: {:?}", x),
         };
+        trace!("Received message: {:?}", msg);
 
         match msg {
             Prepare {
                 slot,
                 round,
-                value_uid,
+                round_value,
             } => {
                 if slot < self.slot || round < self.round {
                     return Ok(None);
@@ -179,12 +185,12 @@ impl Consensus for Paxos<DeSink> {
 
                 if round.proposer != self.my_pid {
                     debug_assert!(round > self.round);
+                    self.goto_round(round);
+
                     if self.get_my_v().is_none() {
-                        self.round_state
-                            .propose_v(RoundValue::new(round, value_uid))
+                        self.round_state.propose_v(round_value)
                     }
                     self.answer_prepare(src).await?;
-                    self.goto_round(round);
                     return Ok(None);
                 }
 
@@ -192,8 +198,7 @@ impl Consensus for Paxos<DeSink> {
                 debug_assert!(round == self.round);
 
                 if !self.round_state.is_prepared() {
-                    self.round_state
-                        .receive_promise(src, RoundValue::new(round, value_uid));
+                    self.round_state.receive_promise(src, round_value);
                     if self.round_state.is_prepared() {
                         self.broadcast_accept().await?;
                         return Ok(None);
@@ -248,11 +253,11 @@ impl Consensus for Paxos<DeSink> {
     async fn propose_start(&mut self, req: Request) -> io::Result<()> {
         let value_uid = self.store_new_value(req);
 
-        self.propose_and_broadcast_prepare(value_uid, true).await
+        self.propose(value_uid, true).await
     }
 
     async fn repropose_start(&mut self, value_uid: usize) -> io::Result<()> {
-        self.propose_and_broadcast_prepare(value_uid, false).await
+        self.propose(value_uid, false).await
     }
 
     #[inline]
