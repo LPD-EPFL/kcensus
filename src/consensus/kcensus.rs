@@ -6,7 +6,7 @@ use crate::consensus::kcensus::round_state::KCensusRoundState;
 use crate::consensus::message::ConsensusMessage;
 use crate::consensus::message::ConsensusMsg::KCensusM;
 use crate::consensus::Consensus;
-use crate::message::Message;
+use crate::message::Message::Done;
 use crate::multi_sink::MultiSink;
 use crate::value::{KVal, Request};
 use log::{debug, info};
@@ -96,19 +96,11 @@ impl KCensus<DeSink> {
             );
             if round > self.round + 1 {
                 // "<yellow>######## Skipping round !!!!</>"
-                info!("######## Skipping round !!!!");
+                debug!("######## Skipping round !!!!");
             }
         }
         self.round = round;
         self.round_state.clear();
-    }
-
-    #[inline]
-    async fn inner_propose_start(&mut self, value_uid: usize, with_value: bool) -> io::Result<()> {
-        self.round_state.set_my_v(value_uid);
-        self.round_state.become_proposer();
-
-        self.start_spread(with_value).await
     }
 
     #[inline]
@@ -127,7 +119,6 @@ impl KCensus<DeSink> {
         self.sinks.broadcast(KCensusM(msg), value).await
     }
 
-    #[inline]
     async fn spread_to(&mut self, dest: usize) -> io::Result<()> {
         let msg = Spread {
             slot: self.slot,
@@ -139,7 +130,6 @@ impl KCensus<DeSink> {
         send_msg!(self, msg, dest)
     }
 
-    #[inline]
     async fn spread_to_all(&mut self) -> io::Result<()> {
         let msg = Spread {
             slot: self.slot,
@@ -151,8 +141,10 @@ impl KCensus<DeSink> {
         self.broadcast(msg).await
     }
 
-    #[inline]
-    async fn start_spread(&mut self, with_value: bool) -> io::Result<()> {
+    async fn propose_and_spread(&mut self, value_uid: usize, with_value: bool) -> io::Result<()> {
+        self.round_state.set_my_v(value_uid);
+        self.round_state.become_proposer();
+
         for msg_id in self.propagation_graphs.get_start(self.my_pid).iter() {
             debug_assert!(self.propagation_graphs.get_by_id(msg_id).get_with_value());
             debug_assert!(
@@ -175,7 +167,6 @@ impl KCensus<DeSink> {
         Ok(())
     }
 
-    #[inline]
     async fn graph_spread(&mut self, prev_msg_id: MessageId, with_value: bool) -> io::Result<()> {
         let prev_msg_info = self.propagation_graphs.get_by_id(&prev_msg_id);
         // Potential follow-up messages:
@@ -204,7 +195,6 @@ impl KCensus<DeSink> {
         Ok(())
     }
 
-    #[inline]
     async fn graph_spread_value_only(
         &mut self,
         prev_msg_id: MessageId,
@@ -314,7 +304,7 @@ impl Consensus for KCensus<DeSink> {
                             self.round_state.set_my_v(adopted_v); // Needed if we don't repropose
                             // TODO: only repropose if I was the proposer ?
                             //   (potentially need to broadcast adopt in that case ?)
-                            self.repropose_start(adopted_v, None).await?;
+                            self.repropose_start(adopted_v).await?;
                             return Ok(None);
                         }
                     }
@@ -367,7 +357,8 @@ impl Consensus for KCensus<DeSink> {
                 if slot < self.slot {
                     return Ok(None);
                 }
-                info!("######## Commit msg: value_uid={}", value_uid);
+                debug_assert_eq!(slot, self.slot);
+                info!("Commit msg: value_uid={}", value_uid);
                 let value = self.commit_slot(value_uid, true);
                 return Ok(Some(value));
             }
@@ -379,65 +370,72 @@ impl Consensus for KCensus<DeSink> {
     async fn propose_start(&mut self, req: Request) -> io::Result<()> {
         let value_uid = self.store_new_value(req);
 
-        self.inner_propose_start(value_uid, true).await
+        self.propose_and_spread(value_uid, true).await
     }
 
     #[inline]
-    async fn repropose_start(&mut self, value_uid: usize, value: Option<KVal>) -> io::Result<()> {
-        let with_value = match value {
-            Some(value) => {
-                self.store_remote_value(value_uid, value);
-                true
-            }
-            None => false,
-        };
-
-        self.inner_propose_start(value_uid, with_value).await
+    async fn repropose_start(&mut self, value_uid: usize) -> io::Result<()> {
+        self.propose_and_spread(value_uid, false).await
     }
 
+    #[inline]
     fn get_nb_nodes(&self) -> usize {
         self.nb_nodes
     }
 
+    #[inline]
     fn get_slot(&self) -> usize {
         self.slot
     }
 
+    #[inline]
     fn get_my_v(&self) -> Option<usize> {
         self.round_state.get_my_v()
     }
 
+    #[inline]
     fn should_lead(&self) -> bool {
         self.my_pid == 0
     }
 
-    async fn inner_broadcast(&mut self, msg: Message) -> io::Result<()> {
-        self.sinks.inner_broadcast(msg).await
+    #[inline]
+    async fn announce_done(&mut self) -> io::Result<()> {
+        self.sinks.inner_broadcast(Done).await
     }
 
+    #[inline]
     fn store_new_value(&mut self, req: Request) -> usize {
         let value_uid = self.my_pid + (self.slot * self.nb_nodes);
-        // TODO: Allow forwarding values ? (could the value already be there ?)
         let inserted = self.values.insert(value_uid, req);
         debug_assert!(inserted.is_none());
         value_uid
     }
 
+    #[inline]
     fn store_remote_value(&mut self, value_uid: usize, v: KVal) {
         // TODO: Allow forwarding values ? (could the value already be there ?)
         let inserted = self.values.insert(value_uid, v.into_remote_req());
         debug_assert!(inserted.is_none());
     }
 
+    #[inline]
     fn knows_value(&self, v_uid: usize) -> bool {
         self.values.contains_key(&v_uid)
     }
 
+    #[inline]
     fn has_queued_values(&self) -> bool {
         !self.values.is_empty()
     }
 
-    fn get_value_to_propose(&self) -> (usize, Option<KVal>) {
-        (*self.values.keys().min().unwrap(), None)
+    #[inline]
+    fn get_new_batch_to_propose(&self) -> Option<KVal> {
+        // TODO: Actually form batch here !
+        None
+    }
+
+    #[inline]
+    fn get_value_to_repropose(&self) -> usize {
+        *self.values.keys().min().unwrap()
     }
 }

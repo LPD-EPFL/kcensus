@@ -1,6 +1,6 @@
 use crate::consensus::message::ConsensusMessage;
 use crate::message::Message::{ConsensusM, Done};
-use crate::message::{Message, MsgWithSource};
+use crate::message::MsgWithSource;
 use crate::value::{KVal, Request};
 use log::debug;
 use std::collections::VecDeque;
@@ -10,7 +10,7 @@ use tokio::sync::mpsc::{Receiver, Sender};
 
 pub mod kcensus;
 pub mod message;
-mod paxos;
+pub mod paxos;
 
 pub trait Consensus {
     async fn run(
@@ -51,8 +51,12 @@ pub trait Consensus {
             // TODO: (Optim.) peak connection first ?
             if should_repropose && self.should_lead() {
                 // TODO: Leader election / only leader should repropose !!!!!!!!!!!!!!!!!!
-                let (v_uid, opt_value) = self.get_value_to_propose();
-                self.repropose_start(v_uid, opt_value).await?;
+                if let Some(batch) = self.get_new_batch_to_propose() {
+                    self.propose_start(batch.into_remote_req()).await?;
+                } else {
+                    let v_uid = self.get_value_to_repropose();
+                    self.repropose_start(v_uid).await?;
+                }
             }
 
             // Read new messages and/or new local request
@@ -67,7 +71,7 @@ pub trait Consensus {
                         }
                         None => {
                             done = true;
-                            self.inner_broadcast(Done).await?;
+                            self.announce_done().await?;
                             count_done += 1;
                             if count_done == self.get_nb_nodes() {
                                 break 'main_loop;
@@ -82,7 +86,7 @@ pub trait Consensus {
             match msg.msg {
                 ConsensusM { msg, value } => {
                     if let Some(v) = value {
-                        debug_assert!(msg.should_include_value());
+                        debug_assert!(msg.can_include_value());
                         let value_uid = msg.get_v();
                         self.store_remote_value(value_uid, v);
                     } else {
@@ -113,6 +117,7 @@ pub trait Consensus {
         Ok(())
     } // run
 
+    #[inline]
     fn ready_to_process(&self, msg: &ConsensusMessage) -> bool {
         msg.get_slot() <= self.get_slot() && self.knows_value(msg.get_v())
     }
@@ -121,7 +126,7 @@ pub trait Consensus {
 
     async fn propose_start(&mut self, req: Request) -> io::Result<()>;
 
-    async fn repropose_start(&mut self, value_uid: usize, value: Option<KVal>) -> io::Result<()>;
+    async fn repropose_start(&mut self, value_uid: usize) -> io::Result<()>;
 
     fn get_nb_nodes(&self) -> usize;
 
@@ -131,7 +136,7 @@ pub trait Consensus {
 
     fn should_lead(&self) -> bool;
 
-    async fn inner_broadcast(&mut self, msg: Message) -> io::Result<()>;
+    async fn announce_done(&mut self) -> io::Result<()>;
 
     fn store_new_value(&mut self, req: Request) -> usize;
 
@@ -141,5 +146,7 @@ pub trait Consensus {
 
     fn has_queued_values(&self) -> bool;
 
-    fn get_value_to_propose(&self) -> (usize, Option<KVal>);
+    fn get_new_batch_to_propose(&self) -> Option<KVal>;
+
+    fn get_value_to_repropose(&self) -> usize;
 }

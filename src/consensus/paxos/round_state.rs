@@ -7,8 +7,13 @@ pub struct RoundValue {
     v_uid: usize,
 }
 
+impl RoundValue {
+    pub fn new(round: PaxosRound, v_uid: usize) -> Self {
+        Self { round, v_uid }
+    }
+}
+
 pub struct PaxosRoundState {
-    nb_nodes: usize,
     my_pid: usize,
     majority: usize,
 
@@ -26,7 +31,6 @@ impl PaxosRoundState {
         let majority = (nb_nodes / 2) + 1;
 
         let mut x = Self {
-            nb_nodes,
             my_pid,
             majority,
 
@@ -69,14 +73,18 @@ impl PaxosRoundState {
     }
 
     #[inline]
-    pub fn receive_promise(&mut self, src: usize, round_value: Option<RoundValue>) {
+    pub fn accept_v(&mut self, src: usize, v: RoundValue) {
+        self.receive_accepted(src);
+        self.max_round_value = Some(v)
+    }
+
+    #[inline]
+    pub fn receive_promise(&mut self, src: usize, round_value: RoundValue) {
         let inserted = self.prepared_set.insert(src);
         debug_assert!(inserted);
         self.prepared += 1;
-        if let Some(round_value) = round_value {
-            if self.max_round_value.unwrap_or(round_value).round <= round_value.round {
-                self.max_round_value = Some(round_value);
-            }
+        if self.max_round_value.unwrap_or(round_value).round <= round_value.round {
+            self.max_round_value = Some(round_value);
         }
     }
 
@@ -87,8 +95,12 @@ impl PaxosRoundState {
         self.accepted += 1;
     }
 
+    pub fn is_prepared(&self) -> bool {
+        self.prepared >= self.majority
+    }
+
     #[inline]
-    pub fn can_commit(&mut self) -> bool {
+    pub fn can_commit(&self) -> bool {
         self.accepted >= self.majority
     }
 }

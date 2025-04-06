@@ -1,4 +1,5 @@
 use crate::connector::Connector;
+use crate::consensus::paxos::Paxos;
 use crate::consensus::Consensus;
 use crate::message::Message;
 use crate::multi_sink::MultiSink;
@@ -12,6 +13,7 @@ use env_logger::fmt::style;
 use futures::prelude::stream::select_all;
 use futures::TryStreamExt;
 use log::{debug, info};
+use serde::Serialize;
 use std::collections::HashMap;
 use std::io;
 use std::io::Write;
@@ -34,6 +36,15 @@ struct Args {
     pid: usize,
     #[arg(short, long)]
     config: String,
+    #[arg(short, long)]
+    algo: Algo,
+}
+
+#[derive(clap::ValueEnum, Clone, Default, Debug, Serialize)]
+enum Algo {
+    #[default]
+    KCensus,
+    Paxos,
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -90,9 +101,6 @@ async fn main() -> io::Result<()> {
     let (request_tx, request_rx) = mpsc::channel(1);
     let (response_tx, mut response_rx) = mpsc::channel(1);
 
-    let mut kcensus_obj = KCensus::new(nb_nodes, my_pid, sinks, propagation_graphs);
-    let kcensus = kcensus_obj.run(delayed_rx, request_rx, response_tx);
-
     let requester_task =
         tokio::task::spawn(requester::simple_requester(nb_nodes, my_pid, request_tx));
 
@@ -115,7 +123,19 @@ async fn main() -> io::Result<()> {
         }
     };
 
-    let _ = tokio::join!(app, kcensus);
+    match args.algo {
+        Algo::KCensus => {
+            let mut kcensus_obj = KCensus::new(nb_nodes, my_pid, sinks, propagation_graphs);
+            let kcensus = kcensus_obj.run(delayed_rx, request_rx, response_tx);
+            let _ = tokio::join!(app, kcensus);
+        }
+        Algo::Paxos => {
+            let mut paxos_obj = Paxos::new(nb_nodes, my_pid, sinks);
+            let paxos = paxos_obj.run(delayed_rx, request_rx, response_tx);
+            let _ = tokio::join!(app, paxos);
+        }
+    };
+
     println!("Total duration: {:?}", start.elapsed());
 
     requester_task.await?;

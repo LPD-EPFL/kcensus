@@ -17,7 +17,6 @@ impl MultiSink<DeSink> {
         self.inner_broadcast(self.build_msg(msg, value)).await
     }
 
-    #[inline]
     pub async fn send(
         &mut self,
         msg: ConsensusMsg,
@@ -42,6 +41,7 @@ impl MultiSink<DeSink> {
         sink.send(msg.clone()).await
     }
 
+    #[inline]
     fn build_msg(&self, msg: ConsensusMsg, value: Option<KVal>) -> Message {
         Message::ConsensusM {
             msg: ConsensusMessage {
