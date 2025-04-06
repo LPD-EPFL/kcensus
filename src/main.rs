@@ -37,7 +37,7 @@ struct Args {
     config: String,
     #[arg(short, long)]
     db: Option<String>,
-    #[arg(short, long)]
+    #[arg(short, long, default_value_t, value_enum)]
     algo: Algo,
 }
 
