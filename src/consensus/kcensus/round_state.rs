@@ -217,7 +217,6 @@ impl KCensusRoundState {
     }
 
     // TODO: Allow can_commit to run for other proposals ?
-    // TODO: Speedup for e-paxos / paxos scenarios ?
     pub fn can_commit(&mut self) -> bool {
         // TODO: Filter on v_uid instead of using my k ? (helps if frozen or to allow commiting other props)
         let k_size = my_state!(self).k.len();
@@ -226,20 +225,19 @@ impl KCensusRoundState {
             return false;
         }
         let e_paxos_threshold = (self.nb_nodes * 3) / 4;
-        if k_size >= e_paxos_threshold {
-            if self.proposers.len() == 1 || k_size > e_paxos_threshold {
-                return true;
-            }
-            if my_state!(self)
-                .k
-                .iter()
-                .all(|pid| self.node_states[pid].k.contains(self.my_pid))
-            {
-                return true;
-            }
+        let everyone_knows_me = my_state!(self)
+            .k
+            .iter()
+            .all(|pid| self.node_states[pid].k.contains(self.my_pid));
+        if k_size >= e_paxos_threshold && (everyone_knows_me || k_size > e_paxos_threshold) {
+            return true;
         }
         let unknown_nodes = self.nb_nodes - k_size;
-        let trivial_frozen = self.majority;
+        let trivial_frozen = if everyone_knows_me {
+            self.majority - 1
+        } else {
+            self.majority
+        };
         let minority = self.nb_nodes - self.majority;
         let min_frozen = (k_size - minority).max(self.frozen_size_checked + 1); // Skip already checked ones
 
@@ -257,12 +255,6 @@ impl KCensusRoundState {
             let max_others_score = 2 * unknown_nodes - (self.majority - frozen);
             let to_know = self.majority.min(((max_others_score + frozen) / 2) + 1);
 
-            // TODO: If everyone knows a node that knows a majority*, we can:
-            //         - Change this condition to to_know <= frozen + 1
-            //       OR equivalently:
-            //         - Lower trivial_frozen to majority-1
-            //         - Immediately return true if k_size >= fast_quorum
-            //   *: e.g. if we're the sole proposer
             if to_know <= frozen {
                 self.frozen_size_checked = frozen;
                 self.next_combination_pos.clear();
@@ -286,7 +278,6 @@ impl KCensusRoundState {
             }
             debug_assert_eq!(self.next_combination_pos.len(), frozen);
             loop {
-                // TODO: Save intermediate known set to reduce re-computations ? (is it worth it ?)
                 let known = &mut self._bitset_scratchpad;
                 known.clear();
                 let mut unused_knowledge = frozen;

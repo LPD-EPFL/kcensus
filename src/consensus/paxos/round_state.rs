@@ -1,4 +1,4 @@
-use crate::consensus::paxos::message::RoundValue;
+use crate::consensus::paxos::message::{EPaxosRound, RoundValue};
 use bit_set::BitSet;
 
 pub struct PaxosRoundState {
@@ -59,6 +59,10 @@ impl PaxosRoundState {
         self.max_round_value.map(|round_value| round_value.v_uid)
     }
 
+    pub fn get_last_accepted_round(&self) -> EPaxosRound {
+        self.max_round_value.map(|rv| rv.round).unwrap_or(None)
+    }
+
     #[inline]
     pub fn propose_v(&mut self, v_uid: RoundValue) {
         debug_assert!(self.max_round_value.is_none());
@@ -67,6 +71,7 @@ impl PaxosRoundState {
 
     #[inline]
     pub fn accept_v(&mut self, src: usize, v: RoundValue) {
+        debug_assert!(self.get_last_accepted_round() < v.round);
         self.receive_accepted(src);
         self.max_round_value = Some(v)
     }
@@ -76,7 +81,7 @@ impl PaxosRoundState {
         let inserted = self.prepared_set.insert(src);
         debug_assert!(inserted);
         self.prepared += 1;
-        if self.max_round_value.unwrap_or(round_value).round <= round_value.round {
+        if self.get_last_accepted_round() < round_value.round {
             self.max_round_value = Some(round_value);
         }
     }

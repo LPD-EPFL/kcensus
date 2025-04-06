@@ -22,6 +22,7 @@ pub struct KCensus<Sk> {
     // Settings
     nb_nodes: usize,
     my_pid: usize,
+    leader: usize,
 
     // Connections
     sinks: MultiSink<Sk>,
@@ -50,11 +51,13 @@ impl KCensus<DeSink> {
         my_pid: usize,
         sinks: MultiSink<DeSink>,
         propagation_graphs: PropagationGraphs,
+        leader: usize,
     ) -> Self {
         assert!(my_pid < nb_nodes);
         Self {
             nb_nodes,
             my_pid,
+            leader,
 
             sinks,
 
@@ -239,7 +242,7 @@ impl Consensus for KCensus<DeSink> {
 
     #[inline]
     fn should_lead(&self) -> bool {
-        self.my_pid == 0
+        self.my_pid == self.leader
     }
 
     #[inline]
