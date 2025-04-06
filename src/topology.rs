@@ -15,7 +15,7 @@ pub struct Config {
     pub raw_latencies: Vec<Vec<f64>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Topology {
     pub nb_nodes: usize,
     pub regions: Vec<String>,
