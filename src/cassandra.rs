@@ -14,6 +14,7 @@ pub enum Request {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub enum Response {
     Put {key: String, value: String},
     Get {key: String, value: Option<String>},
