@@ -1,0 +1,6 @@
+regions = ['Ireland (eu-west-1)', 'Stockholm (eu-north-1)', 'Zurich (eu-central-2)']
+raw_latencies = [
+    [0, 38.56, 26.88],
+    [38.68, 0, 34.28],
+    [26.96, 34.11, 0]
+]
