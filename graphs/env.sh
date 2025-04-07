@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 
 # mkdir ~/.local/share/fonts/otf
 # cp -r LinLibertine ~/.local/share/fonts/otf/
