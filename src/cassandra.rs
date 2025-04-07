@@ -13,7 +13,7 @@ pub enum Request {
     Get { key: String },
 }
 
-#[derive(Debug)]
+#[derive(Serialize, Debug)]
 #[allow(dead_code)]
 pub enum Response {
     Put { key: String, value: String },
@@ -191,17 +191,33 @@ impl Client {
                 .await
                 .expect("Client failed to receive response");
             let responded = Instant::now();
-            let request_latency = responded.duration_since(request_generated);
-            let request_queueing = issued.duration_since(request_generated);
-            let request_processing = responded.duration_since(request_generated);
-            println!(
-                "Executed {:?} in {:?} (queued {:?}, processed in {:?})",
-                response, request_latency, request_queueing, request_processing
-            );
+            let event = ExecutedEvent {
+                response,
+                latency: responded.duration_since(request_generated),
+                queueing: issued.duration_since(request_generated),
+                processing: responded.duration_since(request_generated),
+            };
+            log("executed", &event);
         }
         self.client_request_tx
             .send(None)
             .await
             .expect("Client failed to enqueue None request");
     }
+}
+
+#[derive(Serialize)]
+struct ExecutedEvent {
+    response: Response,
+    latency: Duration,
+    queueing: Duration,
+    processing: Duration,
+}
+
+fn log<Event: Serialize>(key: &str, event: &Event) {
+    println!(
+        "[log={}]{}",
+        key,
+        serde_json::to_string(event).expect("Failed to serialize event")
+    );
 }
