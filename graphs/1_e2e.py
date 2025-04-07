@@ -9,7 +9,7 @@ from prelude import plt
 fig, plot = plt.subplots(figsize=(2.975, 0.8), tight_layout=True)
 plt.tight_layout(pad=0, w_pad=0, h_pad=0)  # , rect=(0,0,.80,1))
 
-experiments = ('paxos', 'k-census', 'unreplicated')
+experiments = ('paxos', 'multi-paxos', 'e-paxos', 'k-census', 'unreplicated')
 
 plot.yaxis.set_minor_locator(MultipleLocator(50))
 plot.yaxis.set_major_locator(MultipleLocator(100))

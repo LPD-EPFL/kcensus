@@ -1,7 +1,7 @@
 CASSANDRA_BASE_PORT="9042"
 BASE_LOG_DIR="./logs"
-ALGOS=(k-census paxos unreplicated)
-CONFIGS=(aws-europe-3.toml)
+ALGOS=(k-census e-paxos multi-paxos paxos unreplicated)
+CONFIGS=(aws-europe-7.toml)
 YCSB=(0.05 0.5)
 REQUESTS=100
 

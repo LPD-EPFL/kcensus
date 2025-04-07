@@ -5,7 +5,7 @@ from collections import defaultdict
 LOG_DIR = '../logs'
 
 
-def parse(pids=None, config='aws-europe-3.toml', algo='k-census', writes=0.5, requests=100, ingress='round-robin',
+def parse(pids=None, config='aws-europe-7.toml', algo='k-census', writes=0.5, requests=100, ingress='round-robin',
           throughput=0):
     if not pids:
         num_replicas = int(''.join([char for char in config if char.isdigit()]))

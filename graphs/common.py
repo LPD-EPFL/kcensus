@@ -1,9 +1,15 @@
+blue = '#4C72B0'
+red = '#C44E52'
+orange = '#DD8452'
+yellow = '#E2C44C'
+green = '#55A868'
+
 ALGORITHMS = {
-    'unreplicated': {'label': 'Unreplicated', 'color': 'blue'},
-    'paxos': {'label': 'Paxos', 'color': 'red'},
-    'multi-paxos': {'label': 'Multi-Paxos', 'color': 'orange'},
-    'epaxos': {'label': 'EPaxos', 'color': 'yellow'},
-    'k-census': {'label': 'K-Census', 'color': 'green'},
+    'unreplicated': {'label': 'Unreplicated', 'color': blue},
+    'paxos': {'label': 'Paxos', 'color': red},
+    'multi-paxos': {'label': 'Multi-Paxos', 'color': orange},
+    'e-paxos': {'label': 'EPaxos', 'color': yellow},
+    'k-census': {'label': 'K-Census', 'color': green},
 }
 
 
