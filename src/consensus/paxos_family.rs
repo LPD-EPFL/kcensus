@@ -56,7 +56,7 @@ impl PaxosFamily<DeSink> {
     ) -> Self {
         assert!(my_pid < nb_nodes);
         let starting_round = match mode {
-            Paxos => Some(PaxosRound::default()),
+            Paxos => Some(PaxosRound::default().next_proposer_round(leader)),
             MultiPaxos => Some(PaxosRound::default().next_proposer_round(leader)),
             EPaxos => None,
         };
