@@ -3,6 +3,7 @@ use crate::consensus::message::{ConsensusMessage, ConsensusMsg};
 use crate::message::Message;
 use crate::value::KVal;
 use futures::SinkExt;
+use log::debug;
 use std::collections::HashMap;
 use std::io;
 
@@ -14,6 +15,7 @@ pub struct MultiSink<Sk> {
 impl MultiSink<DeSink> {
     #[inline]
     pub async fn broadcast(&mut self, msg: ConsensusMsg, value: Option<KVal>) -> io::Result<()> {
+        debug!("Broadcasting {:?} with_value={}", msg, value.is_some());
         self.inner_broadcast(self.build_msg(msg, value)).await
     }
 
@@ -23,6 +25,7 @@ impl MultiSink<DeSink> {
         value: Option<KVal>,
         pid: usize,
     ) -> io::Result<()> {
+        debug!("Sending to {pid}: {:?} with_value={}", msg, value.is_some());
         self.inner_send(self.build_msg(msg, value), pid).await
     }
 

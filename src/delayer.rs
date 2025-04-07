@@ -51,7 +51,6 @@ pub async fn delayer<St: Stream<Item = io::Result<MsgWithSource>> + Unpin>(
 
                 let deadline = Instant::now() + topology.link_latencies[msg.src][my_pid];
 
-                trace!("Queuing message from {}", msg.src);
                 queues[msg.src].push_back(
                     msg.with_deadline(deadline)
                 );
@@ -59,8 +58,7 @@ pub async fn delayer<St: Stream<Item = io::Result<MsgWithSource>> + Unpin>(
             res = &mut delay, if !is_empty => {
                 res?;
                 let now = Instant::now();
-                trace!("Overslept by {:?}", now.duration_since(delay.deadline()));
-                trace!("Slept enough. {} queued messages. Consuming...", queues.iter()
+                trace!("Overslept by {:?}. {} queued messages. Consuming...", now.duration_since(delay.deadline()), queues.iter()
                     .map(|q| q.len()).sum::<usize>());
                 for q in queues.iter_mut() {
                     if let Some(m) = q.front() {

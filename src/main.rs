@@ -243,10 +243,11 @@ async fn main() -> io::Result<()> {
         Algo::MultiPaxos => {
             let mut leader_prio: Vec<_> = (0..nb_nodes).collect();
             leader_prio.sort_by_key(|pid| propagation_graphs.multi_paxos_latencies[*pid]);
+            let leader = leader_prio[0];
             println!(
                 // TODO: Provide expected local latency
-                "Expected AVERAGE latency (no-contention): {:?}",
-                propagation_graphs.multi_paxos_latencies[my_pid]
+                "Expected AVERAGE latency for leader {} (no-contention): {:?}",
+                leader, propagation_graphs.multi_paxos_latencies[leader]
             );
             let mut consensus_obj =
                 PaxosFamily::new(nb_nodes, my_pid, sinks, leader_prio, Mode::MultiPaxos);

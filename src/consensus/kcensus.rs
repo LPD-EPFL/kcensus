@@ -5,12 +5,11 @@ use crate::consensus::kcensus::propagation::{MessageId, PropagationGraphs};
 use crate::consensus::kcensus::round_state::KCensusRoundState;
 use crate::consensus::message::ConsensusMessage;
 use crate::consensus::message::ConsensusMsg::{Commit, KCensusM};
-use crate::consensus::paxos_family::Mode::MultiPaxos;
 use crate::consensus::Consensus;
 use crate::message::Message::Done;
 use crate::multi_sink::MultiSink;
 use crate::value::{KVal, Request};
-use log::debug;
+use log::{debug, trace};
 use std::collections::HashMap;
 use std::io;
 
@@ -32,6 +31,7 @@ pub struct KCensus<Sk> {
     propagation_graphs: PropagationGraphs,
 
     // Overall state
+    next_uid: usize,
     slot: usize,
     round: usize,
     requests: HashMap<usize, Request>,
@@ -64,6 +64,7 @@ impl KCensus<DeSink> {
 
             propagation_graphs,
 
+            next_uid: my_pid,
             slot: 0,
             round: 0,
             requests: HashMap::with_capacity(nb_nodes),
@@ -215,9 +216,9 @@ impl Consensus for KCensus<DeSink> {
     }
 
     #[inline]
-    async fn propose_start(&mut self, req: Request, forward_to_leader: bool) -> io::Result<()> {
+    async fn propose_start(&mut self, req: Request, contention: bool) -> io::Result<()> {
         let v = self.store_new_request(req);
-        if forward_to_leader {
+        if contention {
             self.graph_spread_new_value_only(v).await
         } else {
             self.propose_and_spread(v, true).await
@@ -234,10 +235,10 @@ impl Consensus for KCensus<DeSink> {
         let value = self.requests.remove(&v).unwrap();
         if from_commit_msg {
             // "<#2FB82F>Commited \"{}\" in slot {}.</>"
-            debug!("Commited \"{:?}\" in slot {}.", value.value.val, self.slot);
+            trace!("Commited \"{:?}\" in slot {}.", value.value.val, self.slot);
         } else {
             // "<#2FB82F>Commited \"{}\" in slot {} (round {}) from state:</> <#B8E8B8>{}</>"
-            debug!(
+            trace!(
                 "Commited \"{:?}\" in slot {} (round {}) from state: {}",
                 value.value.val, self.slot, self.round, self.round_state,
             );
@@ -278,7 +279,8 @@ impl Consensus for KCensus<DeSink> {
 
     #[inline]
     fn store_new_request(&mut self, req: Request) -> usize {
-        let v = self.my_pid + (self.slot * self.nb_nodes);
+        let v = self.next_uid;
+        self.next_uid += self.nb_nodes;
         let inserted = self.requests.insert(v, req);
         debug_assert!(inserted.is_none());
         v

@@ -3,7 +3,7 @@ use crate::consensus::message::ConsensusMsg::Commit;
 use crate::message::Message::{ConsensusM, Done};
 use crate::message::MsgWithSource;
 use crate::value::{CommittedRequest, KVal, Request};
-use log::{info, trace};
+use log::{debug, info};
 use serde::{de::DeserializeOwned, Serialize};
 use std::collections::VecDeque;
 use std::io;
@@ -138,7 +138,7 @@ pub trait Consensus {
             let value = self.commit_slot(v, true);
             return Ok(Some(value));
         };
-        trace!("Received message: {:?}", msg);
+        debug!("Processing message: {:?}", msg);
         self.process_message(msg).await
     }
 
@@ -146,7 +146,7 @@ pub trait Consensus {
 
     fn can_forward_proposals(&mut self) -> bool;
 
-    async fn propose_start(&mut self, req: Request, forward_to_leader: bool) -> io::Result<()>;
+    async fn propose_start(&mut self, req: Request, contention: bool) -> io::Result<()>;
 
     async fn repropose_start(&mut self, v: usize) -> io::Result<()>;
 

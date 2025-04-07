@@ -1,4 +1,4 @@
-use log::trace;
+use log::debug;
 use petgraph::algo::bellman_ford;
 use petgraph::matrix_graph::DiMatrix;
 use serde::Deserialize;
@@ -57,7 +57,7 @@ fn from_toml(path: &str) -> Topology {
     let mut contents = String::new();
     file.read_to_string(&mut contents)
         .expect("Failed to read toml config");
-    trace!("Loaded config:\n{}", contents);
+    debug!("Loaded config:\n{}", contents);
     let config: Config = toml::from_str(&contents).expect("Failed to parse toml config");
     Topology::from(config)
 }

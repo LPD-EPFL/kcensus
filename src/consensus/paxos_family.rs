@@ -10,7 +10,7 @@ use crate::consensus::Consensus;
 use crate::message::Message::Done;
 use crate::multi_sink::MultiSink;
 use crate::value::{KVal, Request};
-use log::{debug, info};
+use log::{debug, info, trace};
 use message::RoundV;
 use std::collections::HashMap;
 use std::io;
@@ -31,6 +31,7 @@ pub struct PaxosFamily<Sk> {
     sinks: MultiSink<Sk>,
 
     // Overall state
+    next_uid: usize,
     slot: usize,
     round: Option<PaxosRound>,
     requests: HashMap<usize, Request>,
@@ -68,6 +69,7 @@ impl PaxosFamily<DeSink> {
 
             sinks,
 
+            next_uid: my_pid,
             slot: 0,
             round: starting_round,
             requests: HashMap::with_capacity(nb_nodes),
@@ -171,10 +173,10 @@ impl Consensus for PaxosFamily<DeSink> {
         matches!(self.mode, MultiPaxos)
     }
 
-    async fn propose_start(&mut self, req: Request, forward_to_leader: bool) -> io::Result<()> {
+    async fn propose_start(&mut self, req: Request, contention: bool) -> io::Result<()> {
         let v = self.store_new_request(req);
 
-        if forward_to_leader {
+        if contention || (matches!(self.mode, MultiPaxos) && !self.should_lead()) {
             self.broadcast(ForwardRequest { v }, true).await
         } else {
             self.propose(v, true).await
@@ -190,10 +192,10 @@ impl Consensus for PaxosFamily<DeSink> {
         let value = self.requests.remove(&v).unwrap();
         if from_commit_msg {
             // "<#2FB82F>Commited \"{}\" in slot {}.</>"
-            debug!("Commited \"{:?}\" in slot {}.", value.value.val, self.slot);
+            trace!("Commited \"{:?}\" in slot {}.", value.value.val, self.slot);
         } else {
             // "<#2FB82F>Commited \"{}\" in slot {} (round {}) from state:</> <#B8E8B8>{}</>"
-            debug!(
+            trace!(
                 "Commited \"{:?}\" in slot {} (round {:?})",
                 value.value.val, self.slot, self.round
             );
@@ -245,7 +247,8 @@ impl Consensus for PaxosFamily<DeSink> {
 
     #[inline]
     fn store_new_request(&mut self, req: Request) -> usize {
-        let v = self.my_pid + (self.slot * self.nb_nodes);
+        let v = self.next_uid;
+        self.next_uid += self.nb_nodes;
         let inserted = self.requests.insert(v, req);
         debug_assert!(inserted.is_none());
         v
@@ -283,7 +286,12 @@ impl Consensus for PaxosFamily<DeSink> {
 impl PaxosFamily<DeSink> {
     #[inline]
     fn goto_round(&mut self, round: PaxosRound) {
-        if round != PaxosRound::default() {
+        if round
+            > self
+                .starting_round
+                .unwrap_or_default()
+                .next_proposer_round(self.my_pid)
+        {
             debug!(
                 // "<#FF4F4F>Can not commit in round {} from state:</> <#EFBFBF>{}</>"
                 "Can not commit in round {:?}",
@@ -343,6 +351,7 @@ impl PaxosFamily<DeSink> {
             debug_assert!(!matches!(self.mode, EPaxos));
             let rv = RoundV::new_paxos_v(self.starting_round, v);
             self.paxos_state.propose_v(rv);
+            self.paxos_state.self_accept_v(round);
             Accept {
                 slot: self.slot,
                 round,
