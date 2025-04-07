@@ -1,15 +1,15 @@
 use crate::connector::DeSink;
 use crate::consensus::kcensus::message::KCensusMsg;
-use crate::consensus::kcensus::message::KCensusMsg::{Commit, Spread, SpreadValueOnly};
+use crate::consensus::kcensus::message::KCensusMsg::{Spread, SpreadValueOnly};
 use crate::consensus::kcensus::propagation::{MessageId, PropagationGraphs};
 use crate::consensus::kcensus::round_state::KCensusRoundState;
 use crate::consensus::message::ConsensusMessage;
-use crate::consensus::message::ConsensusMsg::KCensusM;
+use crate::consensus::message::ConsensusMsg::{Commit, KCensusM};
 use crate::consensus::Consensus;
 use crate::message::Message::Done;
 use crate::multi_sink::MultiSink;
 use crate::value::{KVal, Request};
-use log::{debug, info};
+use log::debug;
 use std::collections::HashMap;
 use std::io;
 
@@ -74,7 +74,6 @@ impl KCensus<DeSink> {
 
 impl Consensus for KCensus<DeSink> {
     async fn process_message(&mut self, msg: ConsensusMessage) -> io::Result<Option<Request>> {
-        debug_assert!(self.ready_to_process(&msg));
         let msg_v = msg.get_v();
         let src = msg.src;
         let msg = match msg.msg {
@@ -126,7 +125,7 @@ impl Consensus for KCensus<DeSink> {
                 if self.round_state.i_am_proposer() && self.round_state.can_commit() {
                     debug_assert!(!with_value); // can't be my value -> there would be a conflict
                     let v = self.round_state.get_my_v().unwrap();
-                    self.broadcast(Commit { slot, v }).await?;
+                    self.sinks.broadcast(Commit { slot, v }, None).await?;
                     let value = self.commit_slot(my_v, false);
                     return Ok(Some(value));
                 }
@@ -205,15 +204,6 @@ impl Consensus for KCensus<DeSink> {
                 }
             }
             SpreadValueOnly { msg_id, v } => self.graph_spread_value_only(msg_id, v).await?,
-            Commit { slot, v } => {
-                if slot < self.slot {
-                    return Ok(None);
-                }
-                debug_assert_eq!(slot, self.slot);
-                info!("Commit msg: v={}", v);
-                let value = self.commit_slot(v, true);
-                return Ok(Some(value));
-            }
         } // match command
         Ok(None)
     } // fn process_message
@@ -228,6 +218,24 @@ impl Consensus for KCensus<DeSink> {
     #[inline]
     async fn repropose_start(&mut self, v: usize) -> io::Result<()> {
         self.propose_and_spread(v, false).await
+    }
+
+    #[inline]
+    fn commit_slot(&mut self, v: usize, from_commit_msg: bool) -> Request {
+        let value = self.requests.remove(&v).unwrap();
+        if from_commit_msg {
+            // "<#2FB82F>Commited \"{}\" in slot {}.</>"
+            debug!("Commited \"{:?}\" in slot {}.", value.value.val, self.slot);
+        } else {
+            // "<#2FB82F>Commited \"{}\" in slot {} (round {}) from state:</> <#B8E8B8>{}</>"
+            debug!(
+                "Commited \"{:?}\" in slot {} (round {}) from state: {}",
+                value.value.val, self.slot, self.round, self.round_state,
+            );
+        }
+        self.slot += 1;
+        self.goto_round(0);
+        value
     }
 
     #[inline]
@@ -293,24 +301,6 @@ impl Consensus for KCensus<DeSink> {
 }
 
 impl KCensus<DeSink> {
-    #[inline]
-    fn commit_slot(&mut self, v: usize, commit_msg: bool) -> Request {
-        let value = self.requests.remove(&v).unwrap();
-        if commit_msg {
-            // "<#2FB82F>Commited \"{}\" in slot {}.</>"
-            debug!("Commited \"{:?}\" in slot {}.", value.value.val, self.slot);
-        } else {
-            // "<#2FB82F>Commited \"{}\" in slot {} (round {}) from state:</> <#B8E8B8>{}</>"
-            debug!(
-                "Commited \"{:?}\" in slot {} (round {}) from state: {}",
-                value.value.val, self.slot, self.round, self.round_state,
-            );
-        }
-        self.slot += 1;
-        self.goto_round(0);
-        value
-    }
-
     #[inline]
     fn goto_round(&mut self, round: usize) {
         if round != 0 {

@@ -1,7 +1,9 @@
 use crate::consensus::message::ConsensusMessage;
+use crate::consensus::message::ConsensusMsg::Commit;
 use crate::message::Message::{ConsensusM, Done};
 use crate::message::MsgWithSource;
 use crate::value::{CommittedRequest, KVal, Request};
+use log::{info, trace};
 use serde::{de::DeserializeOwned, Serialize};
 use std::collections::VecDeque;
 use std::io;
@@ -32,7 +34,7 @@ pub trait Consensus {
                 let msg = &queued_messages[i];
                 if self.ready_to_process(msg) {
                     let msg = queued_messages.remove(i).unwrap();
-                    let result = self.process_message(msg).await?;
+                    let result = self.full_process_message(msg).await?;
                     if let Some(request) = result {
                         committed_request_tx
                             .send(request.into())
@@ -101,7 +103,7 @@ pub trait Consensus {
                         continue 'main_loop;
                     }
 
-                    let result = self.process_message(msg).await?;
+                    let result = self.full_process_message(msg).await?;
                     if let Some(value) = result {
                         committed_request_tx
                             .send(value.into())
@@ -125,11 +127,28 @@ pub trait Consensus {
         msg.get_slot() <= self.get_slot() && self.knows_v(msg.get_v())
     }
 
+    async fn full_process_message(&mut self, msg: ConsensusMessage) -> io::Result<Option<Request>> {
+        debug_assert!(self.ready_to_process(&msg));
+        if let Commit { slot, v } = msg.msg {
+            if slot < self.get_slot() {
+                return Ok(None);
+            }
+            debug_assert_eq!(slot, self.get_slot());
+            info!("Commit msg: v={}", v);
+            let value = self.commit_slot(v, true);
+            return Ok(Some(value));
+        };
+        trace!("Received message: {:?}", msg);
+        self.process_message(msg).await
+    }
+
     async fn process_message(&mut self, msg: ConsensusMessage) -> io::Result<Option<Request>>;
 
     async fn propose_start(&mut self, req: Request) -> io::Result<()>;
 
     async fn repropose_start(&mut self, v: usize) -> io::Result<()>;
+
+    fn commit_slot(&mut self, v: usize, from_commit_msg: bool) -> Request;
 
     fn get_nb_nodes(&self) -> usize;
 

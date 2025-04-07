@@ -1,4 +1,4 @@
-use crate::consensus::kcensus::message::KCensusMsg::{Commit, Spread, SpreadValueOnly};
+use crate::consensus::kcensus::message::KCensusMsg::{Spread, SpreadValueOnly};
 use crate::consensus::kcensus::node_state::NodeState;
 use crate::consensus::kcensus::propagation::MessageId;
 use serde::{Deserialize, Serialize};
@@ -12,10 +12,6 @@ pub enum KCensusMsg {
         msg_id: Option<MessageId>,
         remote_states: Vec<NodeState>,
         with_value: bool,
-    },
-    Commit {
-        slot: usize,
-        v: usize,
     },
     SpreadValueOnly {
         msg_id: MessageId,
@@ -38,7 +34,6 @@ impl KCensusMsg {
                 }
                 v.expect("v of src should not be None")
             }
-            Commit { v, .. } => *v,
             SpreadValueOnly { v, .. } => *v,
         }
     }
@@ -47,7 +42,6 @@ impl KCensusMsg {
     pub fn get_slot(&self) -> usize {
         match self {
             Spread { slot, .. } => *slot,
-            Commit { slot, .. } => *slot,
             SpreadValueOnly { .. } => 0,
         }
     }
@@ -56,7 +50,6 @@ impl KCensusMsg {
     pub fn includes_value(&self) -> bool {
         match self {
             Spread { with_value, .. } => *with_value,
-            Commit { .. } => false,
             SpreadValueOnly { .. } => true,
         }
     }

@@ -1,5 +1,5 @@
 use crate::consensus::kcensus::message::KCensusMsg;
-use crate::consensus::message::ConsensusMsg::{KCensusM, PaxosM};
+use crate::consensus::message::ConsensusMsg::{Commit, KCensusM, PaxosM};
 use crate::consensus::paxos_family::message::PaxosMsg;
 use serde::{Deserialize, Serialize};
 
@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 pub enum ConsensusMsg {
     KCensusM(KCensusMsg),
     PaxosM(PaxosMsg),
+    Commit { slot: usize, v: usize },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -20,6 +21,7 @@ impl ConsensusMessage {
         match &self.msg {
             KCensusM(msg) => msg.includes_value(),
             PaxosM(msg) => msg.can_include_value(self.src),
+            Commit { .. } => false,
         }
     }
 
@@ -27,6 +29,7 @@ impl ConsensusMessage {
         match &self.msg {
             KCensusM(msg) => msg.includes_value(),
             PaxosM(_) => false,
+            Commit { .. } => false,
         }
     }
 
@@ -34,6 +37,7 @@ impl ConsensusMessage {
         match &self.msg {
             KCensusM(msg) => msg.get_v(self.src),
             PaxosM(msg) => msg.get_v(),
+            Commit { v, .. } => *v,
         }
     }
 
@@ -41,6 +45,7 @@ impl ConsensusMessage {
         match &self.msg {
             KCensusM(msg) => msg.get_slot(),
             PaxosM(msg) => msg.get_slot(),
+            Commit { slot, .. } => *slot,
         }
     }
 }

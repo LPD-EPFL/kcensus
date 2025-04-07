@@ -1,8 +1,7 @@
 use crate::connector::DeSink;
 use crate::consensus::message::ConsensusMessage;
-use crate::consensus::message::ConsensusMsg::PaxosM;
+use crate::consensus::message::ConsensusMsg::{Commit, PaxosM};
 use crate::consensus::paxos_family::epaxos_round_state::EPaxosRoundState;
-use crate::consensus::paxos_family::message::PaxosMsg::Commit;
 use crate::consensus::paxos_family::message::PaxosMsg::{Accept, Prepare};
 use crate::consensus::paxos_family::message::{PaxosMsg, PaxosRound};
 use crate::consensus::paxos_family::paxos_round_state::PaxosRoundState;
@@ -11,7 +10,7 @@ use crate::consensus::Consensus;
 use crate::message::Message::Done;
 use crate::multi_sink::MultiSink;
 use crate::value::{KVal, Request};
-use log::{debug, info, trace};
+use log::{debug, info};
 use message::RoundV;
 use std::collections::HashMap;
 use std::io;
@@ -81,25 +80,25 @@ impl PaxosFamily<DeSink> {
 
 impl Consensus for PaxosFamily<DeSink> {
     async fn process_message(&mut self, msg: ConsensusMessage) -> io::Result<Option<Request>> {
-        debug_assert!(self.ready_to_process(&msg));
         let src = msg.src;
         let msg = match msg.msg {
             PaxosM(msg) => msg,
             x => panic!("Unexpected message type: {:?}", x),
         };
-        trace!("Received message: {:?}", msg);
+
+        let slot = msg.get_slot();
+        let round = msg.get_round();
+        if slot < self.slot || Some(round) < self.round {
+            return Ok(None);
+        } else if Some(round) > self.round {
+            debug_assert_ne!(round.proposer, self.my_pid);
+            self.goto_round(round);
+        }
+        debug_assert_eq!(slot, self.slot);
+        debug_assert_eq!(Some(round), self.round);
 
         match msg {
-            Prepare { slot, round, rv } => {
-                if slot < self.slot || Some(round) < self.round {
-                    return Ok(None);
-                } else if Some(round) > self.round {
-                    debug_assert_ne!(round.proposer, self.my_pid);
-                    self.goto_round(round);
-                }
-                debug_assert_eq!(slot, self.slot);
-                debug_assert!(Some(round) == self.round);
-
+            Prepare { rv, .. } => {
                 if round.proposer != self.my_pid {
                     if self.get_my_v().is_none() {
                         debug_assert!(rv.get_accept_round().is_none());
@@ -141,16 +140,7 @@ impl Consensus for PaxosFamily<DeSink> {
                     self.broadcast_accept().await?;
                 }
             }
-            Accept { slot, round, v } => {
-                if slot < self.slot || Some(round) < self.round {
-                    return Ok(None);
-                } else if Some(round) > self.round {
-                    debug_assert_ne!(round.proposer, self.my_pid);
-                    self.goto_round(round);
-                }
-                debug_assert_eq!(slot, self.slot);
-                debug_assert_eq!(Some(round), self.round);
-
+            Accept { v, .. } => {
                 if round.proposer != self.my_pid {
                     self.paxos_state.accept_v(src, round, v);
                     self.answer_accept().await?;
@@ -167,15 +157,6 @@ impl Consensus for PaxosFamily<DeSink> {
                     return Ok(Some(value));
                 }
             }
-            Commit { slot, v } => {
-                if slot < self.slot {
-                    return Ok(None);
-                }
-                debug_assert_eq!(slot, self.slot);
-                info!("Commit msg: v={}", v);
-                let value = self.commit_slot(v, true);
-                return Ok(Some(value));
-            }
         }
 
         Ok(None)
@@ -189,6 +170,26 @@ impl Consensus for PaxosFamily<DeSink> {
 
     async fn repropose_start(&mut self, v: usize) -> io::Result<()> {
         self.propose(v, false).await
+    }
+
+    #[inline]
+    fn commit_slot(&mut self, v: usize, from_commit_msg: bool) -> Request {
+        let value = self.requests.remove(&v).unwrap();
+        if from_commit_msg {
+            // "<#2FB82F>Commited \"{}\" in slot {}.</>"
+            debug!("Commited \"{:?}\" in slot {}.", value.value.val, self.slot);
+        } else {
+            // "<#2FB82F>Commited \"{}\" in slot {} (round {}) from state:</> <#B8E8B8>{}</>"
+            debug!(
+                "Commited \"{:?}\" in slot {} (round {:?})",
+                value.value.val, self.slot, self.round
+            );
+        }
+        self.slot += 1;
+        self.goto_round(PaxosRound::default());
+        self.paxos_state.full_clear();
+        self.epaxos_state.full_clear();
+        value
     }
 
     #[inline]
@@ -254,26 +255,6 @@ impl Consensus for PaxosFamily<DeSink> {
 }
 
 impl PaxosFamily<DeSink> {
-    #[inline]
-    fn commit_slot(&mut self, v: usize, commit_msg: bool) -> Request {
-        let value = self.requests.remove(&v).unwrap();
-        if commit_msg {
-            // "<#2FB82F>Commited \"{}\" in slot {}.</>"
-            debug!("Commited \"{:?}\" in slot {}.", value.value.val, self.slot);
-        } else {
-            // "<#2FB82F>Commited \"{}\" in slot {} (round {}) from state:</> <#B8E8B8>{}</>"
-            debug!(
-                "Commited \"{:?}\" in slot {} (round {:?})",
-                value.value.val, self.slot, self.round
-            );
-        }
-        self.slot += 1;
-        self.goto_round(PaxosRound::default());
-        self.paxos_state.full_clear();
-        self.epaxos_state.full_clear();
-        value
-    }
-
     #[inline]
     fn goto_round(&mut self, round: PaxosRound) {
         if round != PaxosRound::default() {
@@ -378,6 +359,6 @@ impl PaxosFamily<DeSink> {
             slot: self.slot,
             v: self.paxos_state.get_v().unwrap(),
         };
-        self.broadcast(msg, false).await
+        self.sinks.broadcast(msg, None).await
     }
 }
