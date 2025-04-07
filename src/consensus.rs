@@ -51,13 +51,13 @@ pub trait Consensus {
                 break 'main_loop;
             }
 
-            let nothing_ongoing = self.get_my_v().is_none() && max_queued_slot <= self.get_slot();
-            let should_repropose = nothing_ongoing && self.has_queued_requests();
+            let ongoing = self.get_my_v().is_some() || max_queued_slot > self.get_slot();
+            let should_repropose = !ongoing && self.has_queued_requests();
             // TODO: (Optim.) peak connection first ?
             if should_repropose && self.should_lead() {
                 // TODO: Leader election / only leader should repropose !!!!!!!!!!!!!!!!!!
                 if let Some(batch) = self.get_new_batch_to_propose() {
-                    self.propose_start(batch.into_remote_req()).await?;
+                    self.propose_start(batch.into_remote_req(), false).await?;
                 } else {
                     let v = self.get_v_to_repropose();
                     self.repropose_start(v).await?;
@@ -66,10 +66,10 @@ pub trait Consensus {
 
             // Read new messages and/or new local request
             let msg = select! {
-                req = client_request_rx.recv(), if nothing_ongoing && !should_repropose && !done => {
+                req = client_request_rx.recv(), if (!ongoing || self.can_forward_proposals()) && !should_repropose && !done => {
                     match req.unwrap() {
                         Some(req) =>  {
-                            self.propose_start(KVal::new(&req).into_local_req()).await?;
+                            self.propose_start(KVal::new(self.get_my_pid(), &req).into_local_req(), ongoing).await?;
                         }
                         None => {
                             done = true;
@@ -144,11 +144,15 @@ pub trait Consensus {
 
     async fn process_message(&mut self, msg: ConsensusMessage) -> io::Result<Option<Request>>;
 
-    async fn propose_start(&mut self, req: Request) -> io::Result<()>;
+    fn can_forward_proposals(&mut self) -> bool;
+
+    async fn propose_start(&mut self, req: Request, forward_to_leader: bool) -> io::Result<()>;
 
     async fn repropose_start(&mut self, v: usize) -> io::Result<()>;
 
     fn commit_slot(&mut self, v: usize, from_commit_msg: bool) -> Request;
+
+    fn get_my_pid(&self) -> usize;
 
     fn get_nb_nodes(&self) -> usize;
 

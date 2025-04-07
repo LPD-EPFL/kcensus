@@ -2,7 +2,7 @@ use crate::connector::DeSink;
 use crate::consensus::message::ConsensusMessage;
 use crate::consensus::message::ConsensusMsg::{Commit, PaxosM};
 use crate::consensus::paxos_family::epaxos_round_state::EPaxosRoundState;
-use crate::consensus::paxos_family::message::PaxosMsg::{Accept, Prepare};
+use crate::consensus::paxos_family::message::PaxosMsg::{Accept, ForwardRequest, Prepare};
 use crate::consensus::paxos_family::message::{PaxosMsg, PaxosRound};
 use crate::consensus::paxos_family::paxos_round_state::PaxosRoundState;
 use crate::consensus::paxos_family::Mode::{EPaxos, MultiPaxos, Paxos};
@@ -23,7 +23,7 @@ pub struct PaxosFamily<Sk> {
     // Settings
     nb_nodes: usize,
     my_pid: usize,
-    leader: usize,
+    leader_priority: Vec<usize>,
     mode: Mode,
     starting_round: Option<PaxosRound>,
 
@@ -50,19 +50,19 @@ impl PaxosFamily<DeSink> {
         nb_nodes: usize,
         my_pid: usize,
         sinks: MultiSink<DeSink>,
-        leader: usize,
+        leader_priority: Vec<usize>,
         mode: Mode,
     ) -> Self {
         assert!(my_pid < nb_nodes);
         let starting_round = match mode {
-            Paxos => Some(PaxosRound::default().next_proposer_round(leader)),
-            MultiPaxos => Some(PaxosRound::default().next_proposer_round(leader)),
+            Paxos => Some(PaxosRound::default().next_proposer_round(leader_priority[0])),
+            MultiPaxos => Some(PaxosRound::default().next_proposer_round(leader_priority[0])),
             EPaxos => None,
         };
         Self {
             nb_nodes,
             my_pid,
-            leader,
+            leader_priority,
             mode,
             starting_round,
 
@@ -86,19 +86,22 @@ impl Consensus for PaxosFamily<DeSink> {
             x => panic!("Unexpected message type: {:?}", x),
         };
 
-        let slot = msg.get_slot();
-        let round = msg.get_round();
-        if slot < self.slot || Some(round) < self.round {
-            return Ok(None);
-        } else if Some(round) > self.round {
-            debug_assert_ne!(round.proposer, self.my_pid);
-            self.goto_round(round);
+        match msg {
+            Prepare { slot, round, .. } | Accept { slot, round, .. } => {
+                if slot < self.slot || Some(round) < self.round {
+                    return Ok(None);
+                } else if Some(round) > self.round {
+                    debug_assert_ne!(round.proposer, self.my_pid);
+                    self.goto_round(round);
+                }
+                debug_assert_eq!(slot, self.slot);
+                debug_assert_eq!(Some(round), self.round);
+            }
+            _ => (),
         }
-        debug_assert_eq!(slot, self.slot);
-        debug_assert_eq!(Some(round), self.round);
 
         match msg {
-            Prepare { rv, .. } => {
+            Prepare { round, rv, .. } => {
                 if round.proposer != self.my_pid {
                     if self.get_my_v().is_none() {
                         debug_assert!(rv.get_accept_round().is_none());
@@ -140,7 +143,7 @@ impl Consensus for PaxosFamily<DeSink> {
                     self.broadcast_accept().await?;
                 }
             }
-            Accept { v, .. } => {
+            Accept { round, v, .. } => {
                 if round.proposer != self.my_pid {
                     self.paxos_state.accept_v(src, round, v);
                     self.answer_accept().await?;
@@ -157,15 +160,25 @@ impl Consensus for PaxosFamily<DeSink> {
                     return Ok(Some(value));
                 }
             }
+            ForwardRequest { .. } => (),
         }
 
         Ok(None)
     }
 
-    async fn propose_start(&mut self, req: Request) -> io::Result<()> {
+    #[inline]
+    fn can_forward_proposals(&mut self) -> bool {
+        matches!(self.mode, MultiPaxos)
+    }
+
+    async fn propose_start(&mut self, req: Request, forward_to_leader: bool) -> io::Result<()> {
         let v = self.store_new_request(req);
 
-        self.propose(v, true).await
+        if forward_to_leader {
+            self.broadcast(ForwardRequest { v }, true).await
+        } else {
+            self.propose(v, true).await
+        }
     }
 
     async fn repropose_start(&mut self, v: usize) -> io::Result<()> {
@@ -192,6 +205,10 @@ impl Consensus for PaxosFamily<DeSink> {
         value
     }
 
+    fn get_my_pid(&self) -> usize {
+        self.my_pid
+    }
+
     #[inline]
     fn get_nb_nodes(&self) -> usize {
         self.nb_nodes
@@ -209,7 +226,16 @@ impl Consensus for PaxosFamily<DeSink> {
 
     #[inline]
     fn should_lead(&self) -> bool {
-        self.my_pid == self.leader
+        if let MultiPaxos = self.mode {
+            self.my_pid == self.leader_priority[0]
+        } else {
+            let leader = self.leader_priority.iter().copied().find(|leader| {
+                self.requests
+                    .values()
+                    .any(|value| value.value.proposer == *leader)
+            });
+            Some(self.my_pid) == leader
+        }
     }
 
     #[inline]

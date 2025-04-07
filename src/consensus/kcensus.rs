@@ -5,6 +5,7 @@ use crate::consensus::kcensus::propagation::{MessageId, PropagationGraphs};
 use crate::consensus::kcensus::round_state::KCensusRoundState;
 use crate::consensus::message::ConsensusMessage;
 use crate::consensus::message::ConsensusMsg::{Commit, KCensusM};
+use crate::consensus::paxos_family::Mode::MultiPaxos;
 use crate::consensus::Consensus;
 use crate::message::Message::Done;
 use crate::multi_sink::MultiSink;
@@ -209,10 +210,18 @@ impl Consensus for KCensus<DeSink> {
     } // fn process_message
 
     #[inline]
-    async fn propose_start(&mut self, req: Request) -> io::Result<()> {
-        let v = self.store_new_request(req);
+    fn can_forward_proposals(&mut self) -> bool {
+        true
+    }
 
-        self.propose_and_spread(v, true).await
+    #[inline]
+    async fn propose_start(&mut self, req: Request, forward_to_leader: bool) -> io::Result<()> {
+        let v = self.store_new_request(req);
+        if forward_to_leader {
+            self.graph_spread_new_value_only(v).await
+        } else {
+            self.propose_and_spread(v, true).await
+        }
     }
 
     #[inline]
@@ -236,6 +245,10 @@ impl Consensus for KCensus<DeSink> {
         self.slot += 1;
         self.goto_round(0);
         value
+    }
+
+    fn get_my_pid(&self) -> usize {
+        self.my_pid
     }
 
     #[inline]
@@ -427,12 +440,25 @@ impl KCensus<DeSink> {
             }
             let msg_info = self.propagation_graphs.get_by_id(msg_id);
 
-            self.round_state.receive_msg(*msg_id);
-
             if !msg_info.initial_spreading_tree() {
                 continue;
             }
-            debug_assert!(self.round_state.can_send(msg_info.get_dependencies()));
+            debug_assert!(msg_info.get_dependencies().len() == 1);
+            debug_assert!(msg_info.get_dependencies().contains(&prev_msg_id));
+
+            let msg = SpreadValueOnly { msg_id: *msg_id, v };
+            send_msg!(self, msg, msg_id.dest)?;
+        }
+        Ok(())
+    }
+
+    async fn graph_spread_new_value_only(&mut self, v: usize) -> io::Result<()> {
+        for msg_id in self.propagation_graphs.get_start(self.my_pid) {
+            debug_assert_eq!(msg_id.src, self.my_pid);
+            let msg_info = self.propagation_graphs.get_by_id(msg_id);
+
+            debug_assert!(msg_info.initial_spreading_tree());
+            debug_assert!(msg_info.get_dependencies().is_empty());
 
             let msg = SpreadValueOnly { msg_id: *msg_id, v };
             send_msg!(self, msg, msg_id.dest)?;

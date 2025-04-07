@@ -54,6 +54,7 @@ enum Algo {
     KCensus,
     Paxos,
     EPaxos,
+    MultiPaxos,
     Unreplicated,
 }
 
@@ -209,34 +210,48 @@ async fn main() -> io::Result<()> {
             );
             let mut leader_prio: Vec<_> = (0..nb_nodes).collect();
             leader_prio.sort_by_key(|pid| propagation_graphs.kcensus_latencies[*pid]);
-            let mut kcensus_obj =
+            let mut consensus_obj =
                 KCensus::new(nb_nodes, my_pid, sinks, propagation_graphs, leader_prio);
-            let kcensus = kcensus_obj.run(delayed_rx, client_request_rx, committed_request_tx);
-            let _ = tokio::join!(app, kcensus);
+            let consensus = consensus_obj.run(delayed_rx, client_request_rx, committed_request_tx);
+            let _ = tokio::join!(app, consensus);
         }
         Algo::Paxos => {
-            let leader = (0..nb_nodes)
-                .min_by_key(|pid| propagation_graphs.paxos_latencies[*pid])
-                .unwrap();
+            let mut leader_prio: Vec<_> = (0..nb_nodes).collect();
+            leader_prio.sort_by_key(|pid| propagation_graphs.paxos_latencies[*pid]);
+            let leader = leader_prio[0] == my_pid;
             println!(
                 "Expected local latency (no-contention): {:?}",
-                propagation_graphs.paxos_latencies[my_pid] / if leader == my_pid { 2 } else { 1 }
+                propagation_graphs.paxos_latencies[my_pid] / if leader { 2 } else { 1 }
             );
-            let mut paxos_obj = PaxosFamily::new(nb_nodes, my_pid, sinks, leader, Mode::Paxos);
-            let paxos = paxos_obj.run(delayed_rx, client_request_rx, committed_request_tx);
-            let _ = tokio::join!(app, paxos);
+            let mut consensus_obj =
+                PaxosFamily::new(nb_nodes, my_pid, sinks, leader_prio, Mode::Paxos);
+            let consensus = consensus_obj.run(delayed_rx, client_request_rx, committed_request_tx);
+            let _ = tokio::join!(app, consensus);
         }
         Algo::EPaxos => {
-            let leader = (0..nb_nodes)
-                .min_by_key(|pid| propagation_graphs.epaxos_latencies[*pid])
-                .unwrap();
+            let mut leader_prio: Vec<_> = (0..nb_nodes).collect();
+            leader_prio.sort_by_key(|pid| propagation_graphs.epaxos_latencies[*pid]);
             println!(
                 "Expected local latency (no-contention): {:?}",
                 propagation_graphs.epaxos_latencies[my_pid]
             );
-            let mut epaxos_obj = PaxosFamily::new(nb_nodes, my_pid, sinks, leader, Mode::EPaxos);
-            let epaxos = epaxos_obj.run(delayed_rx, client_request_rx, committed_request_tx);
-            let _ = tokio::join!(app, epaxos);
+            let mut consensus_obj =
+                PaxosFamily::new(nb_nodes, my_pid, sinks, leader_prio, Mode::EPaxos);
+            let consensus = consensus_obj.run(delayed_rx, client_request_rx, committed_request_tx);
+            let _ = tokio::join!(app, consensus);
+        }
+        Algo::MultiPaxos => {
+            let mut leader_prio: Vec<_> = (0..nb_nodes).collect();
+            leader_prio.sort_by_key(|pid| propagation_graphs.multi_paxos_latencies[*pid]);
+            println!(
+                // TODO: Provide expected local latency
+                "Expected AVERAGE latency (no-contention): {:?}",
+                propagation_graphs.multi_paxos_latencies[my_pid]
+            );
+            let mut consensus_obj =
+                PaxosFamily::new(nb_nodes, my_pid, sinks, leader_prio, Mode::MultiPaxos);
+            let consensus = consensus_obj.run(delayed_rx, client_request_rx, committed_request_tx);
+            let _ = tokio::join!(app, consensus);
         }
         Algo::Unreplicated => {
             let unreplicated = async {

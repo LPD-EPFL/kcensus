@@ -28,7 +28,7 @@ impl ConsensusMessage {
     pub fn should_include_value(&self) -> bool {
         match &self.msg {
             KCensusM(msg) => msg.includes_value(),
-            PaxosM(_) => false,
+            PaxosM(msg) => msg.should_include_value(),
             Commit { .. } => false,
         }
     }
