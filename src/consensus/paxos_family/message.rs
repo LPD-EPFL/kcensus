@@ -1,5 +1,5 @@
-use crate::consensus::paxos::message::PaxosMsg::{Accept, Commit, Prepare};
-use crate::consensus::paxos::message::RoundValue::{EPaxosV, PaxosV};
+use crate::consensus::paxos_family::message::PaxosMsg::{Accept, Commit, Prepare};
+use crate::consensus::paxos_family::message::RoundValue::{EPaxosV, PaxosV};
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 
@@ -16,7 +16,7 @@ pub enum RoundValue {
         v_uid: usize,
     },
     PaxosV {
-        round: Option<PaxosRound>,
+        accept_round: Option<PaxosRound>,
         v_uid: usize,
     },
 }
@@ -57,8 +57,11 @@ impl PaxosRound {
 
 impl RoundValue {
     #[inline]
-    pub fn new_paxos_value(round: Option<PaxosRound>, v_uid: usize) -> Self {
-        PaxosV { round, v_uid }
+    pub fn new_paxos_value(accept_round: Option<PaxosRound>, v_uid: usize) -> Self {
+        PaxosV {
+            accept_round,
+            v_uid,
+        }
     }
 
     #[inline]
@@ -73,9 +76,9 @@ impl RoundValue {
         }
     }
 
-    pub fn get_round(&self) -> Option<PaxosRound> {
+    pub fn get_accept_round(&self) -> Option<PaxosRound> {
         match self {
-            PaxosV { round, .. } => *round,
+            PaxosV { accept_round, .. } => *accept_round,
             EPaxosV { .. } => None,
         }
     }

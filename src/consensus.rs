@@ -2,15 +2,15 @@ use crate::consensus::message::ConsensusMessage;
 use crate::message::Message::{ConsensusM, Done};
 use crate::message::MsgWithSource;
 use crate::value::{CommittedRequest, KVal, Request};
+use serde::{de::DeserializeOwned, Serialize};
 use std::collections::VecDeque;
 use std::io;
-use serde::{Serialize, de::DeserializeOwned};
 use tokio::select;
 use tokio::sync::mpsc::{Receiver, Sender};
 
 pub mod kcensus;
 pub mod message;
-pub mod paxos;
+pub mod paxos_family;
 
 pub trait Consensus {
     async fn run<ApplicationRequest: Serialize + DeserializeOwned>(
@@ -34,7 +34,10 @@ pub trait Consensus {
                     let msg = queued_messages.remove(i).unwrap();
                     let result = self.process_message(msg).await?;
                     if let Some(request) = result {
-                        committed_request_tx.send(request.into()).await.expect("Sending commited value");
+                        committed_request_tx
+                            .send(request.into())
+                            .await
+                            .expect("Sending commited value");
                         continue 'main_loop; // Restart from the beginning of the queue
                     }
                 } else {
@@ -100,7 +103,10 @@ pub trait Consensus {
 
                     let result = self.process_message(msg).await?;
                     if let Some(value) = result {
-                        committed_request_tx.send(value.into()).await.expect("Sending commited value");
+                        committed_request_tx
+                            .send(value.into())
+                            .await
+                            .expect("Sending commited value");
                         continue 'main_loop; // Restart from the beginning of the queue
                     }
                 }
