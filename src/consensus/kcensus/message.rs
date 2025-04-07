@@ -15,11 +15,11 @@ pub enum KCensusMsg {
     },
     Commit {
         slot: usize,
-        value_uid: usize,
+        v: usize,
     },
     SpreadValueOnly {
         msg_id: MessageId,
-        value_uid: usize,
+        v: usize,
     },
 }
 
@@ -32,17 +32,14 @@ impl KCensusMsg {
                 remote_states,
                 ..
             } => {
-                let v_uid = remote_states[src].v_uid;
+                let v = remote_states[src].v;
                 if let Some(msg_id) = msg_id {
-                    debug_assert_eq!(
-                        remote_states[src].v_uid,
-                        remote_states[msg_id.proposer].v_uid
-                    )
+                    debug_assert_eq!(remote_states[src].v, remote_states[msg_id.proposer].v)
                 }
-                v_uid.expect("v_uid of src should not be None")
+                v.expect("v of src should not be None")
             }
-            Commit { value_uid, .. } => *value_uid,
-            SpreadValueOnly { value_uid, .. } => *value_uid,
+            Commit { v, .. } => *v,
+            SpreadValueOnly { v, .. } => *v,
         }
     }
 
@@ -56,14 +53,9 @@ impl KCensusMsg {
     }
 
     #[inline]
-    pub fn should_include_value(&self) -> bool {
+    pub fn includes_value(&self) -> bool {
         match self {
-            Spread {
-                msg_id, with_value, ..
-            } => {
-                debug_assert!(!with_value || msg_id.is_some());
-                *with_value
-            }
+            Spread { with_value, .. } => *with_value,
             Commit { .. } => false,
             SpreadValueOnly { .. } => true,
         }

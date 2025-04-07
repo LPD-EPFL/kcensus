@@ -12,7 +12,7 @@ use crate::message::Message::Done;
 use crate::multi_sink::MultiSink;
 use crate::value::{KVal, Request};
 use log::{debug, info, trace};
-use message::RoundValue;
+use message::RoundV;
 use std::collections::HashMap;
 use std::io;
 
@@ -34,7 +34,7 @@ pub struct PaxosFamily<Sk> {
     // Overall state
     slot: usize,
     round: Option<PaxosRound>,
-    values: HashMap<usize, Request>,
+    requests: HashMap<usize, Request>,
 
     paxos_state: PaxosRoundState,
     epaxos_state: EPaxosRoundState,
@@ -71,7 +71,7 @@ impl PaxosFamily<DeSink> {
 
             slot: 0,
             round: starting_round,
-            values: HashMap::with_capacity(nb_nodes),
+            requests: HashMap::with_capacity(nb_nodes),
 
             paxos_state: PaxosRoundState::new(nb_nodes, my_pid),
             epaxos_state: EPaxosRoundState::new(nb_nodes, my_pid),
@@ -90,11 +90,7 @@ impl Consensus for PaxosFamily<DeSink> {
         trace!("Received message: {:?}", msg);
 
         match msg {
-            Prepare {
-                slot,
-                round,
-                round_value,
-            } => {
+            Prepare { slot, round, rv } => {
                 if slot < self.slot || Some(round) < self.round {
                     return Ok(None);
                 } else if Some(round) > self.round {
@@ -106,8 +102,8 @@ impl Consensus for PaxosFamily<DeSink> {
 
                 if round.proposer != self.my_pid {
                     if self.get_my_v().is_none() {
-                        debug_assert!(round_value.get_accept_round().is_none());
-                        self.paxos_state.propose_v(round_value)
+                        debug_assert!(rv.get_accept_round().is_none());
+                        self.paxos_state.propose_v(rv)
                     }
                     self.answer_prepare(src).await?;
                     return Ok(None);
@@ -115,25 +111,25 @@ impl Consensus for PaxosFamily<DeSink> {
 
                 debug_assert!(round.proposer == self.my_pid);
                 let was_paxos_prepared = self.paxos_state.is_prepared();
-                self.paxos_state.receive_promise(src, round_value);
+                self.paxos_state.receive_promise(src, rv);
 
                 if matches!(self.mode, EPaxos)
                     && self.paxos_state.get_last_accepted_round().is_none()
                 {
-                    if let RoundValue::EPaxosV { proposer, v_uid } = round_value {
-                        self.epaxos_state.answered(src, proposer, v_uid);
+                    if let RoundV::EPaxosV { proposer, v } = rv {
+                        self.epaxos_state.answered(src, proposer, v);
                         if self.epaxos_state.can_commit() {
                             self.broadcast_commit().await?;
-                            info!("Fast-commited: value_uid={}", v_uid);
-                            let value = self.commit_slot(v_uid, true);
+                            info!("Fast-commited: v={}", v);
+                            let value = self.commit_slot(v, true);
                             return Ok(Some(value));
                         }
 
                         let res = self.epaxos_state.try_adopt();
-                        if let Some(v_uid) = res {
+                        if let Some(v) = res {
                             // Can go to paxos accept phase
                             debug_assert!(self.paxos_state.is_prepared());
-                            self.paxos_state.adopt_from_epaxos(round, v_uid);
+                            self.paxos_state.adopt_from_epaxos(round, v);
                             self.paxos_state.self_accept_v(round);
                             self.broadcast_accept().await?;
                         }
@@ -145,11 +141,7 @@ impl Consensus for PaxosFamily<DeSink> {
                     self.broadcast_accept().await?;
                 }
             }
-            Accept {
-                slot,
-                round,
-                value_uid,
-            } => {
+            Accept { slot, round, v } => {
                 if slot < self.slot || Some(round) < self.round {
                     return Ok(None);
                 } else if Some(round) > self.round {
@@ -160,7 +152,7 @@ impl Consensus for PaxosFamily<DeSink> {
                 debug_assert_eq!(Some(round), self.round);
 
                 if round.proposer != self.my_pid {
-                    self.paxos_state.accept_v(src, round, value_uid);
+                    self.paxos_state.accept_v(src, round, v);
                     self.answer_accept().await?;
                     return Ok(None);
                 }
@@ -170,18 +162,18 @@ impl Consensus for PaxosFamily<DeSink> {
 
                 if self.paxos_state.can_commit() {
                     self.broadcast_commit().await?;
-                    info!("Commited: value_uid={}", value_uid);
-                    let value = self.commit_slot(value_uid, true);
+                    info!("Commited: v={}", v);
+                    let value = self.commit_slot(v, true);
                     return Ok(Some(value));
                 }
             }
-            Commit { slot, value_uid } => {
+            Commit { slot, v } => {
                 if slot < self.slot {
                     return Ok(None);
                 }
                 debug_assert_eq!(slot, self.slot);
-                info!("Commit msg: value_uid={}", value_uid);
-                let value = self.commit_slot(value_uid, true);
+                info!("Commit msg: v={}", v);
+                let value = self.commit_slot(v, true);
                 return Ok(Some(value));
             }
         }
@@ -190,13 +182,13 @@ impl Consensus for PaxosFamily<DeSink> {
     }
 
     async fn propose_start(&mut self, req: Request) -> io::Result<()> {
-        let value_uid = self.store_new_value(req);
+        let v = self.store_new_request(req);
 
-        self.propose(value_uid, true).await
+        self.propose(v, true).await
     }
 
-    async fn repropose_start(&mut self, value_uid: usize) -> io::Result<()> {
-        self.propose(value_uid, false).await
+    async fn repropose_start(&mut self, v: usize) -> io::Result<()> {
+        self.propose(v, false).await
     }
 
     #[inline]
@@ -225,28 +217,28 @@ impl Consensus for PaxosFamily<DeSink> {
     }
 
     #[inline]
-    fn store_new_value(&mut self, req: Request) -> usize {
-        let value_uid = self.my_pid + (self.slot * self.nb_nodes);
-        let inserted = self.values.insert(value_uid, req);
+    fn store_new_request(&mut self, req: Request) -> usize {
+        let v = self.my_pid + (self.slot * self.nb_nodes);
+        let inserted = self.requests.insert(v, req);
         debug_assert!(inserted.is_none());
-        value_uid
+        v
     }
 
     #[inline]
-    fn store_remote_value(&mut self, value_uid: usize, v: KVal) {
+    fn store_remote_request(&mut self, v: usize, value: KVal) {
         // TODO: Allow forwarding values ? (could the value already be there ?)
-        let inserted = self.values.insert(value_uid, v.into_remote_req());
+        let inserted = self.requests.insert(v, value.into_remote_req());
         debug_assert!(inserted.is_none());
     }
 
     #[inline]
-    fn knows_value(&self, v_uid: usize) -> bool {
-        self.values.contains_key(&v_uid)
+    fn knows_v(&self, v: usize) -> bool {
+        self.requests.contains_key(&v)
     }
 
     #[inline]
-    fn has_queued_values(&self) -> bool {
-        !self.values.is_empty()
+    fn has_queued_requests(&self) -> bool {
+        !self.requests.is_empty()
     }
 
     #[inline]
@@ -256,15 +248,15 @@ impl Consensus for PaxosFamily<DeSink> {
     }
 
     #[inline]
-    fn get_value_to_repropose(&self) -> usize {
-        *self.values.keys().min().unwrap()
+    fn get_v_to_repropose(&self) -> usize {
+        *self.requests.keys().min().unwrap()
     }
 }
 
 impl PaxosFamily<DeSink> {
     #[inline]
-    fn commit_slot(&mut self, value_uid: usize, commit_msg: bool) -> Request {
-        let value = self.values.remove(&value_uid).unwrap();
+    fn commit_slot(&mut self, v: usize, commit_msg: bool) -> Request {
+        let value = self.requests.remove(&v).unwrap();
         if commit_msg {
             // "<#2FB82F>Commited \"{}\" in slot {}.</>"
             debug!("Commited \"{:?}\" in slot {}.", value.value.val, self.slot);
@@ -302,7 +294,7 @@ impl PaxosFamily<DeSink> {
     #[inline]
     fn value_for_msg(&mut self, msg: &PaxosMsg, with_value: bool) -> Option<KVal> {
         if with_value {
-            Some(self.values[&msg.get_v()].value.clone())
+            Some(self.requests[&msg.get_v()].value.clone())
         } else {
             None
         }
@@ -318,7 +310,7 @@ impl PaxosFamily<DeSink> {
         self.sinks.broadcast(PaxosM(msg), value).await
     }
 
-    async fn propose(&mut self, value_uid: usize, with_value: bool) -> io::Result<()> {
+    async fn propose(&mut self, v: usize, with_value: bool) -> io::Result<()> {
         debug_assert!(self.round == self.starting_round);
         debug_assert!(self.paxos_state.get_v().is_none());
         let round = self
@@ -327,27 +319,27 @@ impl PaxosFamily<DeSink> {
             .next_proposer_round(self.my_pid);
         self.goto_round(round);
         let msg = if Some(round) != self.starting_round {
-            let round_value = match self.mode {
+            let rv = match self.mode {
                 EPaxos => {
-                    self.epaxos_state.propose_v(value_uid);
-                    RoundValue::new_epaxos_value(self.my_pid, value_uid)
+                    self.epaxos_state.propose_v(v);
+                    RoundV::new_epaxos_v(self.my_pid, v)
                 }
-                _ => RoundValue::new_paxos_value(None, value_uid),
+                _ => RoundV::new_paxos_v(None, v),
             };
-            self.paxos_state.propose_v(round_value);
+            self.paxos_state.propose_v(rv);
             Prepare {
                 slot: self.slot,
                 round,
-                round_value,
+                rv,
             }
         } else {
             debug_assert!(!matches!(self.mode, EPaxos));
-            let round_value = RoundValue::new_paxos_value(self.starting_round, value_uid);
-            self.paxos_state.propose_v(round_value);
+            let rv = RoundV::new_paxos_v(self.starting_round, v);
+            self.paxos_state.propose_v(rv);
             Accept {
                 slot: self.slot,
                 round,
-                value_uid: round_value.get_v(),
+                v: rv.get_v(),
             }
         };
         self.broadcast(msg, with_value).await
@@ -357,7 +349,7 @@ impl PaxosFamily<DeSink> {
         let msg = Prepare {
             slot: self.slot,
             round: self.round.unwrap(),
-            round_value: self.paxos_state.get_round_value().unwrap(),
+            rv: self.paxos_state.get_rv().unwrap(),
         };
         self.send(msg, src).await
     }
@@ -366,7 +358,7 @@ impl PaxosFamily<DeSink> {
         let msg = Accept {
             slot: self.slot,
             round: self.round.unwrap(),
-            value_uid: self.paxos_state.get_v().unwrap(),
+            v: self.paxos_state.get_v().unwrap(),
         };
         self.broadcast(msg, false).await
     }
@@ -376,7 +368,7 @@ impl PaxosFamily<DeSink> {
         let msg = Accept {
             slot: self.slot,
             round: self.round.unwrap(),
-            value_uid: self.paxos_state.get_v().unwrap(),
+            v: self.paxos_state.get_v().unwrap(),
         };
         self.send(msg, src).await
     }
@@ -384,7 +376,7 @@ impl PaxosFamily<DeSink> {
     async fn broadcast_commit(&mut self) -> io::Result<()> {
         let msg = Commit {
             slot: self.slot,
-            value_uid: self.paxos_state.get_v().unwrap(),
+            v: self.paxos_state.get_v().unwrap(),
         };
         self.broadcast(msg, false).await
     }

@@ -5,7 +5,7 @@ pub type Knowledge = BitSet;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct NodeState {
-    pub v_uid: Option<usize>,
+    pub v: Option<usize>,
     pub k: Knowledge,
     pub frozen: bool,
     pub proposer: bool,
@@ -14,7 +14,7 @@ pub struct NodeState {
 impl NodeState {
     #[inline]
     pub fn clear(&mut self) {
-        self.v_uid = None;
+        self.v = None;
         self.k.clear();
         self.frozen = false;
         self.proposer = false;
@@ -23,7 +23,7 @@ impl NodeState {
     #[inline]
     pub fn new(nb_nodes: usize) -> Self {
         Self {
-            v_uid: None,
+            v: None,
             k: BitSet::with_capacity(nb_nodes),
             frozen: false,
             proposer: false,

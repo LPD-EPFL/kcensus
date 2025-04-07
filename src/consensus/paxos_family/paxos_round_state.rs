@@ -1,4 +1,4 @@
-use crate::consensus::paxos_family::message::{PaxosRound, RoundValue};
+use crate::consensus::paxos_family::message::{PaxosRound, RoundV};
 use bit_set::BitSet;
 
 pub struct PaxosRoundState {
@@ -7,7 +7,7 @@ pub struct PaxosRoundState {
 
     prepared: usize,
     accepted: usize,
-    max_round_value: Option<RoundValue>,
+    max_rv: Option<RoundV>,
 
     // Only used for safety checks
     prepared_set: BitSet,
@@ -24,7 +24,7 @@ impl PaxosRoundState {
 
             prepared: 0,
             accepted: 0,
-            max_round_value: None,
+            max_rv: None,
 
             prepared_set: BitSet::with_capacity(nb_nodes),
             accepted_set: BitSet::with_capacity(nb_nodes),
@@ -42,40 +42,36 @@ impl PaxosRoundState {
     #[inline]
     pub fn full_clear(&mut self) {
         self.next_round();
-        self.max_round_value = None;
+        self.max_rv = None;
     }
 
     #[inline]
-    pub fn get_round_value(&self) -> Option<RoundValue> {
-        self.max_round_value
+    pub fn get_rv(&self) -> Option<RoundV> {
+        self.max_rv
     }
 
     #[inline]
     pub fn get_v(&self) -> Option<usize> {
-        self.max_round_value.map(|round_value| round_value.get_v())
+        self.max_rv.map(|rv| rv.get_v())
     }
 
     #[inline]
     pub fn get_last_accepted_round(&self) -> Option<PaxosRound> {
-        self.max_round_value
-            .map(|rv| rv.get_accept_round())
-            .unwrap_or(None)
+        self.max_rv.map(|rv| rv.get_accept_round()).unwrap_or(None)
     }
 
     #[inline]
-    pub fn propose_v(&mut self, v_uid: RoundValue) {
-        debug_assert!(self.max_round_value.is_none());
+    pub fn propose_v(&mut self, rv: RoundV) {
+        debug_assert!(self.max_rv.is_none());
         debug_assert!(self.prepared == 0);
         debug_assert!(self.prepared_set.is_empty());
-        self.receive_promise(self.my_pid, v_uid);
+        self.receive_promise(self.my_pid, rv);
     }
 
     #[inline]
-    pub fn receive_promise(&mut self, src: usize, round_value: RoundValue) {
-        if self.max_round_value.is_none()
-            || self.get_last_accepted_round() < round_value.get_accept_round()
-        {
-            self.max_round_value = Some(round_value);
+    pub fn receive_promise(&mut self, src: usize, rv: RoundV) {
+        if self.max_rv.is_none() || self.get_last_accepted_round() < rv.get_accept_round() {
+            self.max_rv = Some(rv);
         }
 
         let inserted = self.prepared_set.insert(src);
@@ -83,8 +79,8 @@ impl PaxosRoundState {
         self.prepared += 1;
     }
 
-    pub fn adopt_from_epaxos(&mut self, round: PaxosRound, v_uid: usize) {
-        self.max_round_value = Some(RoundValue::new_paxos_value(Some(round), v_uid));
+    pub fn adopt_from_epaxos(&mut self, round: PaxosRound, v: usize) {
+        self.max_rv = Some(RoundV::new_paxos_v(Some(round), v));
     }
 
     #[inline]
@@ -95,9 +91,9 @@ impl PaxosRoundState {
     }
 
     #[inline]
-    pub fn accept_v(&mut self, src: usize, round: PaxosRound, v_uid: usize) {
+    pub fn accept_v(&mut self, src: usize, round: PaxosRound, v: usize) {
         debug_assert!(self.get_last_accepted_round() < Some(round));
-        self.max_round_value = Some(RoundValue::new_paxos_value(Some(round), v_uid));
+        self.max_rv = Some(RoundV::new_paxos_v(Some(round), v));
         self.receive_accepted(src);
     }
 

@@ -71,13 +71,13 @@ impl KCensusRoundState {
 
     #[inline]
     pub fn get_my_v(&self) -> Option<usize> {
-        my_state!(self).v_uid
+        my_state!(self).v
     }
 
     #[inline]
-    pub fn set_my_v(&mut self, v_uid: usize) {
+    pub fn set_my_v(&mut self, v: usize) {
         debug_assert!(self.get_my_v().is_none());
-        my_state!(self).v_uid = Some(v_uid);
+        my_state!(self).v = Some(v);
     }
 
     #[inline]
@@ -134,20 +134,20 @@ impl KCensusRoundState {
         for (pid, remote_node_state) in remote_states.iter().enumerate() {
             let local_node_state = &mut self.node_states[pid];
             local_node_state.k.union_with(&remote_node_state.k);
-            if let Some(node_v_uid) = remote_node_state.v_uid {
+            if let Some(node_v) = remote_node_state.v {
                 if remote_node_state.proposer && !local_node_state.proposer {
                     debug_assert_ne!(pid, self.my_pid);
-                    debug_assert!(local_node_state.v_uid.is_none());
+                    debug_assert!(local_node_state.v.is_none());
                     self.proposers.push(pid);
                     local_node_state.proposer = true;
                 }
-                debug_assert_eq!(local_node_state.v_uid.unwrap_or(node_v_uid), node_v_uid);
-                local_node_state.v_uid = Some(node_v_uid);
+                debug_assert_eq!(local_node_state.v.unwrap_or(node_v), node_v);
+                local_node_state.v = Some(node_v);
             } else {
                 debug_assert!(!remote_node_state.proposer);
             }
             local_node_state.frozen |= remote_node_state.frozen;
-            if !self.am_i_frozen() && self.get_my_v() == remote_node_state.v_uid {
+            if !self.am_i_frozen() && self.get_my_v() == remote_node_state.v {
                 // Only accumulate into your own knowledge if you're not frozen
                 my_state!(self).k.union_with(&remote_states[pid].k);
             }
@@ -183,7 +183,7 @@ impl KCensusRoundState {
             if !some_node.frozen {
                 continue;
             }
-            let v = some_node.v_uid;
+            let v = some_node.v;
             // For all v in the frozen set
             if v == max_score_v {
                 continue;
@@ -192,7 +192,7 @@ impl KCensusRoundState {
             let mut v_frozen_count = 0;
             self._bitset_scratchpad.clear();
             for node in self.node_states.iter() {
-                if !node.frozen || v != node.v_uid {
+                if !node.frozen || v != node.v {
                     continue;
                 }
                 v_frozen_count += 1;
@@ -218,7 +218,7 @@ impl KCensusRoundState {
 
     // TODO: Allow can_commit to run for other proposals ?
     pub fn can_commit(&mut self) -> bool {
-        // TODO: Filter on v_uid instead of using my k ? (helps if frozen or to allow commiting other props)
+        // TODO: Filter on v instead of using my k ? (helps if frozen or to allow commiting other props)
         let k_size = my_state!(self).k.len();
         debug_assert!(k_size <= self.nb_nodes);
         if k_size < self.majority {
@@ -337,8 +337,8 @@ impl fmt::Display for KCensusRoundState {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         // write!(f, "[")?;
         for (i, state) in self.node_states.iter().enumerate() {
-            if let Some(v_uid) = state.v_uid {
-                write!(f, "\n  {}: uid={}, k={:?}", i, v_uid, state.k)?;
+            if let Some(v) = state.v {
+                write!(f, "\n  {}: v={}, k={:?}", i, v, state.k)?;
             }
         }
         // write!(f, "\n]")?;

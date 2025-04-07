@@ -33,7 +33,7 @@ pub struct KCensus<Sk> {
     // Overall state
     slot: usize,
     round: usize,
-    values: HashMap<usize, Request>,
+    requests: HashMap<usize, Request>,
 
     round_state: KCensusRoundState,
 }
@@ -65,7 +65,7 @@ impl KCensus<DeSink> {
 
             slot: 0,
             round: 0,
-            values: HashMap::with_capacity(nb_nodes),
+            requests: HashMap::with_capacity(nb_nodes),
 
             round_state: KCensusRoundState::new(nb_nodes, my_pid),
         }
@@ -75,7 +75,7 @@ impl KCensus<DeSink> {
 impl Consensus for KCensus<DeSink> {
     async fn process_message(&mut self, msg: ConsensusMessage) -> io::Result<Option<Request>> {
         debug_assert!(self.ready_to_process(&msg));
-        let msg_v_uid = msg.get_v();
+        let msg_v = msg.get_v();
         let src = msg.src;
         let msg = match msg.msg {
             KCensusM(msg) => msg,
@@ -95,7 +95,7 @@ impl Consensus for KCensus<DeSink> {
                 if slot < self.slot || round < self.round {
                     if with_value {
                         let msg_id = msg_id.expect("Can't spread value without msg_id");
-                        self.graph_spread_value_only(msg_id, msg_v_uid).await?;
+                        self.graph_spread_value_only(msg_id, msg_v).await?;
                     }
                     return Ok(None);
                 } else if round > self.round {
@@ -105,14 +105,14 @@ impl Consensus for KCensus<DeSink> {
                 debug_assert_eq!(round, self.round);
                 let old_proposer_count = self.round_state.proposers().len();
 
-                let no_val_before = self.round_state.get_my_v().is_none();
-                if no_val_before {
+                let no_v_before = self.round_state.get_my_v().is_none();
+                if no_v_before {
                     debug_assert!(old_proposer_count == 0);
                     debug_assert!(!self.round_state.am_i_frozen());
-                    // TODO: pick most popular v_uid instead ?
-                    self.round_state.set_my_v(msg_v_uid);
+                    // TODO: pick most popular v instead ?
+                    self.round_state.set_my_v(msg_v);
                 }
-                let my_v_uid = self.round_state.get_my_v().unwrap();
+                let my_v = self.round_state.get_my_v().unwrap();
 
                 let learned = self.round_state.learn_from(&remote_states);
                 let proposer_count = self.round_state.proposers().len();
@@ -125,22 +125,22 @@ impl Consensus for KCensus<DeSink> {
                 // TODO: Make can_commit faster when using graph
                 if self.round_state.i_am_proposer() && self.round_state.can_commit() {
                     debug_assert!(!with_value); // can't be my value -> there would be a conflict
-                    let value_uid = self.round_state.get_my_v().unwrap();
-                    self.broadcast(Commit { slot, value_uid }).await?;
-                    let value = self.commit_slot(my_v_uid, false);
+                    let v = self.round_state.get_my_v().unwrap();
+                    self.broadcast(Commit { slot, v }).await?;
+                    let value = self.commit_slot(my_v, false);
                     return Ok(Some(value));
                 }
 
                 let msg_frozen = remote_states[src].frozen;
 
-                if msg_frozen || msg_v_uid != my_v_uid {
+                if msg_frozen || msg_v != my_v {
                     let orig_frozen = self.round_state.am_i_frozen();
                     self.round_state.freeze();
 
                     if with_value {
                         debug_assert!(!msg_frozen); // Can't spread value in frozen messages.
                         let msg_id = msg_id.expect("Can't spread value without msg_id");
-                        self.graph_spread_value_only(msg_id, msg_v_uid).await?;
+                        self.graph_spread_value_only(msg_id, msg_v).await?;
                     }
 
                     // TODO: only try to adopt if I'm the proposer with lowest id ?
@@ -204,16 +204,14 @@ impl Consensus for KCensus<DeSink> {
                     }
                 }
             }
-            SpreadValueOnly { msg_id, value_uid } => {
-                self.graph_spread_value_only(msg_id, value_uid).await?
-            }
-            Commit { slot, value_uid } => {
+            SpreadValueOnly { msg_id, v } => self.graph_spread_value_only(msg_id, v).await?,
+            Commit { slot, v } => {
                 if slot < self.slot {
                     return Ok(None);
                 }
                 debug_assert_eq!(slot, self.slot);
-                info!("Commit msg: value_uid={}", value_uid);
-                let value = self.commit_slot(value_uid, true);
+                info!("Commit msg: v={}", v);
+                let value = self.commit_slot(v, true);
                 return Ok(Some(value));
             }
         } // match command
@@ -222,14 +220,14 @@ impl Consensus for KCensus<DeSink> {
 
     #[inline]
     async fn propose_start(&mut self, req: Request) -> io::Result<()> {
-        let value_uid = self.store_new_value(req);
+        let v = self.store_new_request(req);
 
-        self.propose_and_spread(value_uid, true).await
+        self.propose_and_spread(v, true).await
     }
 
     #[inline]
-    async fn repropose_start(&mut self, value_uid: usize) -> io::Result<()> {
-        self.propose_and_spread(value_uid, false).await
+    async fn repropose_start(&mut self, v: usize) -> io::Result<()> {
+        self.propose_and_spread(v, false).await
     }
 
     #[inline]
@@ -258,28 +256,28 @@ impl Consensus for KCensus<DeSink> {
     }
 
     #[inline]
-    fn store_new_value(&mut self, req: Request) -> usize {
-        let value_uid = self.my_pid + (self.slot * self.nb_nodes);
-        let inserted = self.values.insert(value_uid, req);
+    fn store_new_request(&mut self, req: Request) -> usize {
+        let v = self.my_pid + (self.slot * self.nb_nodes);
+        let inserted = self.requests.insert(v, req);
         debug_assert!(inserted.is_none());
-        value_uid
+        v
     }
 
     #[inline]
-    fn store_remote_value(&mut self, value_uid: usize, v: KVal) {
+    fn store_remote_request(&mut self, v: usize, value: KVal) {
         // TODO: Allow forwarding values ? (could the value already be there ?)
-        let inserted = self.values.insert(value_uid, v.into_remote_req());
+        let inserted = self.requests.insert(v, value.into_remote_req());
         debug_assert!(inserted.is_none());
     }
 
     #[inline]
-    fn knows_value(&self, v_uid: usize) -> bool {
-        self.values.contains_key(&v_uid)
+    fn knows_v(&self, v: usize) -> bool {
+        self.requests.contains_key(&v)
     }
 
     #[inline]
-    fn has_queued_values(&self) -> bool {
-        !self.values.is_empty()
+    fn has_queued_requests(&self) -> bool {
+        !self.requests.is_empty()
     }
 
     #[inline]
@@ -289,15 +287,15 @@ impl Consensus for KCensus<DeSink> {
     }
 
     #[inline]
-    fn get_value_to_repropose(&self) -> usize {
-        *self.values.keys().min().unwrap()
+    fn get_v_to_repropose(&self) -> usize {
+        *self.requests.keys().min().unwrap()
     }
 }
 
 impl KCensus<DeSink> {
     #[inline]
-    fn commit_slot(&mut self, value_uid: usize, commit_msg: bool) -> Request {
-        let value = self.values.remove(&value_uid).unwrap();
+    fn commit_slot(&mut self, v: usize, commit_msg: bool) -> Request {
+        let value = self.requests.remove(&v).unwrap();
         if commit_msg {
             // "<#2FB82F>Commited \"{}\" in slot {}.</>"
             debug!("Commited \"{:?}\" in slot {}.", value.value.val, self.slot);
@@ -332,9 +330,9 @@ impl KCensus<DeSink> {
 
     #[inline]
     fn value_for_msg(&self, msg: &KCensusMsg) -> Option<KVal> {
-        if msg.should_include_value() {
-            let value_uid = msg.get_v(self.my_pid);
-            Some(self.values[&value_uid].value.clone())
+        if msg.includes_value() {
+            let v = msg.get_v(self.my_pid);
+            Some(self.requests[&v].value.clone())
         } else {
             None
         }
@@ -368,12 +366,16 @@ impl KCensus<DeSink> {
         self.broadcast(msg).await
     }
 
-    async fn propose_and_spread(&mut self, value_uid: usize, with_value: bool) -> io::Result<()> {
-        self.round_state.set_my_v(value_uid);
+    async fn propose_and_spread(&mut self, v: usize, with_value: bool) -> io::Result<()> {
+        self.round_state.set_my_v(v);
         self.round_state.become_proposer();
 
         for msg_id in self.propagation_graphs.get_start(self.my_pid).iter() {
-            debug_assert!(self.propagation_graphs.get_by_id(msg_id).get_with_value());
+            debug_assert!(
+                self.propagation_graphs
+                    .get_by_id(msg_id)
+                    .initial_spreading_tree()
+            );
             debug_assert!(
                 self.propagation_graphs
                     .get_by_id(msg_id)
@@ -404,7 +406,7 @@ impl KCensus<DeSink> {
             let msg_info = self.propagation_graphs.get_by_id(msg_id);
 
             if !self.round_state.can_send(msg_info.get_dependencies()) {
-                debug_assert!(!msg_info.get_with_value());
+                debug_assert!(!msg_info.initial_spreading_tree());
                 continue;
             }
 
@@ -415,7 +417,7 @@ impl KCensus<DeSink> {
                 round: self.round,
                 msg_id: Some(*msg_id),
                 remote_states: self.round_state.clone_node_states(),
-                with_value: with_value && msg_info.get_with_value(),
+                with_value: with_value && msg_info.initial_spreading_tree(),
             };
             send_msg!(self, msg, msg_id.dest)?;
         }
@@ -425,7 +427,7 @@ impl KCensus<DeSink> {
     async fn graph_spread_value_only(
         &mut self,
         prev_msg_id: MessageId,
-        value_uid: usize,
+        v: usize,
     ) -> io::Result<()> {
         let prev_msg_info = self.propagation_graphs.get_by_id(&prev_msg_id);
         // Potential follow-up messages:
@@ -437,15 +439,12 @@ impl KCensus<DeSink> {
 
             self.round_state.receive_msg(*msg_id);
 
-            if !msg_info.get_with_value() {
+            if !msg_info.initial_spreading_tree() {
                 continue;
             }
             debug_assert!(self.round_state.can_send(msg_info.get_dependencies()));
 
-            let msg = SpreadValueOnly {
-                msg_id: *msg_id,
-                value_uid,
-            };
+            let msg = SpreadValueOnly { msg_id: *msg_id, v };
             send_msg!(self, msg, msg_id.dest)?;
         }
         Ok(())

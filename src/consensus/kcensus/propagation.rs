@@ -32,12 +32,12 @@ impl Display for MessageId {
 pub struct MessageInfo {
     dependencies: HashSet<MessageId>,
     needed_by: Vec<MessageId>,
-    with_value: bool,
+    initial_spreading_tree: bool,
 }
 
 impl Display for MessageInfo {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{{val={},deps=[", self.with_value)?;
+        write!(f, "{{val={},deps=[", self.initial_spreading_tree)?;
         for (i, x) in self.dependencies.iter().enumerate() {
             write!(f, "{}{}", if i == 0 { "" } else { ", " }, x)?;
         }
@@ -62,8 +62,8 @@ impl MessageInfo {
     }
 
     #[inline]
-    pub fn get_with_value(&self) -> bool {
-        self.with_value
+    pub fn initial_spreading_tree(&self) -> bool {
+        self.initial_spreading_tree
     }
 }
 
@@ -168,7 +168,7 @@ fn compute_propagation_graphs(topology: &Topology) -> PropagationGraphs {
             triangular_paths.last().unwrap()
         );
 
-        // Used to ensure the raw value is sent to everyone (not for knowledge spreading)
+        // Used to ensure the value is sent to everyone (not for knowledge spreading)
         let mut value_only_paths: Vec<TriangularPath> = Vec::with_capacity(topology.nb_nodes);
         for node in 0..topology.nb_nodes {
             let total_latency =
@@ -230,7 +230,7 @@ fn compute_propagation_graphs(topology: &Topology) -> PropagationGraphs {
             if !value_only_path {
                 if round_state.can_commit() {
                     i = 0;
-                    trace!("Messages in graph (before adding value_only paths): ");
+                    trace!("Messages in graph (before adding \"value only\" paths): ");
                     let mut messages = message_graph.iter().collect::<Vec<_>>();
                     messages.sort_by_key(|(x, _)| (x.time, x.src, x.dest));
                     for msg in messages.into_iter() {
@@ -359,7 +359,7 @@ fn compute_propagation_graphs(topology: &Topology) -> PropagationGraphs {
                                 MessageInfo {
                                     dependencies,
                                     needed_by: vec![],
-                                    with_value: shortest_path_from_proposer,
+                                    initial_spreading_tree: shortest_path_from_proposer,
                                 },
                             )
                             .is_none();

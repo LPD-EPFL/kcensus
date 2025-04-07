@@ -18,14 +18,14 @@ pub struct ConsensusMessage {
 impl ConsensusMessage {
     pub fn can_include_value(&self) -> bool {
         match &self.msg {
-            KCensusM(msg) => msg.should_include_value(),
+            KCensusM(msg) => msg.includes_value(),
             PaxosM(msg) => msg.can_include_value(self.src),
         }
     }
 
     pub fn should_include_value(&self) -> bool {
         match &self.msg {
-            KCensusM(msg) => msg.should_include_value(),
+            KCensusM(msg) => msg.includes_value(),
             PaxosM(_) => false,
         }
     }

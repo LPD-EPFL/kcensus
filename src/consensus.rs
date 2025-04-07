@@ -50,15 +50,15 @@ pub trait Consensus {
             }
 
             let nothing_ongoing = self.get_my_v().is_none() && max_queued_slot <= self.get_slot();
-            let should_repropose = nothing_ongoing && self.has_queued_values();
+            let should_repropose = nothing_ongoing && self.has_queued_requests();
             // TODO: (Optim.) peak connection first ?
             if should_repropose && self.should_lead() {
                 // TODO: Leader election / only leader should repropose !!!!!!!!!!!!!!!!!!
                 if let Some(batch) = self.get_new_batch_to_propose() {
                     self.propose_start(batch.into_remote_req()).await?;
                 } else {
-                    let v_uid = self.get_value_to_repropose();
-                    self.repropose_start(v_uid).await?;
+                    let v = self.get_v_to_repropose();
+                    self.repropose_start(v).await?;
                 }
             }
 
@@ -85,10 +85,10 @@ pub trait Consensus {
 
             match msg.msg {
                 ConsensusM { msg, value } => {
-                    if let Some(v) = value {
+                    if let Some(value) = value {
                         debug_assert!(msg.can_include_value());
-                        let value_uid = msg.get_v();
-                        self.store_remote_value(value_uid, v);
+                        let v = msg.get_v();
+                        self.store_remote_request(v, value);
                     } else {
                         debug_assert!(!msg.should_include_value());
                     }
@@ -122,14 +122,14 @@ pub trait Consensus {
 
     #[inline]
     fn ready_to_process(&self, msg: &ConsensusMessage) -> bool {
-        msg.get_slot() <= self.get_slot() && self.knows_value(msg.get_v())
+        msg.get_slot() <= self.get_slot() && self.knows_v(msg.get_v())
     }
 
     async fn process_message(&mut self, msg: ConsensusMessage) -> io::Result<Option<Request>>;
 
     async fn propose_start(&mut self, req: Request) -> io::Result<()>;
 
-    async fn repropose_start(&mut self, value_uid: usize) -> io::Result<()>;
+    async fn repropose_start(&mut self, v: usize) -> io::Result<()>;
 
     fn get_nb_nodes(&self) -> usize;
 
@@ -141,15 +141,15 @@ pub trait Consensus {
 
     async fn announce_done(&mut self) -> io::Result<()>;
 
-    fn store_new_value(&mut self, req: Request) -> usize;
+    fn store_new_request(&mut self, req: Request) -> usize;
 
-    fn store_remote_value(&mut self, value_uid: usize, v: KVal);
+    fn store_remote_request(&mut self, v: usize, value: KVal);
 
-    fn knows_value(&self, v_uid: usize) -> bool;
+    fn knows_v(&self, v: usize) -> bool;
 
-    fn has_queued_values(&self) -> bool;
+    fn has_queued_requests(&self) -> bool;
 
     fn get_new_batch_to_propose(&self) -> Option<KVal>;
 
-    fn get_value_to_repropose(&self) -> usize;
+    fn get_v_to_repropose(&self) -> usize;
 }

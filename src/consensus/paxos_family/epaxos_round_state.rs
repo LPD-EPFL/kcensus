@@ -8,7 +8,7 @@ pub struct EPaxosRoundState {
 
     answers: usize,
     accepted: usize,
-    proposer_to_value: HashMap<usize, usize>,
+    proposer_to_v: HashMap<usize, usize>,
     proposer_scores: Vec<usize>,
 
     // Only used for safety checks
@@ -27,7 +27,7 @@ impl EPaxosRoundState {
 
             answers: 0,
             accepted: 0,
-            proposer_to_value: HashMap::with_capacity(nb_nodes),
+            proposer_to_v: HashMap::with_capacity(nb_nodes),
             proposer_scores: vec![2; nb_nodes],
 
             answer_set: BitSet::with_capacity(nb_nodes),
@@ -38,24 +38,24 @@ impl EPaxosRoundState {
     pub fn full_clear(&mut self) {
         self.answers = 0;
         self.accepted = 0;
-        self.proposer_to_value.clear();
+        self.proposer_to_v.clear();
         self.proposer_scores.fill(2);
         self.answer_set.clear();
     }
 
     #[inline]
-    pub fn propose_v(&mut self, v_uid: usize) {
-        debug_assert!(self.proposer_to_value.is_empty());
+    pub fn propose_v(&mut self, v: usize) {
+        debug_assert!(self.proposer_to_v.is_empty());
         debug_assert_eq!(self.proposer_scores[self.my_pid], 1);
         debug_assert!(self.answer_set.is_empty());
         debug_assert_eq!(self.answers, 0);
         debug_assert_eq!(self.accepted, 0);
-        self.answered(self.my_pid, self.my_pid, v_uid);
+        self.answered(self.my_pid, self.my_pid, v);
     }
 
     #[inline]
-    pub fn answered(&mut self, src: usize, proposer: usize, v_uid: usize) {
-        self.proposer_to_value.insert(proposer, v_uid);
+    pub fn answered(&mut self, src: usize, proposer: usize, v: usize) {
+        self.proposer_to_v.insert(proposer, v);
         if src != proposer {
             self.proposer_scores[proposer] += 1;
         } else {
@@ -72,30 +72,30 @@ impl EPaxosRoundState {
 
     #[inline]
     pub fn can_commit(&self) -> bool {
-        debug_assert!(self.proposer_to_value.contains_key(&self.my_pid));
-        self.proposer_to_value.len() == 1 && self.accepted >= self.e_paxos_quorum
+        debug_assert!(self.proposer_to_v.contains_key(&self.my_pid));
+        self.proposer_to_v.len() == 1 && self.accepted >= self.e_paxos_quorum
     }
 
     // Note: If I receive an answer from a proposer, he will not commit (guaranteed)
     pub fn try_adopt(&self) -> Option<usize> {
-        debug_assert!(self.proposer_to_value.contains_key(&self.my_pid));
+        debug_assert!(self.proposer_to_v.contains_key(&self.my_pid));
         if self.answers < self.majority {
             None
-        } else if self.proposer_to_value.len() < 2 {
+        } else if self.proposer_to_v.len() < 2 {
             // Don't adopt unless there's more than 1 proposal (for now)
             // TODO: have some form of timeout in case too many died ?
             None
         } else {
             let mut best_score = 0;
-            let mut best_value = None;
-            for (proposer, value) in self.proposer_to_value.iter() {
+            let mut best_v = None;
+            for (proposer, v) in self.proposer_to_v.iter() {
                 let score = self.proposer_scores[*proposer];
                 if score > best_score {
-                    best_value = Some(*value);
+                    best_v = Some(*v);
                     best_score = score;
                 }
             }
-            best_value
+            best_v
         }
     }
 }

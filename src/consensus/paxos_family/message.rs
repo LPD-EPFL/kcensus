@@ -1,5 +1,5 @@
 use crate::consensus::paxos_family::message::PaxosMsg::{Accept, Commit, Prepare};
-use crate::consensus::paxos_family::message::RoundValue::{EPaxosV, PaxosV};
+use crate::consensus::paxos_family::message::RoundV::{EPaxosV, PaxosV};
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 
@@ -10,14 +10,14 @@ pub struct PaxosRound {
 }
 
 #[derive(Copy, Clone, Debug, Serialize, Deserialize)]
-pub enum RoundValue {
+pub enum RoundV {
     EPaxosV {
         proposer: usize,
-        v_uid: usize,
+        v: usize,
     },
     PaxosV {
         accept_round: Option<PaxosRound>,
-        v_uid: usize,
+        v: usize,
     },
 }
 
@@ -27,16 +27,16 @@ pub enum PaxosMsg {
     Prepare {
         slot: usize,
         round: PaxosRound,
-        round_value: RoundValue,
+        rv: RoundV,
     },
     Accept {
         slot: usize,
         round: PaxosRound,
-        value_uid: usize,
+        v: usize,
     },
     Commit {
         slot: usize,
-        value_uid: usize,
+        v: usize,
     },
 }
 
@@ -55,24 +55,21 @@ impl PaxosRound {
     }
 }
 
-impl RoundValue {
+impl RoundV {
     #[inline]
-    pub fn new_paxos_value(accept_round: Option<PaxosRound>, v_uid: usize) -> Self {
-        PaxosV {
-            accept_round,
-            v_uid,
-        }
+    pub fn new_paxos_v(accept_round: Option<PaxosRound>, v: usize) -> Self {
+        PaxosV { accept_round, v }
     }
 
     #[inline]
-    pub fn new_epaxos_value(proposer: usize, v_uid: usize) -> Self {
-        EPaxosV { proposer, v_uid }
+    pub fn new_epaxos_v(proposer: usize, v: usize) -> Self {
+        EPaxosV { proposer, v }
     }
 
     pub fn get_v(&self) -> usize {
         match self {
-            PaxosV { v_uid, .. } => *v_uid,
-            EPaxosV { v_uid, .. } => *v_uid,
+            PaxosV { v, .. } => *v,
+            EPaxosV { v, .. } => *v,
         }
     }
 
@@ -88,9 +85,9 @@ impl PaxosMsg {
     #[inline]
     pub fn get_v(&self) -> usize {
         match self {
-            Prepare { round_value, .. } => round_value.get_v(),
-            Accept { value_uid, .. } => *value_uid,
-            Commit { value_uid, .. } => *value_uid,
+            Prepare { rv, .. } => rv.get_v(),
+            Accept { v, .. } => *v,
+            Commit { v, .. } => *v,
         }
     }
 
