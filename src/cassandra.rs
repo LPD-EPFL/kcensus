@@ -1,3 +1,4 @@
+use crate::consensus::command::Command;
 use rand_distr::{Distribution, Exp};
 use scylla::client::{session::Session, session_builder::SessionBuilder};
 use scylla::statement::prepared::PreparedStatement;
@@ -111,7 +112,7 @@ impl PreparedHandler {
 
 pub struct Client {
     pub my_pid: usize,
-    pub client_request_tx: Sender<Option<Request>>,
+    pub new_client_request_tx: Sender<Command>,
     pub client_response_rx: Receiver<Response>,
     pub num_committed_watch_rx: WatchReceiver<usize>,
 }
@@ -163,14 +164,20 @@ impl Client {
                 }
             }
             let request = if rand::random_range(0. ..1.) < workload.rw_ratio {
-                Request::Put {
-                    key: "single-key".into(),
-                    value: format!("v{}.{}!", self.my_pid, i),
-                }
+                Command::new_write(
+                    self.my_pid,
+                    &Request::Put {
+                        key: "single-key".into(),
+                        value: format!("v{}.{}!", self.my_pid, i),
+                    },
+                )
             } else {
-                Request::Get {
-                    key: "single-key".into(),
-                }
+                Command::new_read_only(
+                    self.my_pid,
+                    &Request::Get {
+                        key: "single-key".into(),
+                    },
+                )
             };
             request_generated = workload.interval.next(&request_generated);
             let time_before_generation =
@@ -181,8 +188,8 @@ impl Client {
                     .expect("Failed to sleep");
             }
             let issued = Instant::now();
-            self.client_request_tx
-                .send(request.into())
+            self.new_client_request_tx
+                .send(request)
                 .await
                 .expect("Client failed to queue request");
             let response = self
@@ -199,10 +206,6 @@ impl Client {
             };
             log("executed", &event);
         }
-        self.client_request_tx
-            .send(None)
-            .await
-            .expect("Client failed to enqueue None request");
     }
 }
 

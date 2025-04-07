@@ -1,12 +1,13 @@
+use crate::cassandra::Request;
 use crate::connector::Connector;
 use crate::consensus::paxos_family::{Mode, PaxosFamily};
 use crate::consensus::Consensus;
 use crate::message::Message;
 use crate::multi_sink::MultiSink;
 use crate::topology::Topology;
-use crate::value::CommittedRequest;
 use chrono::prelude::*;
 use clap::Parser;
+use consensus::command::{Command, CommittedCommand};
 use consensus::kcensus::propagation::PropagationGraphs;
 use consensus::kcensus::KCensus;
 use env_logger::fmt::style;
@@ -26,7 +27,6 @@ mod delayer;
 mod message;
 mod multi_sink;
 mod topology;
-mod value;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -113,19 +113,18 @@ async fn main() -> io::Result<()> {
     let input_stream = select_all(streams);
 
     // TODO: Channel buffer size ?
-    let (delayed_tx, delayed_rx) = mpsc::channel(1);
+    let (delayed_msg_tx, delayed_msg_rx) = mpsc::channel(1);
 
     let delayer_task = tokio::task::spawn(delayer::delayer(
         topology.clone(),
         my_pid,
         input_stream,
-        delayed_tx,
+        delayed_msg_tx,
     ));
 
-    let (client_request_tx, mut client_request_rx) = mpsc::channel(1);
+    let (new_client_request_tx, mut new_client_request_rx) = mpsc::channel(1);
+    let (committed_request_tx, mut committed_request_rx) = mpsc::channel::<Command>(1);
     let (client_response_tx, client_response_rx) = mpsc::channel(1);
-    let (committed_request_tx, mut committed_request_rx) =
-        mpsc::channel::<CommittedRequest<cassandra::Request>>(1);
     let (num_committed_watch_tx, num_committed_watch_rx) = watch::channel(0usize);
 
     let cassandra = if let Some(uri) = args.db {
@@ -144,7 +143,7 @@ async fn main() -> io::Result<()> {
     let client_task = tokio::task::spawn(async move {
         let client = cassandra::Client {
             my_pid,
-            client_request_tx,
+            new_client_request_tx,
             client_response_rx,
             num_committed_watch_rx,
         };
@@ -172,27 +171,24 @@ async fn main() -> io::Result<()> {
             0
         };
         num_committed_watch_tx.send(num_committed).ok(); // Client not listening for back pressure
-        while let Some(req) = committed_request_rx.recv().await {
+        while let Some(command) = committed_request_rx.recv().await {
+            let command: CommittedCommand<Request> = command.into();
             num_committed += if let Algo::Unreplicated = args.algo {
                 nb_nodes
             } else {
                 1
             };
-            trace!("About to execute committed request: {:?}", req);
+            trace!("About to execute committed request: {:?}", command);
             let response = if let Some(cassandra) = cassandra.as_ref() {
-                cassandra.execute(req.request).await
+                cassandra.execute(command.app_request).await
             } else {
                 // We mock Cassandra
-                match req.request {
-                    cassandra::Request::Put { key, value } => {
-                        cassandra::Response::Put { key, value }
-                    }
-                    cassandra::Request::Get { key } => {
-                        cassandra::Response::Get { key, value: None }
-                    }
+                match command.app_request {
+                    Request::Put { key, value } => cassandra::Response::Put { key, value },
+                    Request::Get { key } => cassandra::Response::Get { key, value: None },
                 }
             };
-            if req.local {
+            if command.proposer == my_pid {
                 client_response_tx
                     .send(response)
                     .await
@@ -212,7 +208,8 @@ async fn main() -> io::Result<()> {
             leader_prio.sort_by_key(|pid| propagation_graphs.kcensus_latencies[*pid]);
             let mut consensus_obj =
                 KCensus::new(nb_nodes, my_pid, sinks, propagation_graphs, leader_prio);
-            let consensus = consensus_obj.run(delayed_rx, client_request_rx, committed_request_tx);
+            let consensus =
+                consensus_obj.run(delayed_msg_rx, new_client_request_rx, committed_request_tx);
             let _ = tokio::join!(app, consensus);
         }
         Algo::Paxos => {
@@ -225,7 +222,8 @@ async fn main() -> io::Result<()> {
             );
             let mut consensus_obj =
                 PaxosFamily::new(nb_nodes, my_pid, sinks, leader_prio, Mode::Paxos);
-            let consensus = consensus_obj.run(delayed_rx, client_request_rx, committed_request_tx);
+            let consensus =
+                consensus_obj.run(delayed_msg_rx, new_client_request_rx, committed_request_tx);
             let _ = tokio::join!(app, consensus);
         }
         Algo::EPaxos => {
@@ -237,7 +235,8 @@ async fn main() -> io::Result<()> {
             );
             let mut consensus_obj =
                 PaxosFamily::new(nb_nodes, my_pid, sinks, leader_prio, Mode::EPaxos);
-            let consensus = consensus_obj.run(delayed_rx, client_request_rx, committed_request_tx);
+            let consensus =
+                consensus_obj.run(delayed_msg_rx, new_client_request_rx, committed_request_tx);
             let _ = tokio::join!(app, consensus);
         }
         Algo::MultiPaxos => {
@@ -251,7 +250,8 @@ async fn main() -> io::Result<()> {
             );
             let mut consensus_obj =
                 PaxosFamily::new(nb_nodes, my_pid, sinks, leader_prio, Mode::MultiPaxos);
-            let consensus = consensus_obj.run(delayed_rx, client_request_rx, committed_request_tx);
+            let consensus =
+                consensus_obj.run(delayed_msg_rx, new_client_request_rx, committed_request_tx);
             let _ = tokio::join!(app, consensus);
         }
         Algo::Unreplicated => {
@@ -268,24 +268,17 @@ async fn main() -> io::Result<()> {
                     .expect("There should be a leader");
                 let leader_ping = topology.rtts[leader][my_pid];
                 println!("leader ping: {:?}", leader_ping);
-                while let Some(request) = client_request_rx
-                    .recv()
-                    .await
-                    .expect("Unreplicated server failed to recv client Request")
-                {
+                while let Some(command) = new_client_request_rx.recv().await {
                     tokio_timerfd::sleep(leader_ping)
                         .await
                         .expect("Unreplicated server failed to sleep");
                     committed_request_tx
-                        .send(CommittedRequest {
-                            request,
-                            local: true,
-                        })
+                        .send(command)
                         .await
                         .expect("Unreplicated server failed to send CommittedRequest");
                 }
                 drop(committed_request_tx); // So the app stops
-                drop(delayed_rx); // So the delayer stops
+                drop(delayed_msg_rx); // So the delayer stops
             };
             let _ = tokio::join!(app, unreplicated);
         }

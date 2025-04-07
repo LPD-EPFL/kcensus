@@ -1,4 +1,5 @@
 use crate::connector::DeSink;
+use crate::consensus::command::Command;
 use crate::consensus::kcensus::message::KCensusMsg;
 use crate::consensus::kcensus::message::KCensusMsg::{Spread, SpreadValueOnly};
 use crate::consensus::kcensus::propagation::{MessageId, PropagationGraphs};
@@ -8,7 +9,6 @@ use crate::consensus::message::ConsensusMsg::{Commit, KCensusM};
 use crate::consensus::Consensus;
 use crate::message::Message::Done;
 use crate::multi_sink::MultiSink;
-use crate::value::{KVal, Request};
 use log::{debug, trace};
 use std::collections::HashMap;
 use std::io;
@@ -34,7 +34,7 @@ pub struct KCensus<Sk> {
     next_uid: usize,
     slot: usize,
     round: usize,
-    requests: HashMap<usize, Request>,
+    queued_commands: HashMap<usize, Command>,
 
     round_state: KCensusRoundState,
 }
@@ -67,7 +67,7 @@ impl KCensus<DeSink> {
             next_uid: my_pid,
             slot: 0,
             round: 0,
-            requests: HashMap::with_capacity(nb_nodes),
+            queued_commands: HashMap::with_capacity(nb_nodes),
 
             round_state: KCensusRoundState::new(nb_nodes, my_pid),
         }
@@ -75,7 +75,7 @@ impl KCensus<DeSink> {
 }
 
 impl Consensus for KCensus<DeSink> {
-    async fn process_message(&mut self, msg: ConsensusMessage) -> io::Result<Option<Request>> {
+    async fn process_message(&mut self, msg: ConsensusMessage) -> io::Result<Option<Command>> {
         let msg_v = msg.get_v();
         let src = msg.src;
         let msg = match msg.msg {
@@ -93,6 +93,7 @@ impl Consensus for KCensus<DeSink> {
                 remote_states,
                 with_value,
             } => {
+                let msg_v = msg_v.expect("Spread messages should have a value uid");
                 if slot < self.slot || round < self.round {
                     if with_value {
                         let msg_id = msg_id.expect("Can't spread value without msg_id");
@@ -216,8 +217,8 @@ impl Consensus for KCensus<DeSink> {
     }
 
     #[inline]
-    async fn propose_start(&mut self, req: Request, contention: bool) -> io::Result<()> {
-        let v = self.store_new_request(req);
+    async fn propose_start(&mut self, command: Command, contention: bool) -> io::Result<()> {
+        let v = self.store_new_command(command);
         if contention {
             self.graph_spread_new_value_only(v).await
         } else {
@@ -231,25 +232,21 @@ impl Consensus for KCensus<DeSink> {
     }
 
     #[inline]
-    fn commit_slot(&mut self, v: usize, from_commit_msg: bool) -> Request {
-        let value = self.requests.remove(&v).unwrap();
+    fn commit_slot(&mut self, v: usize, from_commit_msg: bool) -> Command {
+        let value = self.queued_commands.remove(&v).unwrap();
         if from_commit_msg {
             // "<#2FB82F>Commited \"{}\" in slot {}.</>"
-            trace!("Commited \"{:?}\" in slot {}.", value.value.val, self.slot);
+            trace!("Commited \"{:?}\" in slot {}.", value.command, self.slot);
         } else {
             // "<#2FB82F>Commited \"{}\" in slot {} (round {}) from state:</> <#B8E8B8>{}</>"
             trace!(
                 "Commited \"{:?}\" in slot {} (round {}) from state: {}",
-                value.value.val, self.slot, self.round, self.round_state,
+                value.command, self.slot, self.round, self.round_state,
             );
         }
         self.slot += 1;
         self.goto_round(0);
         value
-    }
-
-    fn get_my_pid(&self) -> usize {
-        self.my_pid
     }
 
     #[inline]
@@ -278,40 +275,40 @@ impl Consensus for KCensus<DeSink> {
     }
 
     #[inline]
-    fn store_new_request(&mut self, req: Request) -> usize {
+    fn store_new_command(&mut self, command: Command) -> usize {
         let v = self.next_uid;
         self.next_uid += self.nb_nodes;
-        let inserted = self.requests.insert(v, req);
+        let inserted = self.queued_commands.insert(v, command);
         debug_assert!(inserted.is_none());
         v
     }
 
     #[inline]
-    fn store_remote_request(&mut self, v: usize, value: KVal) {
+    fn store_remote_command(&mut self, v: usize, value: Command) {
         // TODO: Allow forwarding values ? (could the value already be there ?)
-        let inserted = self.requests.insert(v, value.into_remote_req());
+        let inserted = self.queued_commands.insert(v, value);
         debug_assert!(inserted.is_none());
     }
 
     #[inline]
     fn knows_v(&self, v: usize) -> bool {
-        self.requests.contains_key(&v)
+        self.queued_commands.contains_key(&v)
     }
 
     #[inline]
-    fn has_queued_requests(&self) -> bool {
-        !self.requests.is_empty()
+    fn has_queued_commands(&self) -> bool {
+        !self.queued_commands.is_empty()
     }
 
     #[inline]
-    fn get_new_batch_to_propose(&self) -> Option<KVal> {
+    fn get_new_batch_to_propose(&self) -> Option<Command> {
         // TODO: Actually form batch here !
         None
     }
 
     #[inline]
     fn get_v_to_repropose(&self) -> usize {
-        *self.requests.keys().min().unwrap()
+        *self.queued_commands.keys().min().unwrap()
     }
 }
 
@@ -334,10 +331,10 @@ impl KCensus<DeSink> {
     }
 
     #[inline]
-    fn value_for_msg(&self, msg: &KCensusMsg) -> Option<KVal> {
+    fn value_for_msg(&self, msg: &KCensusMsg) -> Option<Command> {
         if msg.includes_value() {
             let v = msg.get_v(self.my_pid);
-            Some(self.requests[&v].value.clone())
+            Some(self.queued_commands[&v].clone())
         } else {
             None
         }

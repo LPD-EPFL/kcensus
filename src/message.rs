@@ -1,5 +1,5 @@
+use crate::consensus::command::Command;
 use crate::consensus::message::ConsensusMessage;
-use crate::value::KVal;
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
 
@@ -10,7 +10,7 @@ pub enum Message {
     },
     ConsensusM {
         msg: ConsensusMessage,
-        value: Option<KVal>,
+        value: Option<Command>,
     },
     Done,
 }

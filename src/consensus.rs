@@ -2,24 +2,24 @@ use crate::consensus::message::ConsensusMessage;
 use crate::consensus::message::ConsensusMsg::Commit;
 use crate::message::Message::{ConsensusM, Done};
 use crate::message::MsgWithSource;
-use crate::value::{CommittedRequest, KVal, Request};
+use command::Command;
 use log::{debug, info};
-use serde::{de::DeserializeOwned, Serialize};
 use std::collections::VecDeque;
 use std::io;
 use tokio::select;
 use tokio::sync::mpsc::{Receiver, Sender};
 
+pub mod command;
 pub mod kcensus;
 pub mod message;
 pub mod paxos_family;
 
 pub trait Consensus {
-    async fn run<ApplicationRequest: Serialize + DeserializeOwned>(
+    async fn run(
         &mut self,
         mut msg_rx: Receiver<MsgWithSource>,
-        mut client_request_rx: Receiver<Option<ApplicationRequest>>,
-        committed_request_tx: Sender<CommittedRequest<ApplicationRequest>>,
+        mut new_client_commands_rx: Receiver<Command>,
+        committed_commands_tx: Sender<Command>,
     ) -> io::Result<()> {
         let mut queued_messages: VecDeque<ConsensusMessage> =
             VecDeque::with_capacity(self.get_nb_nodes());
@@ -35,9 +35,9 @@ pub trait Consensus {
                 if self.ready_to_process(msg) {
                     let msg = queued_messages.remove(i).unwrap();
                     let result = self.full_process_message(msg).await?;
-                    if let Some(request) = result {
-                        committed_request_tx
-                            .send(request.into())
+                    if let Some(command) = result {
+                        committed_commands_tx
+                            .send(command)
                             .await
                             .expect("Sending commited value");
                         continue 'main_loop; // Restart from the beginning of the queue
@@ -52,24 +52,24 @@ pub trait Consensus {
             }
 
             let ongoing = self.get_my_v().is_some() || max_queued_slot > self.get_slot();
-            let should_repropose = !ongoing && self.has_queued_requests();
+            let should_repropose = !ongoing && self.has_queued_commands();
             // TODO: (Optim.) peak connection first ?
             if should_repropose && self.should_lead() {
                 // TODO: Leader election / only leader should repropose !!!!!!!!!!!!!!!!!!
                 if let Some(batch) = self.get_new_batch_to_propose() {
-                    self.propose_start(batch.into_remote_req(), false).await?;
+                    self.propose_start(batch, false).await?;
                 } else {
                     let v = self.get_v_to_repropose();
                     self.repropose_start(v).await?;
                 }
             }
 
-            // Read new messages and/or new local request
+            // Read new messages and/or new local command
             let msg = select! {
-                req = client_request_rx.recv(), if (!ongoing || self.can_forward_proposals()) && !should_repropose && !done => {
-                    match req.unwrap() {
-                        Some(req) =>  {
-                            self.propose_start(KVal::new(self.get_my_pid(), &req).into_local_req(), ongoing).await?;
+                command = new_client_commands_rx.recv(), if (!ongoing || self.can_forward_proposals()) && !should_repropose && !done => {
+                    match command {
+                        Some(command) =>  {
+                            self.propose_start(command, ongoing).await?;
                         }
                         None => {
                             done = true;
@@ -89,8 +89,8 @@ pub trait Consensus {
                 ConsensusM { msg, value } => {
                     if let Some(value) = value {
                         debug_assert!(msg.can_include_value());
-                        let v = msg.get_v();
-                        self.store_remote_request(v, value);
+                        let v = msg.get_v().expect("A value should travel with its uid");
+                        self.store_remote_command(v, value);
                     } else {
                         debug_assert!(!msg.should_include_value());
                     }
@@ -105,8 +105,8 @@ pub trait Consensus {
 
                     let result = self.full_process_message(msg).await?;
                     if let Some(value) = result {
-                        committed_request_tx
-                            .send(value.into())
+                        committed_commands_tx
+                            .send(value)
                             .await
                             .expect("Sending commited value");
                         continue 'main_loop; // Restart from the beginning of the queue
@@ -117,17 +117,17 @@ pub trait Consensus {
             }
         } // 'main_loop: loop
 
-        client_request_rx.close();
+        new_client_commands_rx.close();
         msg_rx.close();
         Ok(())
     } // run
 
     #[inline]
     fn ready_to_process(&self, msg: &ConsensusMessage) -> bool {
-        msg.get_slot() <= self.get_slot() && self.knows_v(msg.get_v())
+        msg.get_slot() <= self.get_slot() && msg.get_v().iter().all(|v| self.knows_v(*v))
     }
 
-    async fn full_process_message(&mut self, msg: ConsensusMessage) -> io::Result<Option<Request>> {
+    async fn full_process_message(&mut self, msg: ConsensusMessage) -> io::Result<Option<Command>> {
         debug_assert!(self.ready_to_process(&msg));
         if let Commit { slot, v } = msg.msg {
             if slot < self.get_slot() {
@@ -142,17 +142,15 @@ pub trait Consensus {
         self.process_message(msg).await
     }
 
-    async fn process_message(&mut self, msg: ConsensusMessage) -> io::Result<Option<Request>>;
+    async fn process_message(&mut self, msg: ConsensusMessage) -> io::Result<Option<Command>>;
 
     fn can_forward_proposals(&mut self) -> bool;
 
-    async fn propose_start(&mut self, req: Request, contention: bool) -> io::Result<()>;
+    async fn propose_start(&mut self, command: Command, contention: bool) -> io::Result<()>;
 
     async fn repropose_start(&mut self, v: usize) -> io::Result<()>;
 
-    fn commit_slot(&mut self, v: usize, from_commit_msg: bool) -> Request;
-
-    fn get_my_pid(&self) -> usize;
+    fn commit_slot(&mut self, v: usize, from_commit_msg: bool) -> Command;
 
     fn get_nb_nodes(&self) -> usize;
 
@@ -164,15 +162,15 @@ pub trait Consensus {
 
     async fn announce_done(&mut self) -> io::Result<()>;
 
-    fn store_new_request(&mut self, req: Request) -> usize;
+    fn store_new_command(&mut self, command: Command) -> usize;
 
-    fn store_remote_request(&mut self, v: usize, value: KVal);
+    fn store_remote_command(&mut self, v: usize, command: Command);
 
     fn knows_v(&self, v: usize) -> bool;
 
-    fn has_queued_requests(&self) -> bool;
+    fn has_queued_commands(&self) -> bool;
 
-    fn get_new_batch_to_propose(&self) -> Option<KVal>;
+    fn get_new_batch_to_propose(&self) -> Option<Command>;
 
     fn get_v_to_repropose(&self) -> usize;
 }

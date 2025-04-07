@@ -1,4 +1,5 @@
 use crate::connector::DeSink;
+use crate::consensus::command::Command;
 use crate::consensus::message::ConsensusMessage;
 use crate::consensus::message::ConsensusMsg::{Commit, PaxosM};
 use crate::consensus::paxos_family::epaxos_round_state::EPaxosRoundState;
@@ -9,7 +10,6 @@ use crate::consensus::paxos_family::Mode::{EPaxos, MultiPaxos, Paxos};
 use crate::consensus::Consensus;
 use crate::message::Message::Done;
 use crate::multi_sink::MultiSink;
-use crate::value::{KVal, Request};
 use log::{debug, info, trace};
 use message::RoundV;
 use std::collections::HashMap;
@@ -34,7 +34,7 @@ pub struct PaxosFamily<Sk> {
     next_uid: usize,
     slot: usize,
     round: Option<PaxosRound>,
-    requests: HashMap<usize, Request>,
+    queued_commands: HashMap<usize, Command>,
 
     paxos_state: PaxosRoundState,
     epaxos_state: EPaxosRoundState,
@@ -72,7 +72,7 @@ impl PaxosFamily<DeSink> {
             next_uid: my_pid,
             slot: 0,
             round: starting_round,
-            requests: HashMap::with_capacity(nb_nodes),
+            queued_commands: HashMap::with_capacity(nb_nodes),
 
             paxos_state: PaxosRoundState::new(nb_nodes, my_pid),
             epaxos_state: EPaxosRoundState::new(nb_nodes, my_pid),
@@ -81,7 +81,7 @@ impl PaxosFamily<DeSink> {
 }
 
 impl Consensus for PaxosFamily<DeSink> {
-    async fn process_message(&mut self, msg: ConsensusMessage) -> io::Result<Option<Request>> {
+    async fn process_message(&mut self, msg: ConsensusMessage) -> io::Result<Option<Command>> {
         let src = msg.src;
         let msg = match msg.msg {
             PaxosM(msg) => msg,
@@ -173,8 +173,8 @@ impl Consensus for PaxosFamily<DeSink> {
         matches!(self.mode, MultiPaxos)
     }
 
-    async fn propose_start(&mut self, req: Request, contention: bool) -> io::Result<()> {
-        let v = self.store_new_request(req);
+    async fn propose_start(&mut self, command: Command, contention: bool) -> io::Result<()> {
+        let v = self.store_new_command(command);
 
         if contention || (matches!(self.mode, MultiPaxos) && !self.should_lead()) {
             self.broadcast(ForwardRequest { v }, true).await
@@ -188,16 +188,16 @@ impl Consensus for PaxosFamily<DeSink> {
     }
 
     #[inline]
-    fn commit_slot(&mut self, v: usize, from_commit_msg: bool) -> Request {
-        let value = self.requests.remove(&v).unwrap();
+    fn commit_slot(&mut self, v: usize, from_commit_msg: bool) -> Command {
+        let value = self.queued_commands.remove(&v).unwrap();
         if from_commit_msg {
             // "<#2FB82F>Commited \"{}\" in slot {}.</>"
-            trace!("Commited \"{:?}\" in slot {}.", value.value.val, self.slot);
+            trace!("Commited \"{:?}\" in slot {}.", value.command, self.slot);
         } else {
             // "<#2FB82F>Commited \"{}\" in slot {} (round {}) from state:</> <#B8E8B8>{}</>"
             trace!(
                 "Commited \"{:?}\" in slot {} (round {:?})",
-                value.value.val, self.slot, self.round
+                value.command, self.slot, self.round
             );
         }
         self.slot += 1;
@@ -205,10 +205,6 @@ impl Consensus for PaxosFamily<DeSink> {
         self.paxos_state.full_clear();
         self.epaxos_state.full_clear();
         value
-    }
-
-    fn get_my_pid(&self) -> usize {
-        self.my_pid
     }
 
     #[inline]
@@ -232,9 +228,9 @@ impl Consensus for PaxosFamily<DeSink> {
             self.my_pid == self.leader_priority[0]
         } else {
             let leader = self.leader_priority.iter().copied().find(|leader| {
-                self.requests
+                self.queued_commands
                     .values()
-                    .any(|value| value.value.proposer == *leader)
+                    .any(|value| value.proposer == *leader)
             });
             Some(self.my_pid) == leader
         }
@@ -246,40 +242,40 @@ impl Consensus for PaxosFamily<DeSink> {
     }
 
     #[inline]
-    fn store_new_request(&mut self, req: Request) -> usize {
+    fn store_new_command(&mut self, command: Command) -> usize {
         let v = self.next_uid;
         self.next_uid += self.nb_nodes;
-        let inserted = self.requests.insert(v, req);
+        let inserted = self.queued_commands.insert(v, command);
         debug_assert!(inserted.is_none());
         v
     }
 
     #[inline]
-    fn store_remote_request(&mut self, v: usize, value: KVal) {
+    fn store_remote_command(&mut self, v: usize, value: Command) {
         // TODO: Allow forwarding values ? (could the value already be there ?)
-        let inserted = self.requests.insert(v, value.into_remote_req());
+        let inserted = self.queued_commands.insert(v, value);
         debug_assert!(inserted.is_none());
     }
 
     #[inline]
     fn knows_v(&self, v: usize) -> bool {
-        self.requests.contains_key(&v)
+        self.queued_commands.contains_key(&v)
     }
 
     #[inline]
-    fn has_queued_requests(&self) -> bool {
-        !self.requests.is_empty()
+    fn has_queued_commands(&self) -> bool {
+        !self.queued_commands.is_empty()
     }
 
     #[inline]
-    fn get_new_batch_to_propose(&self) -> Option<KVal> {
+    fn get_new_batch_to_propose(&self) -> Option<Command> {
         // TODO: Actually form batch here !
         None
     }
 
     #[inline]
     fn get_v_to_repropose(&self) -> usize {
-        *self.requests.keys().min().unwrap()
+        *self.queued_commands.keys().min().unwrap()
     }
 }
 
@@ -307,9 +303,9 @@ impl PaxosFamily<DeSink> {
     }
 
     #[inline]
-    fn value_for_msg(&mut self, msg: &PaxosMsg, with_value: bool) -> Option<KVal> {
+    fn value_for_msg(&mut self, msg: &PaxosMsg, with_value: bool) -> Option<Command> {
         if with_value {
-            Some(self.requests[&msg.get_v()].value.clone())
+            Some(self.queued_commands[&msg.get_v()].clone())
         } else {
             None
         }
