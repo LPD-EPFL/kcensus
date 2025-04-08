@@ -145,7 +145,6 @@ impl Consensus for KCensus<DeSink> {
                         self.graph_spread_value_only(msg_id, msg_v).await?;
                     }
 
-                    // TODO: only try to adopt if I'm the proposer with lowest id ?
                     if self.round_state.i_am_proposer() {
                         let min_proposer = *self
                             .leader_priority
@@ -156,9 +155,6 @@ impl Consensus for KCensus<DeSink> {
                             if let Some(adopted_v) = self.round_state.try_adopt() {
                                 // Conflict resolved. Adopting...
                                 self.goto_round(self.round + 1);
-                                self.round_state.set_my_v(adopted_v); // Needed if we don't repropose
-                                // TODO: only repropose if I was the proposer ?
-                                //   (potentially need to broadcast adopt in that case ?)
                                 self.repropose_start(adopted_v).await?;
                                 return Ok(None);
                             }
