@@ -1,3 +1,5 @@
+#!/usr/bin/env bash
+
 CASSANDRA_BASE_PORT="9042"
 BASE_LOG_DIR="./logs"
 ALGOS=(k-census e-paxos multi-paxos paxos unreplicated)
@@ -46,10 +48,16 @@ function run() {
   mkdir -p "$LOG_DIR"
   killall kcensus 2>/dev/null
   local NB=$(digits "$CONFIG")
-  start_cassandra "$NB"
+  if [[ "${CASSANDRA,,}" != "false" && "$CASSANDRA" != "0" ]]; then
+    start_cassandra "$NB"
+  fi
   echo "Starting $TITLE"
   for pid in $(seq 0 $((NB - 1))); do
-    cargo run -r -- -p "$pid" --config "configs/$CONFIG" -d 127.0.0.1:$((CASSANDRA_BASE_PORT + pid)) -a "$ALGO" -w "$WRITES" -r "$REQUESTS" -i "$INGRESS" -t "$THROUGHPUT" >"$LOG_DIR/$pid.stdout" 2>>"$LOG_DIR/$pid.stderr" &
+    local CASSANDRA_ARG=""
+    if [[ "${CASSANDRA,,}" != "false" && "$CASSANDRA" != "0" ]]; then
+      CASSANDRA_ARG="-d 127.0.0.1:$((CASSANDRA_BASE_PORT + pid))"
+    fi
+    cargo run -r -- -p "$pid" --config "configs/$CONFIG" $CASSANDRA_ARG -a "$ALGO" -w "$WRITES" -r "$REQUESTS" -i "$INGRESS" -t "$THROUGHPUT" >"$LOG_DIR/$pid.stdout" 2>>"$LOG_DIR/$pid.stderr" &
   done
   wait
 }
