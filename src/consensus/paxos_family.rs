@@ -97,7 +97,7 @@ impl Consensus for PaxosFamily {
                     return Ok(None);
                 } else if Some(round) > self.round {
                     debug_assert_ne!(round.proposer, self.my_pid);
-                    self.goto_round(round);
+                    self.goto_round(Some(round));
                 }
                 debug_assert_eq!(slot, self.slot);
                 debug_assert_eq!(Some(round), self.round);
@@ -203,7 +203,7 @@ impl Consensus for PaxosFamily {
             );
         }
         self.slot += 1;
-        self.goto_round(PaxosRound::default());
+        self.goto_round(self.starting_round);
         self.paxos_state.full_clear();
         self.epaxos_state.full_clear();
         value
@@ -276,8 +276,8 @@ impl Consensus for PaxosFamily {
 
 impl PaxosFamily {
     #[inline]
-    fn goto_round(&mut self, round: PaxosRound) {
-        if round
+    fn goto_round(&mut self, round: Option<PaxosRound>) {
+        if round.unwrap_or_default()
             > self
                 .starting_round
                 .unwrap_or_default()
@@ -288,12 +288,14 @@ impl PaxosFamily {
                 "Can not commit in round {:?}",
                 self.round,
             );
-            if round.round_group > self.round.unwrap_or_default().round_group + 1 {
+            if round.unwrap_or_default().round_group
+                > self.round.unwrap_or_default().round_group + 1
+            {
                 // "<yellow>######## Skipping round !!!!</>"
                 debug!("######## Skipping round !!!!");
             }
         }
-        self.round = Some(round);
+        self.round = round;
         self.paxos_state.next_round();
     }
 
@@ -324,7 +326,7 @@ impl PaxosFamily {
             .round
             .unwrap_or_default()
             .next_proposer_round(self.my_pid);
-        self.goto_round(round);
+        self.goto_round(Some(round));
         let msg = if Some(round) != self.starting_round {
             let rv = match self.mode {
                 EPaxos => {

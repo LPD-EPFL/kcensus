@@ -46,7 +46,7 @@ impl EPaxosRoundState {
     #[inline]
     pub fn propose_v(&mut self, v: usize) {
         debug_assert!(self.proposer_to_v.is_empty());
-        debug_assert_eq!(self.proposer_scores[self.my_pid], 1);
+        debug_assert_eq!(self.proposer_scores[self.my_pid], 2);
         debug_assert!(self.answer_set.is_empty());
         debug_assert_eq!(self.answers, 0);
         debug_assert_eq!(self.accepted, 0);
