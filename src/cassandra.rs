@@ -198,13 +198,22 @@ impl Client {
                 .await
                 .expect("Client failed to receive response");
             let responded = Instant::now();
+            let readable = format!(
+                "{} in {:?}",
+                if let Response::Put { .. } = response {
+                    "PUT"
+                } else {
+                    "GET"
+                },
+                responded.duration_since(request_generated)
+            );
             let event = ExecutedEvent {
                 response,
                 latency: responded.duration_since(request_generated),
                 queueing: issued.duration_since(request_generated),
                 processing: responded.duration_since(request_generated),
             };
-            log("executed", &event);
+            log("executed", &readable, &event);
         }
     }
 }
@@ -217,10 +226,11 @@ struct ExecutedEvent {
     processing: Duration,
 }
 
-fn log<Event: Serialize>(key: &str, event: &Event) {
+fn log<Event: Serialize>(key: &str, readable: &str, event: &Event) {
     println!(
-        "[log={}]{}",
+        "[log={}] {} | {}",
         key,
+        readable,
         serde_json::to_string(event).expect("Failed to serialize event")
     );
 }

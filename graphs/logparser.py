@@ -21,11 +21,11 @@ def parse(pids=None, config='aws-europe-7.toml', algo='k-census', writes=0.5, re
 
 def parse_file(file):
     output = defaultdict(list)
-    log_pattern = r"\[log=(.*?)\](.*)"
+    log_pattern = r"\[log=(.*?)\] ([^\|]*) \| (.*)"
     for line in file:
         match = re.match(log_pattern, line)
         if match:
-            output[match.group(1)].append(json.loads(match.group(2)))
+            output[match.group(1)].append(json.loads(match.group(3)))
     return output
 
 
