@@ -311,6 +311,7 @@ impl PaxosFamily<DeSink> {
         }
     }
 
+    #[inline]
     async fn send(&mut self, msg: PaxosMsg, dest: usize) -> io::Result<()> {
         self.sinks.send(PaxosM(msg), None, dest).await
     }

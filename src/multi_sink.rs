@@ -19,6 +19,7 @@ impl MultiSink<DeSink> {
         self.inner_broadcast(self.build_msg(msg, value)).await
     }
 
+    #[inline]
     pub async fn send(
         &mut self,
         msg: ConsensusMsg,

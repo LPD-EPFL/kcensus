@@ -343,6 +343,9 @@ impl KCensus<DeSink> {
     }
 
     async fn spread_to(&mut self, dest: usize) -> io::Result<()> {
+        if self.my_pid == dest {
+            return Ok(());
+        }
         let msg = Spread {
             slot: self.slot,
             round: self.round,
