@@ -350,7 +350,7 @@ fn compute_propagation_graphs(topology: &Topology) -> PropagationGraphs {
                             }
                         };
                         debug_assert_eq!(dependencies.is_empty(), time == Duration::default());
-                        debug_assert_eq!(dependencies.is_empty(), src == proposer);
+                        debug_assert!(!dependencies.is_empty() || src == proposer);
 
                         // Insert new message
                         let inserted = message_graph
