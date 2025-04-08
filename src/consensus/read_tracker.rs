@@ -64,7 +64,7 @@ impl ReadTracker {
     pub fn receive_ready(&mut self, uid: ReadUid) -> Option<Command> {
         let roc = self.read_commands.get_mut(&uid)?;
         roc.ready_count += 1;
-        if roc.ready_count > self.read_quorum {
+        if roc.ready_count >= self.read_quorum {
             self.read_commands.remove(&uid).map(|roc| roc.command)
         } else {
             None
