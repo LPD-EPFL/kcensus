@@ -80,7 +80,8 @@ impl PaxosRoundState {
     }
 
     pub fn adopt_from_epaxos(&mut self, round: PaxosRound, v: usize) {
-        self.max_rv = Some(RoundV::new_paxos_v(Some(round), v));
+        self.max_rv = Some(RoundV::new_paxos_v(None, v));
+        self.self_accept_v(round);
     }
 
     #[inline]

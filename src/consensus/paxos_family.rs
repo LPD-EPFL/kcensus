@@ -1,4 +1,3 @@
-use crate::connector::DeSink;
 use crate::consensus::command::Command;
 use crate::consensus::message::ConsensusMessage;
 use crate::consensus::message::ConsensusMsg::{Commit, PaxosM};
@@ -7,8 +6,8 @@ use crate::consensus::paxos_family::message::PaxosMsg::{Accept, ForwardRequest, 
 use crate::consensus::paxos_family::message::{PaxosMsg, PaxosRound};
 use crate::consensus::paxos_family::paxos_round_state::PaxosRoundState;
 use crate::consensus::paxos_family::Mode::{EPaxos, MultiPaxos, Paxos};
+use crate::consensus::read_tracker::ReadTracker;
 use crate::consensus::Consensus;
-use crate::message::Message::Done;
 use crate::multi_sink::MultiSink;
 use log::{debug, info, trace};
 use message::RoundV;
@@ -19,7 +18,7 @@ mod epaxos_round_state;
 pub mod message;
 mod paxos_round_state;
 
-pub struct PaxosFamily<Sk> {
+pub struct PaxosFamily {
     // Settings
     nb_nodes: usize,
     my_pid: usize,
@@ -28,7 +27,7 @@ pub struct PaxosFamily<Sk> {
     starting_round: Option<PaxosRound>,
 
     // Connections
-    sinks: MultiSink<Sk>,
+    sinks: MultiSink,
 
     // Overall state
     next_uid: usize,
@@ -38,6 +37,8 @@ pub struct PaxosFamily<Sk> {
 
     paxos_state: PaxosRoundState,
     epaxos_state: EPaxosRoundState,
+
+    read_tracker: ReadTracker,
 }
 
 pub enum Mode {
@@ -46,11 +47,11 @@ pub enum Mode {
     EPaxos,
 }
 
-impl PaxosFamily<DeSink> {
+impl PaxosFamily {
     pub fn new(
         nb_nodes: usize,
         my_pid: usize,
-        sinks: MultiSink<DeSink>,
+        sinks: MultiSink,
         leader_priority: Vec<usize>,
         mode: Mode,
     ) -> Self {
@@ -76,11 +77,13 @@ impl PaxosFamily<DeSink> {
 
             paxos_state: PaxosRoundState::new(nb_nodes, my_pid),
             epaxos_state: EPaxosRoundState::new(nb_nodes, my_pid),
+
+            read_tracker: ReadTracker::new(1 + nb_nodes / 2),
         }
     }
 }
 
-impl Consensus for PaxosFamily<DeSink> {
+impl Consensus for PaxosFamily {
     async fn process_message(&mut self, msg: ConsensusMessage) -> io::Result<Option<Command>> {
         let src = msg.src;
         let msg = match msg.msg {
@@ -134,7 +137,6 @@ impl Consensus for PaxosFamily<DeSink> {
                             // Can go to paxos accept phase
                             debug_assert!(self.paxos_state.is_prepared());
                             self.paxos_state.adopt_from_epaxos(round, v);
-                            self.paxos_state.self_accept_v(round);
                             self.broadcast_accept().await?;
                         }
                     } else {
@@ -236,35 +238,10 @@ impl Consensus for PaxosFamily<DeSink> {
         }
     }
 
-    #[inline]
-    async fn announce_done(&mut self) -> io::Result<()> {
-        self.sinks.inner_broadcast(Done).await
-    }
-
-    #[inline]
-    fn store_new_command(&mut self, command: Command) -> usize {
-        let v = self.next_uid;
+    fn get_next_uid(&mut self) -> usize {
+        let uid = self.next_uid;
         self.next_uid += self.nb_nodes;
-        let inserted = self.queued_commands.insert(v, command);
-        debug_assert!(inserted.is_none());
-        v
-    }
-
-    #[inline]
-    fn store_remote_command(&mut self, v: usize, value: Command) {
-        // TODO: Allow forwarding values ? (could the value already be there ?)
-        let inserted = self.queued_commands.insert(v, value);
-        debug_assert!(inserted.is_none());
-    }
-
-    #[inline]
-    fn knows_v(&self, v: usize) -> bool {
-        self.queued_commands.contains_key(&v)
-    }
-
-    #[inline]
-    fn has_queued_commands(&self) -> bool {
-        !self.queued_commands.is_empty()
+        uid
     }
 
     #[inline]
@@ -277,9 +254,27 @@ impl Consensus for PaxosFamily<DeSink> {
     fn get_v_to_repropose(&self) -> usize {
         *self.queued_commands.keys().min().unwrap()
     }
+
+    fn get_queued_commands(&self) -> &HashMap<usize, Command> {
+        &self.queued_commands
+    }
+
+    fn get_queued_commands_mut(&mut self) -> &mut HashMap<usize, Command> {
+        &mut self.queued_commands
+    }
+
+    #[inline]
+    fn get_read_tracker(&mut self) -> &mut ReadTracker {
+        &mut self.read_tracker
+    }
+
+    #[inline]
+    fn get_sinks(&mut self) -> &mut MultiSink {
+        &mut self.sinks
+    }
 }
 
-impl PaxosFamily<DeSink> {
+impl PaxosFamily {
     #[inline]
     fn goto_round(&mut self, round: PaxosRound) {
         if round
@@ -346,7 +341,7 @@ impl PaxosFamily<DeSink> {
             }
         } else {
             debug_assert!(!matches!(self.mode, EPaxos));
-            let rv = RoundV::new_paxos_v(self.starting_round, v);
+            let rv = RoundV::new_paxos_v(None, v);
             self.paxos_state.propose_v(rv);
             self.paxos_state.self_accept_v(round);
             Accept {

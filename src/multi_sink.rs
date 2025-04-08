@@ -7,12 +7,12 @@ use log::debug;
 use std::collections::HashMap;
 use std::io;
 
-pub struct MultiSink<Sk> {
+pub struct MultiSink {
     pub my_pid: usize,
-    pub sinks: HashMap<usize, Sk>,
+    pub sinks: HashMap<usize, DeSink>,
 }
 
-impl MultiSink<DeSink> {
+impl MultiSink {
     #[inline]
     pub async fn broadcast(&mut self, msg: ConsensusMsg, value: Option<Command>) -> io::Result<()> {
         debug!("Broadcasting {:?} with_value={}", msg, value.is_some());

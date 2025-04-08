@@ -1,10 +1,12 @@
 use crate::consensus::message::ConsensusMessage;
-use crate::consensus::message::ConsensusMsg::Commit;
+use crate::consensus::message::ConsensusMsg::{Commit, ReadRequest, ReadResponse};
+use crate::consensus::read_tracker::ReadTracker;
 use crate::message::Message::{ConsensusM, Done};
 use crate::message::MsgWithSource;
+use crate::multi_sink::MultiSink;
 use command::Command;
 use log::{debug, info};
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::io;
 use tokio::select;
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -13,6 +15,7 @@ pub mod command;
 pub mod kcensus;
 pub mod message;
 pub mod paxos_family;
+mod read_tracker;
 
 pub trait Consensus {
     async fn run(
@@ -34,12 +37,8 @@ pub trait Consensus {
                 let msg = &queued_messages[i];
                 if self.ready_to_process(msg) {
                     let msg = queued_messages.remove(i).unwrap();
-                    let result = self.full_process_message(msg).await?;
-                    if let Some(command) = result {
-                        committed_commands_tx
-                            .send(command)
-                            .await
-                            .expect("Sending commited value");
+                    let command = self.full_process_message(msg).await?;
+                    if self.commit_commands(&committed_commands_tx, command).await {
                         continue 'main_loop; // Restart from the beginning of the queue
                     }
                 } else {
@@ -69,11 +68,15 @@ pub trait Consensus {
                 command = new_client_commands_rx.recv(), if (!ongoing || self.can_forward_proposals()) && !should_repropose && !done => {
                     match command {
                         Some(command) =>  {
-                            self.propose_start(command, ongoing).await?;
+                            if command.read_only {
+                                self.start_read(command).await?;
+                            } else {
+                                self.propose_start(command, ongoing).await?;
+                            }
                         }
                         None => {
                             done = true;
-                            self.announce_done().await?;
+                            self.get_sinks().inner_broadcast(Done).await?;
                             count_done += 1;
                             if count_done == self.get_nb_nodes() {
                                 break 'main_loop;
@@ -103,12 +106,11 @@ pub trait Consensus {
                         continue 'main_loop;
                     }
 
-                    let result = self.full_process_message(msg).await?;
-                    if let Some(value) = result {
-                        committed_commands_tx
-                            .send(value)
-                            .await
-                            .expect("Sending commited value");
+                    let res_command = self.full_process_message(msg).await?;
+                    if self
+                        .commit_commands(&committed_commands_tx, res_command)
+                        .await
+                    {
                         continue 'main_loop; // Restart from the beginning of the queue
                     }
                 }
@@ -123,6 +125,13 @@ pub trait Consensus {
     } // run
 
     #[inline]
+    async fn start_read(&mut self, command: Command) -> io::Result<()> {
+        let local_ready = self.get_my_v().is_none();
+        let uid = self.get_read_tracker().insert(command, local_ready);
+        self.get_sinks().broadcast(ReadRequest { uid }, None).await
+    }
+
+    #[inline]
     fn ready_to_process(&self, msg: &ConsensusMessage) -> bool {
         msg.get_slot() <= self.get_slot() && msg.get_v().iter().all(|v| self.knows_v(*v))
     }
@@ -135,11 +144,51 @@ pub trait Consensus {
             }
             debug_assert_eq!(slot, self.get_slot());
             info!("Commit msg: v={}", v);
-            let value = self.commit_slot(v, true);
-            return Ok(Some(value));
+            return Ok(Some(self.commit_slot(v, true)));
         };
+        if let ReadRequest { uid } = msg.msg {
+            let next_readable_slot = self.get_slot() + self.get_my_v().is_some() as usize;
+            self.get_sinks()
+                .send(
+                    ReadResponse {
+                        uid,
+                        next_readable_slot,
+                    },
+                    None,
+                    msg.src,
+                )
+                .await?;
+            return Ok(None);
+        }
+        if let ReadResponse { uid, .. } = msg.msg {
+            return Ok(self.get_read_tracker().receive_ready(uid));
+        }
         debug!("Processing message: {:?}", msg);
         self.process_message(msg).await
+    }
+
+    #[inline]
+    async fn commit_commands(
+        &mut self,
+        committed_commands_tx: &Sender<Command>,
+        command: Option<Command>,
+    ) -> bool {
+        if let Some(command) = command {
+            committed_commands_tx
+                .send(command)
+                .await
+                .expect("Sending commited value");
+            let result = self.get_read_tracker().commit_slot();
+            for read_only_command in result.into_iter() {
+                committed_commands_tx
+                    .send(read_only_command)
+                    .await
+                    .expect("Sending commited value")
+            }
+            true
+        } else {
+            false
+        }
     }
 
     async fn process_message(&mut self, msg: ConsensusMessage) -> io::Result<Option<Command>>;
@@ -160,17 +209,42 @@ pub trait Consensus {
 
     fn should_lead(&self) -> bool;
 
-    async fn announce_done(&mut self) -> io::Result<()>;
+    fn get_next_uid(&mut self) -> usize;
 
-    fn store_new_command(&mut self, command: Command) -> usize;
+    #[inline]
+    fn store_new_command(&mut self, command: Command) -> usize {
+        let v = self.get_next_uid();
+        let old = self.get_queued_commands_mut().insert(v, command);
+        debug_assert!(old.is_none());
+        v
+    }
 
-    fn store_remote_command(&mut self, v: usize, command: Command);
+    #[inline]
+    fn store_remote_command(&mut self, v: usize, value: Command) {
+        // TODO: Allow forwarding values ? (could the value already be there ?)
+        let inserted = self.get_queued_commands_mut().insert(v, value);
+        debug_assert!(inserted.is_none());
+    }
 
-    fn knows_v(&self, v: usize) -> bool;
+    #[inline]
+    fn knows_v(&self, v: usize) -> bool {
+        self.get_queued_commands().contains_key(&v)
+    }
 
-    fn has_queued_commands(&self) -> bool;
+    #[inline]
+    fn has_queued_commands(&self) -> bool {
+        !self.get_queued_commands().is_empty()
+    }
 
     fn get_new_batch_to_propose(&self) -> Option<Command>;
 
     fn get_v_to_repropose(&self) -> usize;
+
+    fn get_queued_commands(&self) -> &HashMap<usize, Command>;
+
+    fn get_queued_commands_mut(&mut self) -> &mut HashMap<usize, Command>;
+
+    fn get_read_tracker(&mut self) -> &mut ReadTracker;
+
+    fn get_sinks(&mut self) -> &mut MultiSink;
 }

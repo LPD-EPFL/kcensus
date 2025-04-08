@@ -1,4 +1,3 @@
-use crate::connector::DeSink;
 use crate::consensus::command::Command;
 use crate::consensus::kcensus::message::KCensusMsg;
 use crate::consensus::kcensus::message::KCensusMsg::{Spread, SpreadValueOnly};
@@ -6,8 +5,8 @@ use crate::consensus::kcensus::propagation::{MessageId, PropagationGraphs};
 use crate::consensus::kcensus::round_state::KCensusRoundState;
 use crate::consensus::message::ConsensusMessage;
 use crate::consensus::message::ConsensusMsg::{Commit, KCensusM};
+use crate::consensus::read_tracker::ReadTracker;
 use crate::consensus::Consensus;
-use crate::message::Message::Done;
 use crate::multi_sink::MultiSink;
 use log::{debug, trace};
 use std::collections::HashMap;
@@ -18,14 +17,14 @@ pub mod node_state;
 pub mod propagation;
 mod round_state;
 
-pub struct KCensus<Sk> {
+pub struct KCensus {
     // Settings
     nb_nodes: usize,
     my_pid: usize,
     leader_priority: Vec<usize>,
 
     // Connections
-    sinks: MultiSink<Sk>,
+    sinks: MultiSink,
 
     // Propagation graphs
     propagation_graphs: PropagationGraphs,
@@ -37,6 +36,8 @@ pub struct KCensus<Sk> {
     queued_commands: HashMap<usize, Command>,
 
     round_state: KCensusRoundState,
+
+    read_tracker: ReadTracker,
 }
 
 macro_rules! send_msg {
@@ -46,11 +47,11 @@ macro_rules! send_msg {
     }};
 }
 
-impl KCensus<DeSink> {
+impl KCensus {
     pub fn new(
         nb_nodes: usize,
         my_pid: usize,
-        sinks: MultiSink<DeSink>,
+        sinks: MultiSink,
         propagation_graphs: PropagationGraphs,
         leader_priority: Vec<usize>,
     ) -> Self {
@@ -70,11 +71,13 @@ impl KCensus<DeSink> {
             queued_commands: HashMap::with_capacity(nb_nodes),
 
             round_state: KCensusRoundState::new(nb_nodes, my_pid),
+
+            read_tracker: ReadTracker::new(1 + nb_nodes / 2),
         }
     }
 }
 
-impl Consensus for KCensus<DeSink> {
+impl Consensus for KCensus {
     async fn process_message(&mut self, msg: ConsensusMessage) -> io::Result<Option<Command>> {
         let msg_v = msg.get_v();
         let src = msg.src;
@@ -214,11 +217,12 @@ impl Consensus for KCensus<DeSink> {
 
     #[inline]
     async fn propose_start(&mut self, command: Command, contention: bool) -> io::Result<()> {
-        let v = self.store_new_command(command);
+        debug_assert!(!command.read_only);
+        let uid = self.store_new_command(command);
         if contention {
-            self.graph_spread_new_value_only(v).await
+            self.graph_spread_new_value_only(uid).await
         } else {
-            self.propose_and_spread(v, true).await
+            self.propose_and_spread(uid, true).await
         }
     }
 
@@ -265,35 +269,10 @@ impl Consensus for KCensus<DeSink> {
         self.my_pid == self.leader_priority[0]
     }
 
-    #[inline]
-    async fn announce_done(&mut self) -> io::Result<()> {
-        self.sinks.inner_broadcast(Done).await
-    }
-
-    #[inline]
-    fn store_new_command(&mut self, command: Command) -> usize {
-        let v = self.next_uid;
+    fn get_next_uid(&mut self) -> usize {
+        let uid = self.next_uid;
         self.next_uid += self.nb_nodes;
-        let inserted = self.queued_commands.insert(v, command);
-        debug_assert!(inserted.is_none());
-        v
-    }
-
-    #[inline]
-    fn store_remote_command(&mut self, v: usize, value: Command) {
-        // TODO: Allow forwarding values ? (could the value already be there ?)
-        let inserted = self.queued_commands.insert(v, value);
-        debug_assert!(inserted.is_none());
-    }
-
-    #[inline]
-    fn knows_v(&self, v: usize) -> bool {
-        self.queued_commands.contains_key(&v)
-    }
-
-    #[inline]
-    fn has_queued_commands(&self) -> bool {
-        !self.queued_commands.is_empty()
+        uid
     }
 
     #[inline]
@@ -306,9 +285,27 @@ impl Consensus for KCensus<DeSink> {
     fn get_v_to_repropose(&self) -> usize {
         *self.queued_commands.keys().min().unwrap()
     }
+
+    fn get_queued_commands(&self) -> &HashMap<usize, Command> {
+        &self.queued_commands
+    }
+
+    fn get_queued_commands_mut(&mut self) -> &mut HashMap<usize, Command> {
+        &mut self.queued_commands
+    }
+
+    #[inline]
+    fn get_read_tracker(&mut self) -> &mut ReadTracker {
+        &mut self.read_tracker
+    }
+
+    #[inline]
+    fn get_sinks(&mut self) -> &mut MultiSink {
+        &mut self.sinks
+    }
 }
 
-impl KCensus<DeSink> {
+impl KCensus {
     #[inline]
     fn goto_round(&mut self, round: usize) {
         if round != 0 {

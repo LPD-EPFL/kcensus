@@ -9,9 +9,23 @@ use serde::{Deserialize, Serialize};
 pub enum ConsensusMsg {
     KCensusM(KCensusMsg),
     PaxosM(PaxosMsg),
-    Commit { slot: usize, v: usize },
-    ReadRequest { uid: usize },
-    ReadResponse { uid: usize, slot: usize },
+    Commit {
+        slot: usize,
+        v: usize,
+    },
+    ReadRequest {
+        uid: ReadUid,
+    },
+    ReadResponse {
+        uid: ReadUid,
+        next_readable_slot: usize,
+    },
+}
+
+#[derive(Ord, PartialOrd, Eq, PartialEq, Serialize, Deserialize, Clone, Copy, Debug)]
+pub struct ReadUid {
+    pub reader: usize,
+    pub id: usize,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -57,7 +71,9 @@ impl ConsensusMessage {
             PaxosM(msg) => msg.get_slot(),
             Commit { slot, .. } => *slot,
             ReadRequest { .. } => 0,
-            ReadResponse { slot, .. } => *slot,
+            ReadResponse {
+                next_readable_slot, ..
+            } => *next_readable_slot,
         }
     }
 }
