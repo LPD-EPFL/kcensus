@@ -57,7 +57,7 @@ impl PaxosFamily {
     ) -> Self {
         assert!(my_pid < nb_nodes);
         let starting_round = match mode {
-            Paxos => Some(PaxosRound::default().next_proposer_round(leader_priority[0])),
+            Paxos => None,
             MultiPaxos => Some(PaxosRound::default().next_proposer_round(leader_priority[0])),
             EPaxos => None,
         };
@@ -328,6 +328,7 @@ impl PaxosFamily {
             .next_proposer_round(self.my_pid);
         self.goto_round(Some(round));
         let msg = if Some(round) != self.starting_round {
+            debug_assert!(!matches!(self.mode, MultiPaxos));
             let rv = match self.mode {
                 EPaxos => {
                     self.epaxos_state.propose_v(v);
@@ -342,7 +343,7 @@ impl PaxosFamily {
                 rv,
             }
         } else {
-            debug_assert!(!matches!(self.mode, EPaxos));
+            debug_assert!(matches!(self.mode, MultiPaxos));
             let rv = RoundV::new_paxos_v(None, v);
             self.paxos_state.propose_v(rv);
             self.paxos_state.self_accept_v(round);
