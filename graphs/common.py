@@ -3,6 +3,7 @@ red = '#C44E52'
 orange = '#DD8452'
 yellow = '#E2C44C'
 green = '#55A868'
+grey = '#FAFAFA'
 
 ALGORITHMS = {
     'unreplicated': {'label': 'Unreplicated', 'color': blue},
@@ -10,6 +11,7 @@ ALGORITHMS = {
     'multi-paxos': {'label': 'Multi-Paxos', 'color': orange},
     'e-paxos': {'label': 'EPaxos', 'color': yellow},
     'k-census': {'label': 'K-Census', 'color': green},
+    'weak-replication': {'label': 'Weak', 'color': grey},
 }
 
 import argparse

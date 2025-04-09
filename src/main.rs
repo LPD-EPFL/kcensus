@@ -56,6 +56,7 @@ enum Algo {
     EPaxos,
     MultiPaxos,
     Unreplicated,
+    WeakReplication,
 }
 
 #[derive(clap::ValueEnum, Clone, Debug)]
@@ -165,7 +166,7 @@ async fn main() -> io::Result<()> {
     });
 
     let app = async {
-        let mut num_committed = if let Algo::Unreplicated = args.algo {
+        let mut num_committed = if let Algo::Unreplicated | Algo::WeakReplication = args.algo {
             my_pid
         } else {
             0
@@ -173,7 +174,7 @@ async fn main() -> io::Result<()> {
         num_committed_watch_tx.send(num_committed).ok(); // Client not listening for back pressure
         while let Some(command) = committed_request_rx.recv().await {
             let command: CommittedCommand<Request> = command.into();
-            num_committed += if let Algo::Unreplicated = args.algo {
+            num_committed += if let Algo::Unreplicated | Algo::WeakReplication = args.algo {
                 nb_nodes
             } else {
                 1
@@ -254,28 +255,36 @@ async fn main() -> io::Result<()> {
                 consensus_obj.run(delayed_msg_rx, new_client_request_rx, committed_request_tx);
             let _ = tokio::join!(app, consensus);
         }
-        Algo::Unreplicated => {
+        Algo::Unreplicated | Algo::WeakReplication => {
             let unreplicated = async {
                 // For simplicity, requests will be executed locally after a ping delay.
-                // This is a lower bound as this consumes no network + compute is shared.
-                // The leader is the node with the lowest median ping.
-                let leader = (0..topology.nb_nodes)
-                    .min_by_key(|&potential_leader| {
-                        let mut rtts = topology.rtts[potential_leader].clone();
+                // This is a lower bound as this consumes no network + compute is sharded.
+                let rtt = match args.algo {
+                    Algo::Unreplicated => {
+                        // The leader is the node with the lowest median ping.
+                        let leader = (0..topology.nb_nodes)
+                            .min_by_key(|&potential_leader| {
+                                let mut rtts = topology.rtts[potential_leader].clone();
+                                rtts.sort();
+                                rtts[rtts.len() / 2 + 1]
+                            })
+                            .expect("There should be a leader");
+                        topology.rtts[leader][my_pid]
+                    }
+                    Algo::WeakReplication => {
+                        let mut rtts = topology.rtts[my_pid].clone();
                         rtts.sort();
-                        rtts[rtts.len() / 2]
-                    })
-                    .expect("There should be a leader");
-                let leader_ping = topology.rtts[leader][my_pid];
-                println!("leader ping: {:?}", leader_ping);
+                        rtts[rtts.len() / 2 + 1]
+                    }
+                    _ => unreachable!("Algo::Unreplicated | Algo::WeakReplication"),
+                };
                 while let Some(command) = new_client_request_rx.recv().await {
-                    tokio_timerfd::sleep(leader_ping)
+                    tokio_timerfd::sleep(rtt)
                         .await
-                        .expect("Unreplicated server failed to sleep");
-                    committed_request_tx
-                        .send(command)
-                        .await
-                        .expect("Unreplicated server failed to send CommittedRequest");
+                        .expect("Unreplicated or weakly replicated server failed to sleep");
+                    committed_request_tx.send(command).await.expect(
+                        "Unreplicated or weakly replicated server failed to send CommittedRequest",
+                    );
                 }
                 drop(committed_request_tx); // So the app stops
                 drop(delayed_msg_rx); // So the delayer stops
