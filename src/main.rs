@@ -1,9 +1,7 @@
 use crate::cassandra::Request;
-use crate::connector::Connector;
+use crate::connector::connect_all;
 use crate::consensus::paxos_family::{Mode, PaxosFamily};
 use crate::consensus::Consensus;
-use crate::message::Message;
-use crate::multi_sink::MultiSink;
 use crate::topology::Topology;
 use chrono::prelude::*;
 use clap::Parser;
@@ -11,10 +9,7 @@ use consensus::command::{Command, CommittedCommand};
 use consensus::kcensus::propagation::PropagationGraphs;
 use consensus::kcensus::KCensus;
 use env_logger::fmt::style;
-use futures::prelude::stream::select_all;
-use futures::TryStreamExt;
 use log::{debug, trace};
-use std::collections::HashMap;
 use std::io;
 use std::io::Write;
 use std::time::Instant;
@@ -92,34 +87,12 @@ async fn main() -> io::Result<()> {
     println!("Computed propagation graphs in {:?}", start.elapsed());
     let nb_nodes = topology.regions.len();
 
-    let mut sinks = HashMap::with_capacity(nb_nodes - 1);
-    let mut streams = Vec::with_capacity(nb_nodes - 1);
-
-    let wrap_with_source_pid = |pid: usize| move |m: Message| m.with_source(pid);
-
-    let connector = Connector::new(my_pid).await?;
-    for pid in 0..my_pid {
-        let (sink, stream) = connector.connect_to(pid).await?;
-        sinks.insert(pid, sink);
-        streams.push(stream.map_ok(wrap_with_source_pid(pid)))
-    }
-    for _ in (my_pid + 1)..nb_nodes {
-        let (pid, sink, stream) = connector.accept_connection().await?;
-        sinks.insert(pid, sink);
-        streams.push(stream.map_ok(wrap_with_source_pid(pid)))
-    }
-
-    let sinks = MultiSink { sinks, my_pid };
-
-    let input_stream = select_all(streams);
-
-    // TODO: Channel buffer size ?
+    let (consensus_msg_sinks, consensus_msg_streams) = connect_all(my_pid, nb_nodes, 9876).await;
     let (delayed_msg_tx, delayed_msg_rx) = mpsc::channel(1);
-
     let delayer_task = tokio::task::spawn(delayer::delayer(
         topology.clone(),
         my_pid,
-        input_stream,
+        consensus_msg_streams,
         delayed_msg_tx,
     ));
 
@@ -207,8 +180,13 @@ async fn main() -> io::Result<()> {
             );
             let mut leader_prio: Vec<_> = (0..nb_nodes).collect();
             leader_prio.sort_by_key(|pid| propagation_graphs.kcensus_latencies[*pid]);
-            let mut consensus_obj =
-                KCensus::new(nb_nodes, my_pid, sinks, propagation_graphs, leader_prio);
+            let mut consensus_obj = KCensus::new(
+                nb_nodes,
+                my_pid,
+                consensus_msg_sinks,
+                propagation_graphs,
+                leader_prio,
+            );
             let consensus =
                 consensus_obj.run(delayed_msg_rx, new_client_request_rx, committed_request_tx);
             let _ = tokio::join!(app, consensus);
@@ -221,8 +199,13 @@ async fn main() -> io::Result<()> {
                 "Expected local latency (no-contention): {:?}",
                 propagation_graphs.paxos_latencies[my_pid] / if leader { 2 } else { 1 }
             );
-            let mut consensus_obj =
-                PaxosFamily::new(nb_nodes, my_pid, sinks, leader_prio, Mode::Paxos);
+            let mut consensus_obj = PaxosFamily::new(
+                nb_nodes,
+                my_pid,
+                consensus_msg_sinks,
+                leader_prio,
+                Mode::Paxos,
+            );
             let consensus =
                 consensus_obj.run(delayed_msg_rx, new_client_request_rx, committed_request_tx);
             let _ = tokio::join!(app, consensus);
@@ -234,8 +217,13 @@ async fn main() -> io::Result<()> {
                 "Expected local latency (no-contention): {:?}",
                 propagation_graphs.epaxos_latencies[my_pid]
             );
-            let mut consensus_obj =
-                PaxosFamily::new(nb_nodes, my_pid, sinks, leader_prio, Mode::EPaxos);
+            let mut consensus_obj = PaxosFamily::new(
+                nb_nodes,
+                my_pid,
+                consensus_msg_sinks,
+                leader_prio,
+                Mode::EPaxos,
+            );
             let consensus =
                 consensus_obj.run(delayed_msg_rx, new_client_request_rx, committed_request_tx);
             let _ = tokio::join!(app, consensus);
@@ -249,8 +237,13 @@ async fn main() -> io::Result<()> {
                 "Expected AVERAGE latency for leader {} (no-contention): {:?}",
                 leader, propagation_graphs.multi_paxos_latencies[leader]
             );
-            let mut consensus_obj =
-                PaxosFamily::new(nb_nodes, my_pid, sinks, leader_prio, Mode::MultiPaxos);
+            let mut consensus_obj = PaxosFamily::new(
+                nb_nodes,
+                my_pid,
+                consensus_msg_sinks,
+                leader_prio,
+                Mode::MultiPaxos,
+            );
             let consensus =
                 consensus_obj.run(delayed_msg_rx, new_client_request_rx, committed_request_tx);
             let _ = tokio::join!(app, consensus);
