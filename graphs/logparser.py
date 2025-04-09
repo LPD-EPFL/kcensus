@@ -34,5 +34,9 @@ def compute_percentiles(items, accessor=lambda x: x):
     return [sorted_mapped[int(p * (len(sorted_mapped) / 100))] for p in range(0, 100)] + [sorted_mapped[-1]]
 
 
+def compute_average(items, accessor=lambda x: x):
+    return sum(accessor(item) for item in items) / len(items)
+
+
 def duration_to_ms(duration):
     return duration['secs'] * 1_000 + duration['nanos'] / 1_000_000

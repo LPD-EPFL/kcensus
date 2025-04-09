@@ -29,9 +29,9 @@ for i, experiment in enumerate(experiments):
     logs = parse(algo=experiment)
     percentiles = compute_percentiles(logs['executed'], lambda log: duration_to_ms(log['latency']))
     percentiles = percentiles[5], percentiles[50], percentiles[95]
-    print(experiment, percentiles)
+    print(experiment, average, percentiles)
     xs.append(i)
-    ys.append(percentiles[1])
+    ys.append(average)
     delta_ys_top.append(percentiles[2] - percentiles[1])
     delta_ys_bottom.append(percentiles[1] - percentiles[0])
     labels.append(ALGORITHMS[experiment]['label'])
@@ -42,7 +42,7 @@ for i, experiment in enumerate(experiments):
 plot.bar(labels, ys, label=labels, lw=0, color=colors)
 plot.errorbar(xs, ys, [delta_ys_bottom, delta_ys_top], ls='none', color='black', solid_capstyle='projecting',
               capsize=2.5)
-plot.set_title('Median Request Latency', pad=0)
+plot.set_title('Average Request Latency', pad=0)
 
 plot.yaxis.set_major_locator(MultipleLocator(80))
 plot.yaxis.set_minor_locator(MultipleLocator(20))
