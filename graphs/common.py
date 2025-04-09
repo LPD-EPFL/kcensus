@@ -12,6 +12,16 @@ ALGORITHMS = {
     'k-census': {'label': 'K-Census', 'color': green},
 }
 
+import argparse
+
+parser = argparse.ArgumentParser()
+parser.add_argument('-c', '--config', type=str, default='aws-europe-7.toml', help='Topology')
+parser.add_argument('-w', '--writes', type=float, default=0.5, help='Ratio of writes')
+parser.add_argument('-r', '--requests', type=int, default=100, help='Number of requests per client')
+parser.add_argument('-i', '--ingress', type=str, default='round-robin', help='Type of ingress')
+parser.add_argument('-t', '--throughput', type=float, default='10', help='Target req/s per client')
+args = parser.parse_args()
+
 
 def k_formatter(x, _):
     if x < 1000: return int(x)

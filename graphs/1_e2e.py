@@ -2,7 +2,7 @@
 
 from matplotlib.ticker import *
 
-from common import ALGORITHMS
+from common import ALGORITHMS, args
 from logparser import *
 from prelude import plt
 
@@ -26,7 +26,9 @@ delta_ys_bottom = []
 labels = []
 colors = []
 for i, experiment in enumerate(experiments):
-    logs = parse(algo=experiment)
+    logs = parse(algo=experiment, config=args.config, writes=args.writes, requests=args.requests, ingress=args.ingress,
+                 throughput=args.throughput)
+    average = compute_average(logs['executed'], lambda log: duration_to_ms(log['latency']))
     percentiles = compute_percentiles(logs['executed'], lambda log: duration_to_ms(log['latency']))
     percentiles = percentiles[5], percentiles[50], percentiles[95]
     print(experiment, average, percentiles)
@@ -51,4 +53,6 @@ plt.xticks(ha='center', va='center')
 
 plot.set_ylabel('Duration (ms)', labelpad=1)
 
-plt.savefig(f'plots/1-e2e.pdf', format='pdf', bbox_inches='tight', pad_inches=0.01)
+plt.savefig(
+    f'plots/1-e2e-c={args.config}-w={args.writes:g}-r={args.requests}-i={args.ingress}-t={args.throughput:g}.pdf',
+    format='pdf', bbox_inches='tight', pad_inches=0.01)
