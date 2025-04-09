@@ -14,22 +14,27 @@ function digits() {
 function start_cassandra() {
   local NB="$1"
   for i in $(seq 1 "$NB"); do
-    local name="cassandra-$i"
-    if [ -z "$(docker ps -a -q --filter="name=$name")" ]; then
-      docker run -e JVM_OPTS="-Xms256M -Xmx1024M" --name "$name" -p $((CASSANDRA_BASE_PORT + i - 1)):9042 -d cassandra &
-    else
-      echo "$name already running"
-    fi
+    (
+      local name="cassandra-$i"
+      if [ -z "$(docker ps -a -q --filter="name=$name")" ]; then
+        docker run -e JVM_OPTS="-Xms256M -Xmx1024M" --name "$name" -p $((CASSANDRA_BASE_PORT + i - 1)):9042 -d cassandra
+      else
+        echo "$name already running" >/dev/null
+      fi
+    ) &
   done
   wait
   for i in $(seq 1 "$NB"); do
-    local name="cassandra-$i"
-    until docker exec "$name" cqlsh -e "SELECT now() FROM system.local;" > /dev/null 2>&1; do
-      echo "Waiting for $name to be ready..."
-      sleep 2
-    done
-    echo "$name ready"
+    (
+      local name="cassandra-$i"
+      until docker exec "$name" cqlsh -e "SELECT now() FROM system.local;" > /dev/null 2>&1; do
+        echo "Waiting for $name to be ready..."
+        sleep 2
+      done
+      echo "$name ready" >/dev/null
+    ) &
   done
+  wait
 }
 
 function stop_cassandra() {
@@ -63,21 +68,27 @@ function run() {
 }
 
 function exp-1() {
-  for algo in "${ALGOS[@]}"; do
+  for writes in "${YCSB[@]}"; do
     for config in "${CONFIGS[@]}"; do
-      for writes in "${YCSB[@]}"; do
+      for algo in "${ALGOS[@]}"; do
         run "$config" "$algo" "$writes" "$REQUESTS" round-robin 0
       done
+      (
+        cd graphs &&
+        source env.sh &&
+        python3 1_e2e.py -c "$config" -w "$writes" -r "$REQUESTS" -i round-robin -t 0 &&
+        cd ..
+      )
     done
   done
 }
 
 function exp-2() {
   local LOADS=(10 100 1000) # req/s per client
-  for algo in "${ALGOS[@]}"; do
+  for writes in "${YCSB[@]}"; do
     for config in "${CONFIGS[@]}"; do
-      for writes in "${YCSB[@]}"; do
-        for load in "${LOADS[@]}"; do
+      for load in "${LOADS[@]}"; do
+        for algo in "${ALGOS[@]}"; do
           run "$config" "$algo" "$writes" "$REQUESTS" exponential "$load"
         done
       done
@@ -87,9 +98,9 @@ function exp-2() {
 
 function exp-3() {
   local LARGE_CONFIGS=(aws-europe-3.toml aws-europe-7.toml)
-  for algo in "${ALGOS[@]}"; do
+  for writes in "${YCSB[@]}"; do
     for config in "${LARGE_CONFIGS[@]}"; do
-      for writes in "${YCSB[@]}"; do
+      for algo in "${ALGOS[@]}"; do
         run "$config" "$algo" "$writes" "$REQUESTS" round-robin 0
       done
     done
