@@ -12,7 +12,7 @@ def parse(pids=None, config='aws-europe-7.toml', algo='k-census', writes=0.5, re
         pids = list(range(num_replicas))
     output = defaultdict(list)
     for pid in pids:
-        file_path = f'{LOG_DIR}/c={config}/a={algo}/w={writes}/r={requests}/i={ingress}/t={throughput}/{pid}.stdout'
+        file_path = f'{LOG_DIR}/c={config}/a={algo}/w={writes:g}/r={requests}/i={ingress}/t={throughput:g}/{pid}.stdout'
         with open(file_path) as file:
             for key, items in parse_file(file).items():
                 output[key] += items
