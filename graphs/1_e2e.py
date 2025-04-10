@@ -38,7 +38,7 @@ for i, experiment in enumerate(experiments):
     delta_ys_bottom.append(percentiles[1] - percentiles[0])
     labels.append(ALGORITHMS[experiment]['label'])
     colors.append(ALGORITHMS[experiment]['color'])
-    plot.text(i, percentiles[1] / 2, f'{int(percentiles[1])}\N{thin space}ms', horizontalalignment='center',
+    plot.text(i, average / 2, f'{int(average)}\N{thin space}ms', horizontalalignment='center',
               verticalalignment='center')
 
 plot.bar(labels, ys, label=labels, lw=0, color=colors)
