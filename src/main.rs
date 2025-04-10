@@ -241,7 +241,7 @@ async fn main() -> io::Result<()> {
                         propagation_graphs.rtts[leader][my_pid] / args.speedup
                     }
                     Algo::WeakReplication => {
-                        let mut rtts = propagation_graphs.rtts[my_pid].clone();
+                        let mut rtts = propagation_graphs.path_rtts[my_pid].clone();
                         rtts.sort();
                         rtts[rtts.len() / 2] / args.speedup
                     }
