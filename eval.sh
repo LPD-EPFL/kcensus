@@ -3,7 +3,7 @@
 CASSANDRA_BASE_PORT="9042"
 BASE_LOG_DIR="./logs"
 ALGOS=(k-census e-paxos multi-paxos paxos no-replication weak-replication)
-CONFIGS=(aws-europe-7.toml)
+CONFIGS=(aws-europe-7-alt.toml aws-north-america-7.toml aws-world-ring-9.toml aws-world-ring-13.toml aws-all-31.toml aws-europe-7.toml)
 YCSB=(1 0.5 0.05)
 REQUESTS=100
 SPEEDUP=1
@@ -49,7 +49,7 @@ function run() {
   local REQUESTS="$4"
   local INGRESS="$5"
   local THROUGHPUT="$6"
-  local TITLE="c=$CONFIG/a=$ALGO/w=$WRITES/r=$REQUESTS/i=$INGRESS/t=$THROUGHPUT"
+  local TITLE="c=$CONFIG/a=$ALGO/w=$WRITES/r=$REQUESTS/i=$INGRESS/t=$THROUGHPUT/s=$SPEEDUP"
   local LOG_DIR="$BASE_LOG_DIR/$TITLE/"
   mkdir -p "$LOG_DIR"
   killall kcensus 2>/dev/null
@@ -76,7 +76,7 @@ function exp-1() {
       done
       (
         cd graphs &&
-        source env.sh >/dev/null &&
+        source env.sh >/dev/null 2>&1 &&
         python3 1-bars.py -c "$config" -w "$writes" -r "$REQUESTS" -i round-robin -t 0 -s "$SPEEDUP" &&
         python3 2-cdfs.py -c "$config" -w "$writes" -r "$REQUESTS" -i round-robin -t 0 -s "$SPEEDUP" &&
         cd ..
