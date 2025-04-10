@@ -1,6 +1,7 @@
 use crate::connector::connect_all;
 use crate::consensus::paxos_family::{Mode, PaxosFamily};
 use crate::consensus::Consensus;
+use crate::delayer::Delayer;
 use crate::topology::Topology;
 use chrono::prelude::*;
 use clap::Parser;
@@ -11,7 +12,6 @@ use log::debug;
 use std::io;
 use std::io::Write;
 use std::time::Instant;
-use tokio::sync::mpsc;
 
 mod cassandra;
 mod connector;
@@ -86,13 +86,9 @@ async fn main() -> io::Result<()> {
     let nb_nodes = topology.regions.len();
 
     let (consensus_msg_sinks, consensus_msg_streams) = connect_all(my_pid, nb_nodes, 9876).await;
-    let (delayed_msg_tx, delayed_msg_rx) = mpsc::channel(1);
-    let delayer_task = tokio::task::spawn(delayer::delayer(
-        topology.clone(),
-        my_pid,
-        consensus_msg_streams,
-        delayed_msg_tx,
-    ));
+    let (delayer, delayed_msg_rx) = Delayer::new();
+    let delayer_task =
+        tokio::task::spawn(delayer.run(topology.clone(), my_pid, consensus_msg_streams));
 
     let ((client, mut new_client_request_rx), (app, committed_request_tx)) =
         cassandra::App::new(args.db, my_pid).await;
@@ -228,6 +224,6 @@ async fn main() -> io::Result<()> {
     println!("Total duration: {:?}", start.elapsed());
 
     client_task.await?;
-    delayer_task.await??;
+    delayer_task.await?;
     Ok(())
 }

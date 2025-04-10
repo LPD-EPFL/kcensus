@@ -5,78 +5,92 @@ use log::trace;
 use std::collections::VecDeque;
 use std::io;
 use std::time::Instant;
-use tokio::sync::mpsc::Sender;
+use tokio::sync::mpsc;
+use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::{pin, select};
 use tokio_stream::StreamExt;
 use tokio_timerfd::Delay;
 
-pub async fn delayer<St: Stream<Item = io::Result<MsgWithSource>> + Unpin>(
-    topology: Topology,
-    my_pid: usize,
-    mut input_stream: St,
-    delayed_output: Sender<MsgWithSource>,
-) -> io::Result<()> {
-    let delay = Delay::new(Instant::now())?;
-    pin!(delay);
+pub struct Delayer {
+    delayed_msg_tx: Sender<MsgWithSource>,
+}
 
-    let mut queues: Vec<VecDeque<MsgWithDeadline>> = Vec::with_capacity(topology.nb_nodes);
-    for _ in 0..topology.nb_nodes {
-        queues.push(VecDeque::with_capacity(
-            topology.nb_nodes * topology.nb_nodes,
-        ));
+impl Delayer {
+    pub fn new() -> (Self, Receiver<MsgWithSource>) {
+        let (delayed_msg_tx, delayed_msg_rx) = mpsc::channel(1);
+        (Self { delayed_msg_tx }, delayed_msg_rx)
     }
 
-    let mut stream_ended = false;
+    pub async fn run(
+        self,
+        topology: Topology,
+        my_pid: usize,
+        mut input_stream: impl Stream<Item = io::Result<MsgWithSource>> + Unpin,
+    ) {
+        let delay = Delay::new(Instant::now()).expect("Delayer failed to init delay");
+        pin!(delay);
 
-    loop {
-        let opt_deadline = queues
-            .iter()
-            .filter_map(|q| q.front())
-            .map(|msg| msg.deadline)
-            .min();
-        if let Some(deadline) = opt_deadline {
-            delay.as_mut().reset(deadline)
+        let mut queues: Vec<VecDeque<MsgWithDeadline>> = Vec::with_capacity(topology.nb_nodes);
+        for _ in 0..topology.nb_nodes {
+            queues.push(VecDeque::with_capacity(
+                topology.nb_nodes * topology.nb_nodes,
+            ));
         }
-        let is_empty = opt_deadline.is_none();
-        if is_empty && stream_ended {
-            break;
-        }
-        select! {
-            opt_res = input_stream.next(), if !stream_ended => {
-                if opt_res.is_none() {
-                    stream_ended = true;
-                    continue
-                }
-                let msg = opt_res.unwrap()?;
 
-                let deadline = Instant::now() + topology.link_latencies[msg.src][my_pid];
+        let mut stream_ended = false;
 
-                queues[msg.src].push_back(
-                    msg.with_deadline(deadline)
-                );
+        loop {
+            let opt_deadline = queues
+                .iter()
+                .filter_map(|q| q.front())
+                .map(|msg| msg.deadline)
+                .min();
+            if let Some(deadline) = opt_deadline {
+                delay.as_mut().reset(deadline)
             }
-            res = &mut delay, if !is_empty => {
-                res?;
-                let now = Instant::now();
-                trace!("Overslept by {:?}. {} queued messages. Consuming...", now.duration_since(delay.deadline()), queues.iter()
-                    .map(|q| q.len()).sum::<usize>());
-                for q in queues.iter_mut() {
-                    if let Some(m) = q.front() {
-                        if m.deadline < now {
-                            let res = delayed_output.send(q.pop_front().unwrap().msg).await;
-                            if res.is_err() {
-                                return Ok(())
+            let is_empty = opt_deadline.is_none();
+            if is_empty && stream_ended {
+                break;
+            }
+            select! {
+                opt_res = input_stream.next(), if !stream_ended => {
+                    let msg = match opt_res {
+                        Some(Ok(msg)) => msg,
+                        Some(Err(err)) => { panic!("{}", err); }
+                        None => {
+                            stream_ended = true;
+                            continue
+                        }
+                    };
+
+                    let deadline = Instant::now() + topology.link_latencies[msg.src][my_pid];
+
+                    queues[msg.src].push_back(
+                        msg.with_deadline(deadline)
+                    );
+                }
+                res = &mut delay, if !is_empty => {
+                    res.expect("Delayed message stream ended early");
+                    let now = Instant::now();
+                    trace!("Overslept by {:?}. {} queued messages. Consuming...", now.duration_since(delay.deadline()), queues.iter()
+                        .map(|q| q.len()).sum::<usize>());
+                    for q in queues.iter_mut() {
+                        if let Some(m) = q.front() {
+                            if m.deadline < now {
+                                let res = self.delayed_msg_tx.send(q.pop_front().unwrap().msg).await;
+                                if res.is_err() {
+                                    return;
+                                }
                             }
                         }
                     }
+                    trace!("New queue_size = {}", queues.iter()
+                         .map(|q| q.len()).sum::<usize>());
                 }
-                trace!("New queue_size = {}", queues.iter()
-                     .map(|q| q.len()).sum::<usize>());
-            }
-            () = delayed_output.closed() => {
-                return Ok(())
-            }
-        } // select!
-    } // loop
-    Ok(())
+                () = self.delayed_msg_tx.closed() => {
+                    return;
+                }
+            } // select!
+        } // loop
+    }
 }

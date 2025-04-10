@@ -78,7 +78,7 @@ pub async fn connect_all(
     base_port: u16,
 ) -> (
     MultiSink,
-    SelectAll<impl Stream<Item = Result<MsgWithSource, std::io::Error>>>,
+    SelectAll<impl Stream<Item = Result<MsgWithSource, io::Error>>>,
 ) {
     let mut sinks = HashMap::with_capacity(nb_nodes - 1);
     let mut streams = Vec::with_capacity(nb_nodes - 1);
