@@ -248,12 +248,6 @@ impl Consensus for PaxosFamily {
     }
 
     #[inline]
-    fn get_new_batch_to_propose(&self) -> Option<CommandBatch> {
-        // TODO: Actually form batch here !
-        None
-    }
-
-    #[inline]
     fn get_v_to_repropose(&self) -> usize {
         *self.queued_commands.keys().min().unwrap()
     }

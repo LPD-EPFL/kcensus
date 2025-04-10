@@ -6,6 +6,7 @@ use crate::message::MsgWithSource;
 use crate::multi_sink::MultiSink;
 use command::Command;
 use log::{debug, info};
+use scylla::_macro_internal::SerializeRow;
 use std::collections::{HashMap, VecDeque};
 use std::io;
 use tokio::select;
@@ -259,7 +260,14 @@ pub trait Consensus {
         !self.get_queued_commands().is_empty()
     }
 
-    fn get_new_batch_to_propose(&self) -> Option<CommandBatch>;
+    fn get_new_batch_to_propose(&self) -> Option<CommandBatch> {
+        if self.get_queued_commands().is_empty() {
+            return None;
+        }
+        let mut vs: Vec<_> = self.get_queued_commands().keys().copied().collect();
+        vs.retain(|v| matches!(self.get_queued_commands()[v], CommandBatch::Single(_)));
+        Some(CommandBatch::Batch(vs))
+    }
 
     fn get_v_to_repropose(&self) -> usize;
 
