@@ -205,7 +205,7 @@ async fn main() -> io::Result<()> {
                             .min_by_key(|&potential_leader| {
                                 let mut rtts = topology.rtts[potential_leader].clone();
                                 rtts.sort();
-                                rtts[rtts.len() / 2 + 1]
+                                rtts[rtts.len() / 2]
                             })
                             .expect("There should be a leader");
                         topology.rtts[leader][my_pid]
@@ -213,7 +213,7 @@ async fn main() -> io::Result<()> {
                     Algo::WeakReplication => {
                         let mut rtts = topology.rtts[my_pid].clone();
                         rtts.sort();
-                        rtts[rtts.len() / 2 + 1]
+                        rtts[rtts.len() / 2]
                     }
                     _ => unreachable!("Algo::Unreplicated | Algo::WeakReplication"),
                 };
