@@ -4,7 +4,7 @@ use crate::consensus::Consensus;
 use crate::delayer::Delayer;
 use crate::topology::Topology;
 use chrono::prelude::*;
-use clap::Parser;
+use clap::{arg, Parser};
 use consensus::kcensus::propagation::PropagationGraphs;
 use consensus::kcensus::KCensus;
 use env_logger::fmt::style;
@@ -40,6 +40,8 @@ struct Args {
     throughput: f32,
     #[arg(short, long, default_value_t = 0.5f32, value_name = "WRITE_RATIO")]
     writes: f32,
+    #[arg(short, long, default_value_t = 1u32, value_name = "SIMULATION_SPEED")]
+    speedup: u32,
 }
 
 #[derive(clap::ValueEnum, Clone, Debug)]
@@ -87,11 +89,15 @@ async fn main() -> io::Result<()> {
 
     let (consensus_msg_sinks, consensus_msg_streams) = connect_all(my_pid, nb_nodes, 9876).await;
     let (delayer, delayed_msg_rx) = Delayer::new();
-    let delayer_task =
-        tokio::task::spawn(delayer.run(topology.clone(), my_pid, consensus_msg_streams));
+    let delayer_task = tokio::task::spawn(delayer.run(
+        topology.clone(),
+        args.speedup,
+        my_pid,
+        consensus_msg_streams,
+    ));
 
     let ((client, mut new_client_request_rx), (app, committed_request_tx)) =
-        cassandra::App::new(args.db, my_pid).await;
+        cassandra::App::new(args.db, args.speedup, my_pid).await;
 
     let start = Instant::now();
 
@@ -107,13 +113,16 @@ async fn main() -> io::Result<()> {
                         .iter()
                         .max()
                         .expect("There should be a maximum RTT.")
-                        .to_owned(),
+                        .to_owned()
+                        / args.speedup,
                 )
                 .await
             }
-            Ingress::Exponential => cassandra::RequestInterval::new_exponential(args.throughput),
+            Ingress::Exponential => {
+                cassandra::RequestInterval::new_exponential(args.throughput * args.speedup as f32)
+            }
             Ingress::Constant => cassandra::RequestInterval::Constant {
-                reqs_per_second: args.throughput,
+                reqs_per_second: args.throughput * args.speedup as f32,
             },
         },
     }));
@@ -208,12 +217,12 @@ async fn main() -> io::Result<()> {
                                 rtts[rtts.len() / 2]
                             })
                             .expect("There should be a leader");
-                        topology.rtts[leader][my_pid]
+                        topology.rtts[leader][my_pid] / args.speedup
                     }
                     Algo::WeakReplication => {
                         let mut rtts = topology.rtts[my_pid].clone();
                         rtts.sort();
-                        rtts[rtts.len() / 2]
+                        rtts[rtts.len() / 2] / args.speedup
                     }
                     _ => unreachable!("Algo::(No|Weak)Replication"),
                 };

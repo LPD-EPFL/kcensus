@@ -24,6 +24,7 @@ impl Delayer {
     pub async fn run(
         self,
         topology: Topology,
+        speedup: u32,
         my_pid: usize,
         mut input_stream: impl Stream<Item = io::Result<MsgWithSource>> + Unpin,
     ) {
@@ -63,7 +64,7 @@ impl Delayer {
                         }
                     };
 
-                    let deadline = Instant::now() + topology.link_latencies[msg.src][my_pid];
+                    let deadline = Instant::now() + topology.link_latencies[msg.src][my_pid] / speedup;
 
                     queues[msg.src].push_back(
                         msg.with_deadline(deadline)

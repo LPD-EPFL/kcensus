@@ -219,16 +219,18 @@ pub struct Workload {
 
 pub struct Client {
     my_pid: usize,
+    speedup: u32,
     client_request_tx: Sender<Command>,
     client_response_rx: Receiver<Response>,
 }
 
 impl Client {
-    pub fn new(my_pid: usize) -> (Self, Receiver<Command>, Sender<Response>) {
+    pub fn new(my_pid: usize, speedup: u32) -> (Self, Receiver<Command>, Sender<Response>) {
         let (client_request_tx, client_request_rx) = mpsc::channel(1);
         let (client_response_tx, client_response_rx) = mpsc::channel(1);
         let client = Self {
             my_pid,
+            speedup,
             client_request_tx,
             client_response_rx,
         };
@@ -283,13 +285,13 @@ impl Client {
                 } else {
                     "GET"
                 },
-                responded.duration_since(request_generated)
+                responded.duration_since(request_generated) * self.speedup
             );
             let event = ExecutedEvent {
                 response,
-                latency: responded.duration_since(request_generated),
-                queueing: issued.duration_since(request_generated),
-                processing: responded.duration_since(request_generated),
+                latency: responded.duration_since(request_generated) * self.speedup,
+                queueing: issued.duration_since(request_generated) * self.speedup,
+                processing: responded.duration_since(request_generated) * self.speedup,
             };
             log("executed", &readable, &event);
             if let RequestInterval::RoundRobin { synchronizer } = &mut workload.interval {
@@ -326,6 +328,7 @@ pub struct App {
 impl App {
     pub async fn new(
         db: Option<String>,
+        speedup: u32,
         my_pid: usize,
     ) -> ((Client, Receiver<Command>), (Self, Sender<Command>)) {
         let cassandra_handler = if let Some(uri) = db {
@@ -339,7 +342,7 @@ impl App {
             None
         };
 
-        let (client, client_request_rx, client_response_tx) = Client::new(my_pid);
+        let (client, client_request_rx, client_response_tx) = Client::new(my_pid, speedup);
         let (committed_request_tx, committed_request_rx) = mpsc::channel::<Command>(1);
         let app = Self {
             my_pid,
