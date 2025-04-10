@@ -6,6 +6,7 @@ ALGOS=(k-census e-paxos multi-paxos paxos no-replication weak-replication)
 CONFIGS=(aws-europe-7.toml)
 YCSB=(1 0.5 0.05)
 REQUESTS=100
+SPEEDUP=1
 
 function digits() {
   echo "$1" | tr -d -c 0-9
@@ -62,7 +63,7 @@ function run() {
     if [[ "${CASSANDRA,,}" != "false" && "$CASSANDRA" != "0" ]]; then
       CASSANDRA_ARG="-d 127.0.0.1:$((CASSANDRA_BASE_PORT + pid))"
     fi
-    cargo run -r -- -p "$pid" --config "configs/$CONFIG" $CASSANDRA_ARG -a "$ALGO" -w "$WRITES" -r "$REQUESTS" -i "$INGRESS" -t "$THROUGHPUT" >"$LOG_DIR/$pid.stdout" 2>>"$LOG_DIR/$pid.stderr" &
+    cargo run -r -- -p "$pid" --config "configs/$CONFIG" $CASSANDRA_ARG -a "$ALGO" -w "$WRITES" -r "$REQUESTS" -i "$INGRESS" -t "$THROUGHPUT" -s "$SPEEDUP" >"$LOG_DIR/$pid.stdout" 2>>"$LOG_DIR/$pid.stderr" &
   done
   wait
 }
@@ -75,11 +76,9 @@ function exp-1() {
       done
       (
         cd graphs &&
-        source env.sh &&
-        python3 1_e2e.py -c "$config" -w "$writes" -r "$REQUESTS" -i round-robin -t 0 &&
-        python3 2_cdf.py -c "$config" -w "$writes" -r "$REQUESTS" -i round-robin -t 0 &&
-        python3 1-bars.py -c "$config" -w "$writes" -r "$REQUESTS" -i round-robin -t 0 &&
-        python3 2-cdfs.py -c "$config" -w "$writes" -r "$REQUESTS" -i round-robin -t 0 &&
+        source env.sh >/dev/null &&
+        python3 1-bars.py -c "$config" -w "$writes" -r "$REQUESTS" -i round-robin -t 0 -s "$SPEEDUP" &&
+        python3 2-cdfs.py -c "$config" -w "$writes" -r "$REQUESTS" -i round-robin -t 0 -s "$SPEEDUP" &&
         cd ..
       )
     done
