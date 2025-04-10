@@ -1,7 +1,7 @@
 use crate::message::Message::Hello;
 use crate::message::{Message, MsgWithSource};
 use crate::multi_sink::MultiSink;
-use futures::stream::{select_all, SelectAll};
+use futures::stream::select_all;
 use futures::{SinkExt, Stream, StreamExt, TryStreamExt};
 use log::debug;
 use std::collections::HashMap;
@@ -78,7 +78,7 @@ pub async fn connect_all(
     base_port: u16,
 ) -> (
     MultiSink,
-    SelectAll<impl Stream<Item = Result<MsgWithSource, io::Error>>>,
+    impl Stream<Item = Result<MsgWithSource, io::Error>>,
 ) {
     let mut sinks = HashMap::with_capacity(nb_nodes - 1);
     let mut streams = Vec::with_capacity(nb_nodes - 1);

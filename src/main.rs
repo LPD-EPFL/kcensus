@@ -99,7 +99,18 @@ async fn main() -> io::Result<()> {
         nb_requests: args.requests,
         rw_ratio: args.writes,
         interval: match args.ingress {
-            Ingress::RoundRobin => cassandra::RequestInterval::RoundRobin { nb_nodes },
+            Ingress::RoundRobin => {
+                cassandra::RequestInterval::new_round_robin(
+                    my_pid,
+                    nb_nodes,
+                    topology.rtts[(my_pid + nb_nodes - 1) % nb_nodes] // predecessor
+                        .iter()
+                        .max()
+                        .expect("There should be a maximum RTT.")
+                        .to_owned(),
+                )
+                .await
+            }
             Ingress::Exponential => cassandra::RequestInterval::new_exponential(args.throughput),
             Ingress::Constant => cassandra::RequestInterval::Constant {
                 reqs_per_second: args.throughput,

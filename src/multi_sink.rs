@@ -39,7 +39,7 @@ impl MultiSink {
     }
 
     #[inline]
-    async fn inner_send(&mut self, msg: Message, pid: usize) -> io::Result<()> {
+    pub async fn inner_send(&mut self, msg: Message, pid: usize) -> io::Result<()> {
         debug_assert!(pid != self.my_pid);
         let sink = self.sinks.get_mut(&pid).unwrap();
         sink.send(msg.clone()).await

@@ -1,15 +1,20 @@
-use crate::cassandra;
+use crate::connector::connect_all;
 use crate::consensus::command::{Command, CommittedCommand};
+use crate::message::{Message, MsgWithSource};
+use crate::multi_sink::MultiSink;
+use futures::StreamExt;
 use log::trace;
 use rand_distr::{Distribution, Exp};
 use scylla::client::{session::Session, session_builder::SessionBuilder};
 use scylla::statement::prepared::PreparedStatement;
 use serde::{Deserialize, Serialize};
+use std::io;
+use std::pin::Pin;
 use std::time::Duration;
+use tokio::sync::mpsc;
 use tokio::sync::mpsc::{Receiver, Sender};
-use tokio::sync::watch::Receiver as WatchReceiver;
-use tokio::sync::{mpsc, watch};
 use tokio::time::Instant;
+use tokio_stream::Stream;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum Request {
@@ -113,20 +118,78 @@ impl PreparedHandler {
     }
 }
 
-pub struct Client {
-    pub my_pid: usize,
-    pub new_client_request_tx: Sender<Command>,
-    pub client_response_rx: Receiver<Response>,
-    pub num_committed_watch_rx: WatchReceiver<usize>,
+pub enum RequestInterval {
+    RoundRobin {
+        synchronizer: RoundRobinSynchronizer,
+    }, // 1 request at a time, alternating among nodes
+    Exponential {
+        distribution: Exp<f32>,
+    },
+    Constant {
+        reqs_per_second: f32,
+    },
 }
 
-pub enum RequestInterval {
-    RoundRobin { nb_nodes: usize }, // 1 request at a time, alternating among nodes
-    Exponential { distribution: Exp<f32> },
-    Constant { reqs_per_second: f32 },
+pub struct RoundRobinSynchronizer {
+    my_pid: usize,
+    initiate: bool,
+    nb_nodes: usize,
+    max_rtt: Duration,
+    sinks: MultiSink,
+    streams: Pin<Box<dyn Stream<Item = Result<MsgWithSource, io::Error>> + Send>>,
+}
+
+impl RoundRobinSynchronizer {
+    async fn new(my_pid: usize, nb_nodes: usize, max_rtt: Duration) -> Self {
+        let (sinks, streams) = connect_all(my_pid, nb_nodes, 6789).await;
+        Self {
+            my_pid,
+            initiate: my_pid == 0,
+            nb_nodes,
+            max_rtt,
+            sinks,
+            streams: Box::pin(streams),
+        }
+    }
+
+    async fn notify(&mut self) {
+        self.sinks
+            .inner_send(Message::RoundRobin, (self.my_pid + 1) % self.nb_nodes)
+            .await
+            .expect("Failed to broadcast round robin");
+    }
+
+    async fn wait(&mut self) {
+        if self.initiate {
+            self.initiate = false;
+            return;
+        }
+        let next_msg = self
+            .streams
+            .as_mut()
+            .next()
+            .await
+            .expect("We should always be notified");
+        match next_msg {
+            Ok(MsgWithSource {
+                msg: Message::RoundRobin,
+                ..
+            }) => {}
+            Ok(MsgWithSource { .. }) => panic!("Unexpected msg in round-robin synchronizer!"),
+            Err(_) => {}
+        }
+        tokio_timerfd::sleep(self.max_rtt)
+            .await
+            .expect("Robin failed to sleep.");
+    }
 }
 
 impl RequestInterval {
+    pub async fn new_round_robin(my_pid: usize, nb_nodes: usize, max_rtt: Duration) -> Self {
+        let synchronizer = RoundRobinSynchronizer::new(my_pid, nb_nodes, max_rtt).await;
+        RequestInterval::RoundRobin { synchronizer }
+    }
+
     pub fn new_exponential(throughput: f32) -> Self {
         RequestInterval::Exponential {
             distribution: Exp::new(throughput).expect("Failed to create exponential distribution"),
@@ -154,17 +217,29 @@ pub struct Workload {
     pub interval: RequestInterval,
 }
 
+pub struct Client {
+    my_pid: usize,
+    client_request_tx: Sender<Command>,
+    client_response_rx: Receiver<Response>,
+}
+
 impl Client {
+    pub fn new(my_pid: usize) -> (Self, Receiver<Command>, Sender<Response>) {
+        let (client_request_tx, client_request_rx) = mpsc::channel(1);
+        let (client_response_tx, client_response_rx) = mpsc::channel(1);
+        let client = Self {
+            my_pid,
+            client_request_tx,
+            client_response_rx,
+        };
+        (client, client_request_rx, client_response_tx)
+    }
+
     pub async fn run(mut self, mut workload: Workload) {
         let mut request_generated = Instant::now();
         for i in 0..workload.nb_requests {
-            if let RequestInterval::RoundRobin { nb_nodes } = workload.interval {
-                while *self.num_committed_watch_rx.borrow_and_update() % nb_nodes != self.my_pid {
-                    self.num_committed_watch_rx
-                        .changed()
-                        .await
-                        .expect("Couldn't read back pressure");
-                }
+            if let RequestInterval::RoundRobin { synchronizer } = &mut workload.interval {
+                synchronizer.wait().await;
             }
             let request = if rand::random_range(0. ..1.) < workload.rw_ratio {
                 Command::new_write(
@@ -191,7 +266,7 @@ impl Client {
                     .expect("Failed to sleep");
             }
             let issued = Instant::now();
-            self.new_client_request_tx
+            self.client_request_tx
                 .send(request)
                 .await
                 .expect("Client failed to queue request");
@@ -217,6 +292,9 @@ impl Client {
                 processing: responded.duration_since(request_generated),
             };
             log("executed", &readable, &event);
+            if let RequestInterval::RoundRobin { synchronizer } = &mut workload.interval {
+                synchronizer.notify().await;
+            }
         }
     }
 }
@@ -243,7 +321,6 @@ pub struct App {
     cassandra_handler: Option<PreparedHandler>,
     committed_request_rx: Receiver<Command>,
     client_response_tx: Sender<Response>,
-    rr_iteration_tx: watch::Sender<usize>,
 }
 
 impl App {
@@ -251,11 +328,6 @@ impl App {
         db: Option<String>,
         my_pid: usize,
     ) -> ((Client, Receiver<Command>), (Self, Sender<Command>)) {
-        let (new_client_request_tx, new_client_request_rx) = mpsc::channel(1);
-        let (committed_request_tx, committed_request_rx) = mpsc::channel::<Command>(1);
-        let (client_response_tx, client_response_rx) = mpsc::channel(1);
-        let (rr_iteration_tx, rr_iteration_rx) = watch::channel(0usize);
-
         let cassandra_handler = if let Some(uri) = db {
             // docker run --name cassandra -p 9042:9042 -d cassandra
             // -db 127.0.0.1:9042
@@ -267,37 +339,29 @@ impl App {
             None
         };
 
-        let client = Client {
-            my_pid,
-            new_client_request_tx,
-            client_response_rx,
-            num_committed_watch_rx: rr_iteration_rx,
-        };
+        let (client, client_request_rx, client_response_tx) = Client::new(my_pid);
+        let (committed_request_tx, committed_request_rx) = mpsc::channel::<Command>(1);
         let app = Self {
             my_pid,
             cassandra_handler,
             committed_request_rx,
             client_response_tx,
-            rr_iteration_tx,
         };
 
-        ((client, new_client_request_rx), (app, committed_request_tx))
+        ((client, client_request_rx), (app, committed_request_tx))
     }
 
     pub async fn run(mut self) {
-        let mut rr_iteration = 0;
-        self.rr_iteration_tx.send(rr_iteration).ok(); // Client not listening for back pressure
         while let Some(command) = self.committed_request_rx.recv().await {
             let command: CommittedCommand<Request> = command.into();
-            rr_iteration += 1;
             trace!("About to execute committed request: {:?}", command);
             let response = if let Some(cassandra_handler) = self.cassandra_handler.as_ref() {
                 cassandra_handler.execute(command.app_request).await
             } else {
                 // We mock Cassandra
                 match command.app_request {
-                    Request::Put { key, value } => cassandra::Response::Put { key, value },
-                    Request::Get { key } => cassandra::Response::Get { key, value: None },
+                    Request::Put { key, value } => Response::Put { key, value },
+                    Request::Get { key } => Response::Get { key, value: None },
                 }
             };
             if command.proposer == self.my_pid {
@@ -306,7 +370,6 @@ impl App {
                     .await
                     .expect("Server failed to enqueue client Response");
             }
-            self.rr_iteration_tx.send(rr_iteration).ok(); // Client not listening for back pressure
         }
     }
 }
