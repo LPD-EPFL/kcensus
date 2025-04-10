@@ -2,7 +2,7 @@
 from matplotlib.lines import Line2D
 from matplotlib.ticker import *
 
-from common import ALGORITHMS, args
+from common import ALGORITHMS, args, serialized_args
 from logparser import *
 from prelude import plt
 
@@ -28,7 +28,7 @@ plot.set_xlim(0, 70)
 legends = []
 for experiment in ALGORITHMS.keys():
     logs = parse(algo=experiment, config=args.config, writes=args.writes, requests=args.requests, ingress=args.ingress,
-                 throughput=args.throughput)
+                 throughput=args.throughput, speedup=args.speedup)
 
     average = compute_average(logs['executed'], lambda log: duration_to_ms(log['latency']))
     percentiles = [-999999] + compute_percentiles(logs['executed'], lambda log: duration_to_ms(log['latency'])) + [
@@ -42,6 +42,7 @@ fig.legend(handles=legends, bbox_to_anchor=(0.1, 1.29, 0.75, 0.01),
            borderpad=.3, labelspacing=0.1, mode='expand',
            handlelength=0.8, handletextpad=0.5)
 
-plt.savefig(
-    f'plots/2-cdfs-c={args.config}-w={args.writes:g}-r={args.requests}-i={args.ingress}-t={args.throughput:g}.pdf',
-    format='pdf', bbox_inches='tight', pad_inches=0.01)
+pdf_path = f'plots/2-cdfs{serialized_args}.pdf'
+plt.savefig(pdf_path,
+            format='pdf', bbox_inches='tight', pad_inches=0.01)
+print(pdf_path)

@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 
-from matplotlib.ticker import *
-
-from common import ALGORITHMS, args
+from common import ALGORITHMS, args, serialized_args
 from logparser import *
 from prelude import plt
 
@@ -15,8 +13,8 @@ plot.grid(axis='y', which='major', linestyle='--', linewidth='0.5')
 plot.grid(axis='y', which='minor', linestyle=':', linewidth='0.25')
 plot.tick_params(axis='both', which='major', pad=0.5)
 plot.tick_params(axis='both', which='minor', pad=0.5)
-plot.yaxis.set_major_locator(MultipleLocator(50))
-plot.yaxis.set_minor_locator(MultipleLocator(25))
+# plot.yaxis.set_major_locator(MultipleLocator(50))
+# plot.yaxis.set_minor_locator(MultipleLocator(25))
 plt.gca().xaxis.set_tick_params(pad=10)
 plot.set_axisbelow(True)
 plt.xticks(ha='center', va='center')
@@ -29,7 +27,7 @@ labels = []
 colors = []
 for i, experiment in enumerate(ALGORITHMS.keys()):
     logs = parse(algo=experiment, config=args.config, writes=args.writes, requests=args.requests, ingress=args.ingress,
-                 throughput=args.throughput)
+                 throughput=args.throughput, speedup=args.speedup)
     average = compute_average(logs['executed'], lambda log: duration_to_ms(log['latency']))
     percentiles = compute_percentiles(logs['executed'], lambda log: duration_to_ms(log['latency']))
     MOUSTACHES = (5, 95)
@@ -41,9 +39,9 @@ for i, experiment in enumerate(ALGORITHMS.keys()):
 
     labels.append(ALGORITHMS[experiment]['label'].replace(' ', '\n').replace('-', '-\n'))
     colors.append(ALGORITHMS[experiment]['color'])
-    text_y = percentiles[MOUSTACHES[1]] + 20  # average / 2
+    text_y = percentiles[MOUSTACHES[1]]  # average / 2
     plot.text(i, text_y, f'{int(average)}\N{thin space}ms', horizontalalignment='center',
-              verticalalignment='center')
+              verticalalignment='bottom')
 
 plot.bar(labels, ys, lw=0, color=colors)
 plot.errorbar(xs, ys, [delta_ys_bottom, delta_ys_top], ls='none', color='black', solid_capstyle='projecting',
@@ -51,8 +49,9 @@ plot.errorbar(xs, ys, [delta_ys_bottom, delta_ys_top], ls='none', color='black',
 
 # For the average text to fit
 ymin, ymax = plot.get_ylim()
-plot.set_ylim(ymin, ymax + 35)
+plot.set_ylim(ymin, ymax * 1.2)
 
-plt.savefig(
-    f'plots/1-bars-c={args.config}-w={args.writes:g}-r={args.requests}-i={args.ingress}-t={args.throughput:g}.pdf',
-    format='pdf', bbox_inches='tight', pad_inches=0.01)
+pdf_path = f'plots/1-bars{serialized_args}.pdf'
+plt.savefig(pdf_path,
+            format='pdf', bbox_inches='tight', pad_inches=0.01)
+print(pdf_path)

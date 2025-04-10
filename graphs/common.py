@@ -22,7 +22,9 @@ parser.add_argument('-w', '--writes', type=float, default=0.5, help='Ratio of wr
 parser.add_argument('-r', '--requests', type=int, default=100, help='Number of requests per client')
 parser.add_argument('-i', '--ingress', type=str, default='round-robin', help='Type of ingress')
 parser.add_argument('-t', '--throughput', type=float, default='10', help='Target req/s per client')
+parser.add_argument('-s', '--speedup', type=int, default='1', help='How much the network was sped up')
 args = parser.parse_args()
+serialized_args = f'-c={args.config}-w={args.writes:g}-r={args.requests}-i={args.ingress}-t={args.throughput:g}-s={args.speedup}'
 
 
 def k_formatter(x, _):
