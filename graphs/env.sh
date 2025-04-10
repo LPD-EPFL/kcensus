@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# mkdir ~/.local/share/fonts/otf
+# mkdir -p ~/.local/share/fonts/otf
 # cp -r LinLibertine ~/.local/share/fonts/otf/
 # fc-cache
 # rm -rf ~/.cache/matplotlib

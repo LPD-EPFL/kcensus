@@ -6,12 +6,12 @@ green = '#55A868'
 lavanda = '#BEA9DF'
 
 ALGORITHMS = {
-    'unreplicated': {'label': 'Unreplicated', 'color': blue, 'lw': 0.8, 'marker': '', 'markersize': 3.5},
+    'no-replication': {'label': 'No Rep.', 'color': blue, 'lw': 0.8, 'marker': '', 'markersize': 3.5},
     'paxos': {'label': 'Paxos', 'color': red, 'lw': 0.8, 'marker': 'o', 'markersize': 3.5},
     'multi-paxos': {'label': 'Multi-Paxos', 'color': orange, 'lw': 0.8, 'marker': 's', 'markersize': 3.5},
     'e-paxos': {'label': 'EPaxos', 'color': yellow, 'lw': 0.8, 'marker': 'x', 'markersize': 3.5},
     'k-census': {'label': 'K-Census', 'color': green, 'lw': 0.8, 'marker': '>', 'markersize': 3.5},
-    'weak-replication': {'label': 'Weak', 'color': lavanda, 'lw': 0.8, 'marker': '^', 'markersize': 3.5},
+    'weak-replication': {'label': 'Weak Rep.', 'color': lavanda, 'lw': 0.8, 'marker': '^', 'markersize': 3.5},
 }
 
 import argparse

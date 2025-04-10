@@ -2,7 +2,7 @@
 
 CASSANDRA_BASE_PORT="9042"
 BASE_LOG_DIR="./logs"
-ALGOS=(k-census e-paxos multi-paxos paxos unreplicated weak-replication)
+ALGOS=(k-census e-paxos multi-paxos paxos no-replication weak-replication)
 CONFIGS=(aws-europe-7.toml)
 YCSB=(1 0.5 0.05)
 REQUESTS=100
@@ -78,6 +78,8 @@ function exp-1() {
         source env.sh &&
         python3 1_e2e.py -c "$config" -w "$writes" -r "$REQUESTS" -i round-robin -t 0 &&
         python3 2_cdf.py -c "$config" -w "$writes" -r "$REQUESTS" -i round-robin -t 0 &&
+        python3 1-bars.py -c "$config" -w "$writes" -r "$REQUESTS" -i round-robin -t 0 &&
+        python3 2-cdfs.py -c "$config" -w "$writes" -r "$REQUESTS" -i round-robin -t 0 &&
         cd ..
       )
     done

@@ -48,7 +48,7 @@ enum Algo {
     Paxos,
     EPaxos,
     MultiPaxos,
-    Unreplicated,
+    NoReplication,
     WeakReplication,
 }
 
@@ -194,12 +194,12 @@ async fn main() -> io::Result<()> {
                 consensus_obj.run(delayed_msg_rx, new_client_request_rx, committed_request_tx);
             let _ = tokio::join!(app.run(), consensus);
         }
-        Algo::Unreplicated | Algo::WeakReplication => {
+        Algo::NoReplication | Algo::WeakReplication => {
             let latency_mock = async {
                 // For simplicity, requests will be executed locally after a ping delay.
                 // This is a lower bound as this consumes no network + compute is sharded.
                 let rtt = match args.algo {
-                    Algo::Unreplicated => {
+                    Algo::NoReplication => {
                         // The leader is the node with the lowest median ping.
                         let leader = (0..topology.nb_nodes)
                             .min_by_key(|&potential_leader| {
@@ -215,7 +215,7 @@ async fn main() -> io::Result<()> {
                         rtts.sort();
                         rtts[rtts.len() / 2]
                     }
-                    _ => unreachable!("Algo::Unreplicated | Algo::WeakReplication"),
+                    _ => unreachable!("Algo::(No|Weak)Replication"),
                 };
                 while let Some(command) = new_client_request_rx.recv().await {
                     tokio_timerfd::sleep(rtt)

@@ -18,13 +18,12 @@ plot.grid(axis='x', which='major', linestyle='--', linewidth='0.5')
 plot.grid(axis='x', which='minor', linestyle=':', linewidth='0.25')
 plot.tick_params(axis='both', which='major', pad=0.5)
 plot.tick_params(axis='both', which='minor', pad=0.5)
-plot.yaxis.set_minor_locator(MultipleLocator(12.5))
-plot.yaxis.set_major_locator(MultipleLocator(25))
-plot.xaxis.set_minor_locator(MultipleLocator(12.5))
+plot.yaxis.set_minor_locator(MultipleLocator(25))
+plot.yaxis.set_major_locator(MultipleLocator(50))
+plot.xaxis.set_minor_locator(MultipleLocator(10))
 plot.xaxis.set_major_locator(MultipleLocator(20))
 plot.set_axisbelow(True)
-plot.set_xlim(0, 75)
-plot.set_xlim(0, 75)
+plot.set_xlim(0, 70)
 
 legends = []
 for experiment in ALGORITHMS.keys():
@@ -38,20 +37,11 @@ for experiment in ALGORITHMS.keys():
               markevery=(26, 25))
     legends.append(Line2D([0], [0], **ALGORITHMS[experiment]))
 
-legend = fig.legend(handles=legends, bbox_to_anchor=(0.025, 1.29, 0.9, 0.01),
-                    loc='center', edgecolor='black', borderaxespad=0, ncols=3,
-                    borderpad=.3, labelspacing=0.1, mode='expand',
-                    handlelength=0.8, handletextpad=0.5)
-print(legend.get_bbox_to_anchor())
-
-plot.yaxis.set_minor_locator(MultipleLocator(50))
-plot.yaxis.set_major_locator(MultipleLocator(100))
-plot.grid(axis='y', which='major', linestyle='--', linewidth='0.5')
-plot.grid(axis='y', which='minor', linestyle=':', linewidth='0.25')
-plot.set_axisbelow(True)
-plot.tick_params(axis='both', which='major', pad=0.5)
-plot.tick_params(axis='both', which='minor', pad=0.5)
+fig.legend(handles=legends, bbox_to_anchor=(0.1, 1.29, 0.75, 0.01),
+           loc='center', edgecolor='black', borderaxespad=0, ncols=3,
+           borderpad=.3, labelspacing=0.1, mode='expand',
+           handlelength=0.8, handletextpad=0.5)
 
 plt.savefig(
-    f'plots/2-cdf-c={args.config}-w={args.writes:g}-r={args.requests}-i={args.ingress}-t={args.throughput:g}.pdf',
+    f'plots/2-cdfs-c={args.config}-w={args.writes:g}-r={args.requests}-i={args.ingress}-t={args.throughput:g}.pdf',
     format='pdf', bbox_inches='tight', pad_inches=0.01)

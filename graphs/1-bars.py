@@ -15,10 +15,8 @@ plot.grid(axis='y', which='major', linestyle='--', linewidth='0.5')
 plot.grid(axis='y', which='minor', linestyle=':', linewidth='0.25')
 plot.tick_params(axis='both', which='major', pad=0.5)
 plot.tick_params(axis='both', which='minor', pad=0.5)
-plot.yaxis.set_minor_locator(MultipleLocator(50))
-plot.yaxis.set_major_locator(MultipleLocator(100))
-plot.yaxis.set_major_locator(MultipleLocator(80))
-plot.yaxis.set_minor_locator(MultipleLocator(20))
+plot.yaxis.set_major_locator(MultipleLocator(50))
+plot.yaxis.set_minor_locator(MultipleLocator(25))
 plt.gca().xaxis.set_tick_params(pad=10)
 plot.set_axisbelow(True)
 plt.xticks(ha='center', va='center')
@@ -34,21 +32,27 @@ for i, experiment in enumerate(ALGORITHMS.keys()):
                  throughput=args.throughput)
     average = compute_average(logs['executed'], lambda log: duration_to_ms(log['latency']))
     percentiles = compute_percentiles(logs['executed'], lambda log: duration_to_ms(log['latency']))
-    percentiles = percentiles[5], percentiles[50], percentiles[95]
-    print(experiment, average, percentiles)
+    MOUSTACHES = (5, 95)
+    print(experiment, average, (percentiles[MOUSTACHES[0]], percentiles[MOUSTACHES[1]]))
     xs.append(i)
     ys.append(average)
-    delta_ys_top.append(percentiles[2] - percentiles[1])
-    delta_ys_bottom.append(percentiles[1] - percentiles[0])
-    labels.append(ALGORITHMS[experiment]['label'])
+    delta_ys_top.append(percentiles[MOUSTACHES[1]] - average)
+    delta_ys_bottom.append(average - percentiles[MOUSTACHES[0]])
+
+    labels.append(ALGORITHMS[experiment]['label'].replace(' ', '\n').replace('-', '-\n'))
     colors.append(ALGORITHMS[experiment]['color'])
-    plot.text(i, average / 2, f'{int(average)}\N{thin space}ms', horizontalalignment='center',
+    text_y = percentiles[MOUSTACHES[1]] + 20  # average / 2
+    plot.text(i, text_y, f'{int(average)}\N{thin space}ms', horizontalalignment='center',
               verticalalignment='center')
 
-plot.bar(labels, ys, label=labels, lw=0, color=colors)
+plot.bar(labels, ys, lw=0, color=colors)
 plot.errorbar(xs, ys, [delta_ys_bottom, delta_ys_top], ls='none', color='black', solid_capstyle='projecting',
               capsize=2.5)
 
+# For the average text to fit
+ymin, ymax = plot.get_ylim()
+plot.set_ylim(ymin, ymax + 35)
+
 plt.savefig(
-    f'plots/1-e2e-c={args.config}-w={args.writes:g}-r={args.requests}-i={args.ingress}-t={args.throughput:g}.pdf',
+    f'plots/1-bars-c={args.config}-w={args.writes:g}-r={args.requests}-i={args.ingress}-t={args.throughput:g}.pdf',
     format='pdf', bbox_inches='tight', pad_inches=0.01)
