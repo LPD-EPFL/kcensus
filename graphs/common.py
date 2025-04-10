@@ -3,15 +3,15 @@ red = '#C44E52'
 orange = '#DD8452'
 yellow = '#E2C44C'
 green = '#55A868'
-grey = '#FAFAFA'
+lavanda = '#BEA9DF'
 
 ALGORITHMS = {
-    'unreplicated': {'label': 'Unreplicated', 'color': blue},
-    'paxos': {'label': 'Paxos', 'color': red},
-    'multi-paxos': {'label': 'Multi-Paxos', 'color': orange},
-    'e-paxos': {'label': 'EPaxos', 'color': yellow},
-    'k-census': {'label': 'K-Census', 'color': green},
-    'weak-replication': {'label': 'Weak', 'color': grey},
+    'unreplicated': {'label': 'Unreplicated', 'color': blue, 'lw': 0.8, 'marker': '', 'markersize': 3.5},
+    'paxos': {'label': 'Paxos', 'color': red, 'lw': 0.8, 'marker': 'o', 'markersize': 3.5},
+    'multi-paxos': {'label': 'Multi-Paxos', 'color': orange, 'lw': 0.8, 'marker': 's', 'markersize': 3.5},
+    'e-paxos': {'label': 'EPaxos', 'color': yellow, 'lw': 0.8, 'marker': 'x', 'markersize': 3.5},
+    'k-census': {'label': 'K-Census', 'color': green, 'lw': 0.8, 'marker': '>', 'markersize': 3.5},
+    'weak-replication': {'label': 'Weak', 'color': lavanda, 'lw': 0.8, 'marker': '^', 'markersize': 3.5},
 }
 
 import argparse

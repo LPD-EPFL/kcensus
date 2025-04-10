@@ -9,15 +9,19 @@ from prelude import plt
 fig, plot = plt.subplots(figsize=(2.975, 0.8), tight_layout=True)
 plt.tight_layout(pad=0, w_pad=0, h_pad=0)  # , rect=(0,0,.80,1))
 
-experiments = ('paxos', 'multi-paxos', 'e-paxos', 'k-census', 'unreplicated', 'weak-replication')
-
-plot.yaxis.set_minor_locator(MultipleLocator(50))
-plot.yaxis.set_major_locator(MultipleLocator(100))
+plot.set_title('Average Request Latency', pad=0)
+plot.set_ylabel('Duration (ms)', labelpad=1)
 plot.grid(axis='y', which='major', linestyle='--', linewidth='0.5')
 plot.grid(axis='y', which='minor', linestyle=':', linewidth='0.25')
-plot.set_axisbelow(True)
 plot.tick_params(axis='both', which='major', pad=0.5)
 plot.tick_params(axis='both', which='minor', pad=0.5)
+plot.yaxis.set_minor_locator(MultipleLocator(50))
+plot.yaxis.set_major_locator(MultipleLocator(100))
+plot.yaxis.set_major_locator(MultipleLocator(80))
+plot.yaxis.set_minor_locator(MultipleLocator(20))
+plt.gca().xaxis.set_tick_params(pad=10)
+plot.set_axisbelow(True)
+plt.xticks(ha='center', va='center')
 
 xs = []
 ys = []
@@ -25,7 +29,7 @@ delta_ys_top = []
 delta_ys_bottom = []
 labels = []
 colors = []
-for i, experiment in enumerate(experiments):
+for i, experiment in enumerate(ALGORITHMS.keys()):
     logs = parse(algo=experiment, config=args.config, writes=args.writes, requests=args.requests, ingress=args.ingress,
                  throughput=args.throughput)
     average = compute_average(logs['executed'], lambda log: duration_to_ms(log['latency']))
@@ -44,14 +48,6 @@ for i, experiment in enumerate(experiments):
 plot.bar(labels, ys, label=labels, lw=0, color=colors)
 plot.errorbar(xs, ys, [delta_ys_bottom, delta_ys_top], ls='none', color='black', solid_capstyle='projecting',
               capsize=2.5)
-plot.set_title('Average Request Latency', pad=0)
-
-plot.yaxis.set_major_locator(MultipleLocator(80))
-plot.yaxis.set_minor_locator(MultipleLocator(20))
-plt.gca().xaxis.set_tick_params(pad=10)
-plt.xticks(ha='center', va='center')
-
-plot.set_ylabel('Duration (ms)', labelpad=1)
 
 plt.savefig(
     f'plots/1-e2e-c={args.config}-w={args.writes:g}-r={args.requests}-i={args.ingress}-t={args.throughput:g}.pdf',
