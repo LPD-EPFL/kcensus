@@ -1,10 +1,9 @@
-use crate::consensus::command::Command;
 use crate::consensus::kcensus::message::KCensusMsg;
 use crate::consensus::kcensus::message::KCensusMsg::{Spread, SpreadValueOnly};
 use crate::consensus::kcensus::propagation::{MessageId, PropagationGraphs};
 use crate::consensus::kcensus::round_state::KCensusRoundState;
-use crate::consensus::message::ConsensusMessage;
 use crate::consensus::message::ConsensusMsg::{Commit, KCensusM};
+use crate::consensus::message::{CommandBatch, ConsensusMessage};
 use crate::consensus::read_tracker::ReadTracker;
 use crate::consensus::Consensus;
 use crate::multi_sink::MultiSink;
@@ -33,7 +32,7 @@ pub struct KCensus {
     next_uid: usize,
     slot: usize,
     round: usize,
-    queued_commands: HashMap<usize, Command>,
+    queued_commands: HashMap<usize, CommandBatch>,
 
     round_state: KCensusRoundState,
 
@@ -78,7 +77,7 @@ impl KCensus {
 }
 
 impl Consensus for KCensus {
-    async fn process_message(&mut self, msg: ConsensusMessage) -> io::Result<Option<Command>> {
+    async fn process_message(&mut self, msg: ConsensusMessage) -> io::Result<Option<CommandBatch>> {
         let msg_v = msg.get_v();
         let src = msg.src;
         let msg = match msg.msg {
@@ -216,9 +215,8 @@ impl Consensus for KCensus {
     }
 
     #[inline]
-    async fn propose_start(&mut self, command: Command, contention: bool) -> io::Result<()> {
-        debug_assert!(!command.read_only);
-        let uid = self.store_new_command(command);
+    async fn propose_start(&mut self, value: CommandBatch, contention: bool) -> io::Result<()> {
+        let uid = self.store_new_command(value);
         if contention {
             self.graph_spread_new_value_only(uid).await
         } else {
@@ -232,16 +230,16 @@ impl Consensus for KCensus {
     }
 
     #[inline]
-    fn commit_slot(&mut self, v: usize, from_commit_msg: bool) -> Command {
-        let value = self.queued_commands.remove(&v).unwrap();
+    fn commit_slot(&mut self, v: usize, from_commit_msg: bool) -> CommandBatch {
+        let value = self.remove_command(v);
         if from_commit_msg {
             // "<#2FB82F>Commited \"{}\" in slot {}.</>"
-            trace!("Commited \"{:?}\" in slot {}.", value.command, self.slot);
+            trace!("Commited \"{:?}\" in slot {}.", value, self.slot);
         } else {
             // "<#2FB82F>Commited \"{}\" in slot {} (round {}) from state:</> <#B8E8B8>{}</>"
             trace!(
                 "Commited \"{:?}\" in slot {} (round {}) from state: {}",
-                value.command, self.slot, self.round, self.round_state,
+                value, self.slot, self.round, self.round_state,
             );
         }
         self.slot += 1;
@@ -276,7 +274,7 @@ impl Consensus for KCensus {
     }
 
     #[inline]
-    fn get_new_batch_to_propose(&self) -> Option<Command> {
+    fn get_new_batch_to_propose(&self) -> Option<CommandBatch> {
         // TODO: Actually form batch here !
         None
     }
@@ -286,11 +284,11 @@ impl Consensus for KCensus {
         *self.queued_commands.keys().min().unwrap()
     }
 
-    fn get_queued_commands(&self) -> &HashMap<usize, Command> {
+    fn get_queued_commands(&self) -> &HashMap<usize, CommandBatch> {
         &self.queued_commands
     }
 
-    fn get_queued_commands_mut(&mut self) -> &mut HashMap<usize, Command> {
+    fn get_queued_commands_mut(&mut self) -> &mut HashMap<usize, CommandBatch> {
         &mut self.queued_commands
     }
 
@@ -324,7 +322,7 @@ impl KCensus {
     }
 
     #[inline]
-    fn value_for_msg(&self, msg: &KCensusMsg) -> Option<Command> {
+    fn value_for_msg(&self, msg: &KCensusMsg) -> Option<CommandBatch> {
         if msg.includes_value() {
             let v = msg.get_v(self.my_pid);
             Some(self.queued_commands[&v].clone())

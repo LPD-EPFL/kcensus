@@ -1,3 +1,4 @@
+use crate::consensus::command::Command;
 use crate::consensus::kcensus::message::KCensusMsg;
 use crate::consensus::message::ConsensusMsg::{
     Commit, KCensusM, PaxosM, ReadRequest, ReadResponse,
@@ -26,6 +27,12 @@ pub enum ConsensusMsg {
 pub struct ReadUid {
     pub reader: usize,
     pub id: usize,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum CommandBatch {
+    Single(Command),
+    Batch(Vec<usize>),
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

@@ -1,5 +1,5 @@
-use crate::consensus::message::ConsensusMessage;
 use crate::consensus::message::ConsensusMsg::{Commit, ReadRequest, ReadResponse};
+use crate::consensus::message::{CommandBatch, ConsensusMessage};
 use crate::consensus::read_tracker::ReadTracker;
 use crate::message::Message::{ConsensusM, Done};
 use crate::message::MsgWithSource;
@@ -37,8 +37,8 @@ pub trait Consensus {
                 let msg = &queued_messages[i];
                 if self.ready_to_process(msg) {
                     let msg = queued_messages.remove(i).unwrap();
-                    let command = self.full_process_message(msg).await?;
-                    if self.commit_commands(&committed_commands_tx, command).await {
+                    let batch = self.full_process_message(msg).await?;
+                    if self.commit_commands(&committed_commands_tx, batch).await {
                         continue 'main_loop; // Restart from the beginning of the queue
                     }
                 } else {
@@ -54,7 +54,6 @@ pub trait Consensus {
             let should_repropose = !ongoing && self.has_queued_commands();
             // TODO: (Optim.) peak connection first ?
             if should_repropose && self.should_lead() {
-                // TODO: Leader election / only leader should repropose !!!!!!!!!!!!!!!!!!
                 if let Some(batch) = self.get_new_batch_to_propose() {
                     self.propose_start(batch, false).await?;
                 } else {
@@ -71,7 +70,7 @@ pub trait Consensus {
                             if command.read_only {
                                 self.start_read(command).await?;
                             } else {
-                                self.propose_start(command, ongoing).await?;
+                                self.propose_start(CommandBatch::Single(command), ongoing).await?;
                             }
                         }
                         None => {
@@ -133,10 +132,26 @@ pub trait Consensus {
 
     #[inline]
     fn ready_to_process(&self, msg: &ConsensusMessage) -> bool {
-        msg.get_slot() <= self.get_slot() && msg.get_v().iter().all(|v| self.knows_v(*v))
+        if msg.get_slot() > self.get_slot() {
+            false
+        } else {
+            match msg.get_v() {
+                None => true,
+                Some(v) => match self.get_queued_commands().get(&v) {
+                    None => false,
+                    Some(CommandBatch::Single(_)) => true,
+                    Some(CommandBatch::Batch(vs)) => vs
+                        .iter()
+                        .all(|v| self.get_queued_commands().contains_key(v)),
+                },
+            }
+        }
     }
 
-    async fn full_process_message(&mut self, msg: ConsensusMessage) -> io::Result<Option<Command>> {
+    async fn full_process_message(
+        &mut self,
+        msg: ConsensusMessage,
+    ) -> io::Result<Option<CommandBatch>> {
         debug_assert!(self.ready_to_process(&msg));
         if let Commit { slot, v } = msg.msg {
             if slot < self.get_slot() {
@@ -161,7 +176,10 @@ pub trait Consensus {
             return Ok(None);
         }
         if let ReadResponse { uid, .. } = msg.msg {
-            return Ok(self.get_read_tracker().receive_ready(uid));
+            return Ok(self
+                .get_read_tracker()
+                .receive_ready(uid)
+                .map(|c| CommandBatch::Single(c)));
         }
         debug!("Processing message: {:?}", msg);
         self.process_message(msg).await
@@ -171,35 +189,45 @@ pub trait Consensus {
     async fn commit_commands(
         &mut self,
         committed_commands_tx: &Sender<Command>,
-        command: Option<Command>,
+        batch: Option<CommandBatch>,
     ) -> bool {
-        if let Some(command) = command {
-            committed_commands_tx
-                .send(command)
-                .await
-                .expect("Sending commited value");
+        if let Some(batch) = batch {
+            match batch {
+                CommandBatch::Single(command) => {
+                    commit_command(committed_commands_tx, command).await;
+                }
+                CommandBatch::Batch(vs) => {
+                    for v in vs {
+                        let command = self.remove_command(v);
+                        if let CommandBatch::Single(command) = command {
+                            commit_command(committed_commands_tx, command).await;
+                        } else {
+                            panic!("Batches should not include batches.")
+                        }
+                    }
+                }
+            }
+
             let result = self.get_read_tracker().commit_slot();
             for read_only_command in result.into_iter() {
-                committed_commands_tx
-                    .send(read_only_command)
-                    .await
-                    .expect("Sending commited value")
+                commit_command(committed_commands_tx, read_only_command).await;
             }
+
             true
         } else {
             false
         }
     }
 
-    async fn process_message(&mut self, msg: ConsensusMessage) -> io::Result<Option<Command>>;
+    async fn process_message(&mut self, msg: ConsensusMessage) -> io::Result<Option<CommandBatch>>;
 
     fn can_forward_proposals(&mut self) -> bool;
 
-    async fn propose_start(&mut self, command: Command, contention: bool) -> io::Result<()>;
+    async fn propose_start(&mut self, value: CommandBatch, contention: bool) -> io::Result<()>;
 
     async fn repropose_start(&mut self, v: usize) -> io::Result<()>;
 
-    fn commit_slot(&mut self, v: usize, from_commit_msg: bool) -> Command;
+    fn commit_slot(&mut self, v: usize, from_commit_msg: bool) -> CommandBatch;
 
     fn get_nb_nodes(&self) -> usize;
 
@@ -212,23 +240,18 @@ pub trait Consensus {
     fn get_next_uid(&mut self) -> usize;
 
     #[inline]
-    fn store_new_command(&mut self, command: Command) -> usize {
+    fn store_new_command(&mut self, value: CommandBatch) -> usize {
         let v = self.get_next_uid();
-        let old = self.get_queued_commands_mut().insert(v, command);
+        let old = self.get_queued_commands_mut().insert(v, value);
         debug_assert!(old.is_none());
         v
     }
 
     #[inline]
-    fn store_remote_command(&mut self, v: usize, value: Command) {
+    fn store_remote_command(&mut self, v: usize, value: CommandBatch) {
         // TODO: Allow forwarding values ? (could the value already be there ?)
         let inserted = self.get_queued_commands_mut().insert(v, value);
         debug_assert!(inserted.is_none());
-    }
-
-    #[inline]
-    fn knows_v(&self, v: usize) -> bool {
-        self.get_queued_commands().contains_key(&v)
     }
 
     #[inline]
@@ -236,15 +259,32 @@ pub trait Consensus {
         !self.get_queued_commands().is_empty()
     }
 
-    fn get_new_batch_to_propose(&self) -> Option<Command>;
+    fn get_new_batch_to_propose(&self) -> Option<CommandBatch>;
 
     fn get_v_to_repropose(&self) -> usize;
 
-    fn get_queued_commands(&self) -> &HashMap<usize, Command>;
+    fn get_queued_commands(&self) -> &HashMap<usize, CommandBatch>;
 
-    fn get_queued_commands_mut(&mut self) -> &mut HashMap<usize, Command>;
+    fn get_queued_commands_mut(&mut self) -> &mut HashMap<usize, CommandBatch>;
+
+    fn remove_command(&mut self, v: usize) -> CommandBatch {
+        let out = self.get_queued_commands_mut().remove(&v);
+        self.get_queued_commands_mut()
+            .retain(|_, value| match value {
+                CommandBatch::Single(_) => true,
+                CommandBatch::Batch(vs) => !vs.contains(&v),
+            });
+        out.expect("Removing command that does not exist")
+    }
 
     fn get_read_tracker(&mut self) -> &mut ReadTracker;
 
     fn get_sinks(&mut self) -> &mut MultiSink;
+}
+
+async fn commit_command(committed_commands_tx: &Sender<Command>, command: Command) {
+    committed_commands_tx
+        .send(command)
+        .await
+        .expect("Sending commited value");
 }

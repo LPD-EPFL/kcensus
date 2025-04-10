@@ -1,6 +1,5 @@
-use crate::consensus::command::Command;
-use crate::consensus::message::ConsensusMessage;
 use crate::consensus::message::ConsensusMsg::{Commit, PaxosM};
+use crate::consensus::message::{CommandBatch, ConsensusMessage};
 use crate::consensus::paxos_family::epaxos_round_state::EPaxosRoundState;
 use crate::consensus::paxos_family::message::PaxosMsg::{Accept, ForwardRequest, Prepare};
 use crate::consensus::paxos_family::message::{PaxosMsg, PaxosRound};
@@ -33,7 +32,7 @@ pub struct PaxosFamily {
     next_uid: usize,
     slot: usize,
     round: Option<PaxosRound>,
-    queued_commands: HashMap<usize, Command>,
+    queued_commands: HashMap<usize, CommandBatch>,
 
     paxos_state: PaxosRoundState,
     epaxos_state: EPaxosRoundState,
@@ -84,7 +83,7 @@ impl PaxosFamily {
 }
 
 impl Consensus for PaxosFamily {
-    async fn process_message(&mut self, msg: ConsensusMessage) -> io::Result<Option<Command>> {
+    async fn process_message(&mut self, msg: ConsensusMessage) -> io::Result<Option<CommandBatch>> {
         let src = msg.src;
         let msg = match msg.msg {
             PaxosM(msg) => msg,
@@ -175,8 +174,8 @@ impl Consensus for PaxosFamily {
         matches!(self.mode, MultiPaxos)
     }
 
-    async fn propose_start(&mut self, command: Command, contention: bool) -> io::Result<()> {
-        let v = self.store_new_command(command);
+    async fn propose_start(&mut self, value: CommandBatch, contention: bool) -> io::Result<()> {
+        let v = self.store_new_command(value);
 
         if contention || (matches!(self.mode, MultiPaxos) && !self.should_lead()) {
             self.broadcast(ForwardRequest { v }, true).await
@@ -190,16 +189,16 @@ impl Consensus for PaxosFamily {
     }
 
     #[inline]
-    fn commit_slot(&mut self, v: usize, from_commit_msg: bool) -> Command {
-        let value = self.queued_commands.remove(&v).unwrap();
+    fn commit_slot(&mut self, v: usize, from_commit_msg: bool) -> CommandBatch {
+        let value = self.remove_command(v);
         if from_commit_msg {
             // "<#2FB82F>Commited \"{}\" in slot {}.</>"
-            trace!("Commited \"{:?}\" in slot {}.", value.command, self.slot);
+            trace!("Commited \"{:?}\" in slot {}.", value, self.slot);
         } else {
             // "<#2FB82F>Commited \"{}\" in slot {} (round {}) from state:</> <#B8E8B8>{}</>"
             trace!(
                 "Commited \"{:?}\" in slot {} (round {:?})",
-                value.command, self.slot, self.round
+                value, self.slot, self.round
             );
         }
         self.slot += 1;
@@ -230,9 +229,13 @@ impl Consensus for PaxosFamily {
             self.my_pid == self.leader_priority[0]
         } else {
             let leader = self.leader_priority.iter().copied().find(|leader| {
-                self.queued_commands
-                    .values()
-                    .any(|value| value.proposer == *leader)
+                self.queued_commands.values().any(|value| {
+                    if let CommandBatch::Single(cmd) = value {
+                        cmd.proposer == *leader
+                    } else {
+                        false
+                    }
+                })
             });
             Some(self.my_pid) == leader
         }
@@ -245,7 +248,7 @@ impl Consensus for PaxosFamily {
     }
 
     #[inline]
-    fn get_new_batch_to_propose(&self) -> Option<Command> {
+    fn get_new_batch_to_propose(&self) -> Option<CommandBatch> {
         // TODO: Actually form batch here !
         None
     }
@@ -255,11 +258,11 @@ impl Consensus for PaxosFamily {
         *self.queued_commands.keys().min().unwrap()
     }
 
-    fn get_queued_commands(&self) -> &HashMap<usize, Command> {
+    fn get_queued_commands(&self) -> &HashMap<usize, CommandBatch> {
         &self.queued_commands
     }
 
-    fn get_queued_commands_mut(&mut self) -> &mut HashMap<usize, Command> {
+    fn get_queued_commands_mut(&mut self) -> &mut HashMap<usize, CommandBatch> {
         &mut self.queued_commands
     }
 
@@ -300,7 +303,7 @@ impl PaxosFamily {
     }
 
     #[inline]
-    fn value_for_msg(&mut self, msg: &PaxosMsg, with_value: bool) -> Option<Command> {
+    fn value_for_msg(&mut self, msg: &PaxosMsg, with_value: bool) -> Option<CommandBatch> {
         if with_value {
             Some(self.queued_commands[&msg.get_v()].clone())
         } else {

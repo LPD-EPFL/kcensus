@@ -1,6 +1,5 @@
 use crate::connector::DeSink;
-use crate::consensus::command::Command;
-use crate::consensus::message::{ConsensusMessage, ConsensusMsg};
+use crate::consensus::message::{CommandBatch, ConsensusMessage, ConsensusMsg};
 use crate::message::Message;
 use futures::SinkExt;
 use log::debug;
@@ -14,7 +13,11 @@ pub struct MultiSink {
 
 impl MultiSink {
     #[inline]
-    pub async fn broadcast(&mut self, msg: ConsensusMsg, value: Option<Command>) -> io::Result<()> {
+    pub async fn broadcast(
+        &mut self,
+        msg: ConsensusMsg,
+        value: Option<CommandBatch>,
+    ) -> io::Result<()> {
         debug!("Broadcasting {:?} with_value={}", msg, value.is_some());
         self.inner_broadcast(self.build_msg(msg, value)).await
     }
@@ -23,7 +26,7 @@ impl MultiSink {
     pub async fn send(
         &mut self,
         msg: ConsensusMsg,
-        value: Option<Command>,
+        value: Option<CommandBatch>,
         pid: usize,
     ) -> io::Result<()> {
         debug!("Sending to {pid}: {:?} with_value={}", msg, value.is_some());
@@ -46,7 +49,7 @@ impl MultiSink {
     }
 
     #[inline]
-    fn build_msg(&self, msg: ConsensusMsg, value: Option<Command>) -> Message {
+    fn build_msg(&self, msg: ConsensusMsg, value: Option<CommandBatch>) -> Message {
         Message::ConsensusM {
             msg: ConsensusMessage {
                 msg,

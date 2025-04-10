@@ -1,5 +1,4 @@
-use crate::consensus::command::Command;
-use crate::consensus::message::ConsensusMessage;
+use crate::consensus::message::{CommandBatch, ConsensusMessage};
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
 
@@ -10,7 +9,7 @@ pub enum Message {
     },
     ConsensusM {
         msg: ConsensusMessage,
-        value: Option<Command>,
+        value: Option<CommandBatch>,
     },
     Done,
     RoundRobin,
