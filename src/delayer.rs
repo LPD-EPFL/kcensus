@@ -28,6 +28,7 @@ impl Delayer {
         my_pid: usize,
         mut input_stream: impl Stream<Item = io::Result<MsgWithSource>> + Unpin,
     ) {
+        let dead = topology.faults.contains(my_pid);
         let delay = Delay::new(Instant::now()).expect("Delayer failed to init delay");
         pin!(delay);
 
@@ -63,6 +64,17 @@ impl Delayer {
                             continue
                         }
                     };
+
+                    if !msg.msg.delayed() {
+                        self.delayed_msg_tx.send(msg).await.expect(
+                            "Channel should not be closed yet"
+                        );
+                        continue
+                    }
+
+                    if dead || topology.faults.contains(msg.src) {
+                        continue
+                    }
 
                     let deadline = Instant::now() + topology.link_latencies[msg.src][my_pid] / speedup;
 

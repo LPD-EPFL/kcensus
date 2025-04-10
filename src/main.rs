@@ -11,7 +11,7 @@ use env_logger::fmt::style;
 use log::debug;
 use std::io;
 use std::io::Write;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 mod cassandra;
 mod connector;
@@ -40,6 +40,8 @@ struct Args {
     throughput: f32,
     #[arg(short, long, default_value_t = 0.5f32, value_name = "WRITE_RATIO")]
     writes: f32,
+    #[arg(short, long, num_args = 0.., value_delimiter = ',')]
+    faults: Vec<usize>,
     #[arg(short, long, default_value_t = 1u32, value_name = "SIMULATION_SPEED")]
     speedup: u32,
 }
@@ -80,14 +82,28 @@ async fn main() -> io::Result<()> {
 
     let args = Args::parse();
     let my_pid = args.pid;
-    let topology = Topology::from(&args.config);
+    let topology = Topology::from_path(&args.config, args.faults);
+
+    let epaxos_max_faults = topology.nb_nodes - ((topology.nb_nodes * 3) / 4);
+    let algo = match args.algo {
+        Algo::EPaxos => {
+            if topology.faults.len() > epaxos_max_faults {
+                Algo::Paxos
+            } else {
+                Algo::EPaxos
+            }
+        }
+        x => x,
+    };
+    let faulty = topology.faults.contains(my_pid);
     debug!("Loaded topology:{}", topology);
     let start = Instant::now();
     let propagation_graphs = PropagationGraphs::from(&topology);
     println!("Computed propagation graphs in {:?}", start.elapsed());
     let nb_nodes = topology.regions.len();
 
-    let (consensus_msg_sinks, consensus_msg_streams) = connect_all(my_pid, nb_nodes, 9876).await;
+    let (consensus_msg_sinks, consensus_msg_streams) =
+        connect_all(my_pid, nb_nodes, 9876, Some(topology.faults.clone())).await;
     let (delayer, delayed_msg_rx) = Delayer::new();
     let delayer_task = tokio::task::spawn(delayer.run(
         topology.clone(),
@@ -125,9 +141,10 @@ async fn main() -> io::Result<()> {
                 reqs_per_second: args.throughput * args.speedup as f32,
             },
         },
+        faulty,
     }));
 
-    match args.algo {
+    match algo {
         Algo::KCensus => {
             println!(
                 "Expected local latency (no-contention): {:?}",
@@ -185,12 +202,16 @@ async fn main() -> io::Result<()> {
         }
         Algo::MultiPaxos => {
             let mut leader_prio: Vec<_> = (0..nb_nodes).collect();
-            leader_prio.sort_by_key(|pid| propagation_graphs.multi_paxos_latencies[*pid]);
+            leader_prio.sort_by_cached_key(|pid| {
+                propagation_graphs.multi_paxos_latencies[*pid]
+                    .iter()
+                    .sum::<Duration>()
+            });
             let leader = leader_prio[0];
             println!(
                 // TODO: Provide expected local latency
-                "Expected AVERAGE latency for leader {} (no-contention): {:?}",
-                leader, propagation_graphs.multi_paxos_latencies[leader]
+                "Expected local latency with leader {} (no-contention): {:?}",
+                leader, propagation_graphs.multi_paxos_latencies[leader][my_pid]
             );
             let mut consensus_obj = PaxosFamily::new(
                 nb_nodes,
@@ -207,7 +228,7 @@ async fn main() -> io::Result<()> {
             let latency_mock = async {
                 // For simplicity, requests will be executed locally after a ping delay.
                 // This is a lower bound as this consumes no network + compute is sharded.
-                let rtt = match args.algo {
+                let rtt = match algo {
                     Algo::NoReplication => {
                         // The leader is the node with the lowest median ping.
                         let leader = (0..topology.nb_nodes)

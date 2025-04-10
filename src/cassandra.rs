@@ -141,7 +141,7 @@ pub struct RoundRobinSynchronizer {
 
 impl RoundRobinSynchronizer {
     async fn new(my_pid: usize, nb_nodes: usize, max_rtt: Duration) -> Self {
-        let (sinks, streams) = connect_all(my_pid, nb_nodes, 6789).await;
+        let (sinks, streams) = connect_all(my_pid, nb_nodes, 6789, None).await;
         Self {
             my_pid,
             initiate: my_pid == 0,
@@ -215,6 +215,7 @@ pub struct Workload {
     pub nb_requests: usize,
     pub rw_ratio: f32, // 0 = 100% reads, 1 = 100 %writes
     pub interval: RequestInterval,
+    pub faulty: bool,
 }
 
 pub struct Client {
@@ -242,6 +243,12 @@ impl Client {
         for i in 0..workload.nb_requests {
             if let RequestInterval::RoundRobin { synchronizer } = &mut workload.interval {
                 synchronizer.wait().await;
+            }
+            if workload.faulty {
+                if let RequestInterval::RoundRobin { synchronizer } = &mut workload.interval {
+                    synchronizer.notify().await;
+                }
+                continue;
             }
             let request = if rand::random_range(0. ..1.) < workload.rw_ratio {
                 Command::new_write(

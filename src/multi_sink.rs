@@ -1,6 +1,7 @@
 use crate::connector::DeSink;
 use crate::consensus::message::{CommandBatch, ConsensusMessage, ConsensusMsg};
 use crate::message::Message;
+use bit_set::BitSet;
 use futures::SinkExt;
 use log::debug;
 use std::collections::HashMap;
@@ -9,6 +10,7 @@ use std::io;
 pub struct MultiSink {
     pub my_pid: usize,
     pub sinks: HashMap<usize, DeSink>,
+    pub faults: BitSet,
 }
 
 impl MultiSink {
@@ -35,7 +37,10 @@ impl MultiSink {
 
     #[inline]
     pub async fn inner_broadcast(&mut self, msg: Message) -> io::Result<()> {
-        for (_, sink) in self.sinks.iter_mut() {
+        for (dest, sink) in self.sinks.iter_mut() {
+            if self.faults.contains(*dest) && msg.delayed() {
+                continue;
+            }
             sink.send(msg.clone()).await?;
         }
         Ok(())
@@ -44,6 +49,9 @@ impl MultiSink {
     #[inline]
     pub async fn inner_send(&mut self, msg: Message, pid: usize) -> io::Result<()> {
         debug_assert!(pid != self.my_pid);
+        if self.faults.contains(pid) && msg.delayed() {
+            return Ok(());
+        }
         let sink = self.sinks.get_mut(&pid).unwrap();
         sink.send(msg.clone()).await
     }

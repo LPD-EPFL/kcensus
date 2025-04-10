@@ -31,6 +31,13 @@ impl Message {
     pub fn with_source(self, src: usize) -> MsgWithSource {
         MsgWithSource { msg: self, src }
     }
+
+    pub fn delayed(&self) -> bool {
+        match self {
+            Message::ConsensusM { .. } => true,
+            _ => false,
+        }
+    }
 }
 
 impl MsgWithSource {

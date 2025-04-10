@@ -1,6 +1,7 @@
 use crate::message::Message::Hello;
 use crate::message::{Message, MsgWithSource};
 use crate::multi_sink::MultiSink;
+use bit_set::BitSet;
 use futures::stream::select_all;
 use futures::{SinkExt, Stream, StreamExt, TryStreamExt};
 use log::debug;
@@ -76,6 +77,7 @@ pub async fn connect_all(
     my_pid: usize,
     nb_nodes: usize,
     base_port: u16,
+    faults: Option<BitSet>,
 ) -> (
     MultiSink,
     impl Stream<Item = Result<MsgWithSource, io::Error>>,
@@ -102,7 +104,11 @@ pub async fn connect_all(
         streams.push(stream.map_ok(wrap_with_source_pid(pid)))
     }
 
-    let sinks = MultiSink { sinks, my_pid };
+    let sinks = MultiSink {
+        sinks,
+        my_pid,
+        faults: faults.unwrap_or_default(),
+    };
     let streams = select_all(streams);
     (sinks, streams)
 }
