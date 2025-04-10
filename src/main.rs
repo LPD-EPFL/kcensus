@@ -122,15 +122,25 @@ async fn main() -> io::Result<()> {
         rw_ratio: args.writes,
         interval: match args.ingress {
             Ingress::RoundRobin => {
-                cassandra::RequestInterval::new_round_robin(
-                    my_pid,
-                    nb_nodes,
-                    propagation_graphs.rtts[(my_pid + nb_nodes - 1) % nb_nodes] // predecessor
+                let predecessor = (my_pid + nb_nodes - 1) % nb_nodes;
+                let commit_notification_time = if topology.faults.contains(predecessor) {
+                    Duration::from_secs(0)
+                } else {
+                    propagation_graphs.rtts[predecessor]
                         .iter()
+                        .enumerate()
+                        .filter(|(replica, _)| !topology.faults.contains(*replica))
+                        .map(|(_, x)| x)
                         .max()
                         .expect("There should be a maximum RTT.")
                         .to_owned()
-                        / args.speedup,
+                        / args.speedup
+                };
+
+                cassandra::RequestInterval::new_round_robin(
+                    my_pid,
+                    nb_nodes,
+                    commit_notification_time,
                 )
                 .await
             }
