@@ -3,12 +3,16 @@ use crate::consensus::kcensus::round_state::KCensusRoundState;
 use crate::topology::Topology;
 use bit_set::BitSet;
 use log::trace;
+use petgraph::algo::bellman_ford;
+use petgraph::matrix_graph::DiMatrix;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt::{Display, Formatter};
 use std::time::Duration;
 
 type ProcId = usize;
+
+type NetworkGraph = DiMatrix<(), f64, Option<f64>, usize>;
 
 #[derive(Ord, PartialOrd, Eq, PartialEq, Hash, Debug, Copy, Clone, Serialize, Deserialize)]
 pub struct MessageId {
@@ -76,6 +80,8 @@ struct PropagationGraph {
 #[derive(Debug)]
 pub struct PropagationGraphs {
     graphs: Vec<PropagationGraph>,
+    pub rtts: Vec<Vec<Duration>>,
+    pub path_rtts: Vec<Vec<Duration>>,
     pub kcensus_latencies: Vec<Duration>,
     pub paxos_latencies: Vec<Duration>,
     pub epaxos_latencies: Vec<Duration>,
@@ -122,36 +128,90 @@ fn triangle_latency(t: &TriangularPath) -> Duration {
 }
 
 fn compute_propagation_graphs(topology: &Topology) -> PropagationGraphs {
-    let mut propagation_graphs = Vec::with_capacity(topology.nb_nodes);
-    let mut kcensus_latencies = Vec::with_capacity(topology.nb_nodes);
-    let mut paxos_latencies = Vec::with_capacity(topology.nb_nodes);
-    let mut epaxos_latencies = Vec::with_capacity(topology.nb_nodes);
-    let mut multi_paxos_latencies = Vec::with_capacity(topology.nb_nodes);
+    let nb_nodes = topology.nb_nodes;
+    let mut path_latencies = vec![vec![Duration::default(); nb_nodes]; nb_nodes];
+    let mut prev_dest = vec![vec![0; nb_nodes]; nb_nodes];
+    let mut next_src = vec![vec![0; nb_nodes]; nb_nodes];
 
-    for proposer in 0..topology.nb_nodes {
+    // Generate graph nodes
+    let mut graph = NetworkGraph::with_capacity(nb_nodes);
+    for _ in 0..nb_nodes {
+        graph.add_node(());
+    }
+    for src in 0..nb_nodes {
+        for dest in 0..nb_nodes {
+            if src != dest {
+                let nanos = topology.link_latencies[src][dest].as_nanos();
+                graph.add_edge(src.into(), dest.into(), nanos as f64);
+            }
+        }
+    }
+
+    // Compute the shortest paths
+    for src in 0..nb_nodes {
+        let paths = bellman_ford(&graph, src.into()).expect("Latencies can not be negative");
+        for dest in 0..nb_nodes {
+            let mut last_pred = dest;
+            let mut pred = paths.predecessors[dest].unwrap_or(src.into()).index();
+            prev_dest[src][dest] = pred;
+            while pred != src {
+                last_pred = pred;
+                pred = paths.predecessors[last_pred].unwrap_or(src.into()).index();
+            }
+            next_src[src][dest] = last_pred;
+            let nanos = paths.distances[dest];
+            if paths.distances[dest] > (u64::MAX / 4) as f64 {
+                path_latencies[src][dest] =
+                    Duration::from_secs(crate::topology::FAULTY_LATENCY_SECS);
+            } else {
+                path_latencies[src][dest] = Duration::from_nanos(nanos.round() as u64);
+            }
+        }
+    }
+
+    let rtts: Vec<Vec<_>> = (0..nb_nodes)
+        .map(|src| {
+            (0..nb_nodes)
+                .map(|dest| topology.link_latencies[src][dest] + topology.link_latencies[dest][src])
+                .collect()
+        })
+        .collect();
+
+    let path_rtts: Vec<Vec<_>> = (0..nb_nodes)
+        .map(|src| {
+            (0..nb_nodes)
+                .map(|dest| path_latencies[src][dest] + path_latencies[dest][src])
+                .collect()
+        })
+        .collect();
+
+    let mut propagation_graphs = Vec::with_capacity(nb_nodes);
+    let mut kcensus_latencies = Vec::with_capacity(nb_nodes);
+    let mut paxos_latencies = Vec::with_capacity(nb_nodes);
+    let mut epaxos_latencies = Vec::with_capacity(nb_nodes);
+    let mut multi_paxos_latencies = Vec::with_capacity(nb_nodes);
+
+    for proposer in 0..nb_nodes {
         trace!("proposer: {}", proposer);
 
-        let mut proposer_round_trips = topology.rtts[proposer].clone();
+        let mut proposer_round_trips = rtts[proposer].clone();
         proposer_round_trips.sort();
-        let majority = 1 + topology.nb_nodes / 2;
+        let majority = 1 + nb_nodes / 2;
         paxos_latencies.push(proposer_round_trips[majority - 1] * 2);
-        let e_paxos_quorum = ((topology.nb_nodes * 3) / 4).max(majority);
+        let e_paxos_quorum = ((nb_nodes * 3) / 4).max(majority);
         epaxos_latencies.push(proposer_round_trips[e_paxos_quorum - 1]);
-        let multi_paxos_latency = (0..topology.nb_nodes)
-            .map(|requester| {
-                topology.rtts[requester][proposer] + proposer_round_trips[majority - 1]
-            })
+        let multi_paxos_latency = (0..nb_nodes)
+            .map(|requester| rtts[requester][proposer] + proposer_round_trips[majority - 1])
             .collect();
         multi_paxos_latencies.push(multi_paxos_latency);
 
-        let mut triangular_paths: Vec<TriangularPath> =
-            Vec::with_capacity(topology.nb_nodes * topology.nb_nodes);
-        for first in 0..topology.nb_nodes {
-            let latency_to_first = topology.path_latencies[proposer][first];
-            for second in 0..topology.nb_nodes {
+        let mut triangular_paths: Vec<TriangularPath> = Vec::with_capacity(nb_nodes * nb_nodes);
+        for first in 0..nb_nodes {
+            let latency_to_first = path_latencies[proposer][first];
+            for second in 0..nb_nodes {
                 let total_latency = latency_to_first
-                    + topology.path_latencies[first][second]
-                    + topology.path_latencies[second][proposer];
+                    + path_latencies[first][second]
+                    + path_latencies[second][proposer];
                 triangular_paths.push(TriangularPath {
                     first,
                     second,
@@ -167,10 +227,9 @@ fn compute_propagation_graphs(topology: &Topology) -> PropagationGraphs {
         );
 
         // Used to ensure the value is sent to everyone (not for knowledge spreading)
-        let mut value_only_paths: Vec<TriangularPath> = Vec::with_capacity(topology.nb_nodes);
-        for node in 0..topology.nb_nodes {
-            let total_latency =
-                topology.path_latencies[proposer][node] + topology.path_latencies[node][proposer];
+        let mut value_only_paths: Vec<TriangularPath> = Vec::with_capacity(nb_nodes);
+        for node in 0..nb_nodes {
+            let total_latency = path_latencies[proposer][node] + path_latencies[node][proposer];
             value_only_paths.push(TriangularPath {
                 first: node,
                 second: proposer,
@@ -180,7 +239,7 @@ fn compute_propagation_graphs(topology: &Topology) -> PropagationGraphs {
         value_only_paths.sort_by_key(triangle_latency);
 
         // Simulate gossip until commit
-        let mut round_state = KCensusRoundState::new(topology.nb_nodes, proposer);
+        let mut round_state = KCensusRoundState::new(nb_nodes, proposer);
         let mut count = 0;
         while !round_state.can_commit() {
             let t = &triangular_paths[count];
@@ -209,13 +268,13 @@ fn compute_propagation_graphs(topology: &Topology) -> PropagationGraphs {
 
         round_state.clear();
         let mut message_times: Vec<Vec<BTreeSet<Duration>>> =
-            vec![vec![BTreeSet::new(); topology.nb_nodes]; topology.nb_nodes];
+            vec![vec![BTreeSet::new(); nb_nodes]; nb_nodes];
         let mut message_graph: HashMap<MessageId, MessageInfo> = HashMap::new();
         let mut start_messages: Vec<MessageId> = Vec::new();
         // Remove extra triangles
         let mut i = count; // desc
         let mut j = 0; // asc
-        while j < topology.nb_nodes {
+        while j < nb_nodes {
             let value_only_path = i == 0;
             let t = if !value_only_path {
                 i -= 1;
@@ -249,7 +308,7 @@ fn compute_propagation_graphs(topology: &Topology) -> PropagationGraphs {
             };
             let mut current_time = Duration::default();
 
-            let mut k: Knowledge = BitSet::with_capacity(topology.nb_nodes);
+            let mut k: Knowledge = BitSet::with_capacity(nb_nodes);
             k.insert(proposer);
 
             let mut current = proposer;
@@ -266,7 +325,7 @@ fn compute_propagation_graphs(topology: &Topology) -> PropagationGraphs {
 
                 while current != target {
                     let src = current;
-                    current = topology.next_src[current][target];
+                    current = next_src[current][target];
                     if t.total_latency > max_latency && value_only_path && target == proposer {
                         // Go back directly to limit message count
                         current = target;
@@ -276,11 +335,10 @@ fn compute_propagation_graphs(topology: &Topology) -> PropagationGraphs {
                     round_state.learn(current, &k);
 
                     if step > 0 {
-                        shortest_path_from_proposer &= topology.prev_dest[proposer][current] == src;
+                        shortest_path_from_proposer &= prev_dest[proposer][current] == src;
 
-                        let left = topology.path_latencies[src][target]
-                            + topology.path_latencies[target][proposer];
-                        let to_prop = topology.path_latencies[src][proposer];
+                        let left = path_latencies[src][target] + path_latencies[target][proposer];
+                        let to_prop = path_latencies[src][proposer];
                         shortest_path_to_proposer |= left == to_prop;
                     }
 
@@ -383,6 +441,8 @@ fn compute_propagation_graphs(topology: &Topology) -> PropagationGraphs {
 
     PropagationGraphs {
         graphs: propagation_graphs,
+        rtts,
+        path_rtts,
         kcensus_latencies,
         paxos_latencies,
         epaxos_latencies,

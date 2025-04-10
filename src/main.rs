@@ -125,7 +125,7 @@ async fn main() -> io::Result<()> {
                 cassandra::RequestInterval::new_round_robin(
                     my_pid,
                     nb_nodes,
-                    topology.rtts[(my_pid + nb_nodes - 1) % nb_nodes] // predecessor
+                    propagation_graphs.rtts[(my_pid + nb_nodes - 1) % nb_nodes] // predecessor
                         .iter()
                         .max()
                         .expect("There should be a maximum RTT.")
@@ -233,15 +233,15 @@ async fn main() -> io::Result<()> {
                         // The leader is the node with the lowest median ping.
                         let leader = (0..topology.nb_nodes)
                             .min_by_key(|&potential_leader| {
-                                let mut rtts = topology.rtts[potential_leader].clone();
+                                let mut rtts = propagation_graphs.rtts[potential_leader].clone();
                                 rtts.sort();
                                 rtts[rtts.len() / 2]
                             })
                             .expect("There should be a leader");
-                        topology.rtts[leader][my_pid] / args.speedup
+                        propagation_graphs.rtts[leader][my_pid] / args.speedup
                     }
                     Algo::WeakReplication => {
-                        let mut rtts = topology.rtts[my_pid].clone();
+                        let mut rtts = propagation_graphs.rtts[my_pid].clone();
                         rtts.sort();
                         rtts[rtts.len() / 2] / args.speedup
                     }
