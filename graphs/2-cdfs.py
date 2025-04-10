@@ -20,22 +20,22 @@ plot.tick_params(axis='both', which='major', pad=0.5)
 plot.tick_params(axis='both', which='minor', pad=0.5)
 plot.yaxis.set_minor_locator(MultipleLocator(25))
 plot.yaxis.set_major_locator(MultipleLocator(50))
-plot.xaxis.set_minor_locator(MultipleLocator(10))
-plot.xaxis.set_major_locator(MultipleLocator(20))
 plot.set_axisbelow(True)
-plot.set_xlim(0, 70)
 
+max_x = 0
 legends = []
 for experiment in ALGORITHMS.keys():
     logs = parse(algo=experiment, config=args.config, writes=args.writes, requests=args.requests, ingress=args.ingress,
                  throughput=args.throughput, speedup=args.speedup)
-
     average = compute_average(logs['executed'], lambda log: duration_to_ms(log['latency']))
-    percentiles = [-999999] + compute_percentiles(logs['executed'], lambda log: duration_to_ms(log['latency'])) + [
-        999999]
-    plot.plot(percentiles, [0, 0.1] + list(range(1, 100)) + [99.9, 100], **ALGORITHMS[experiment],
+    percentiles = compute_percentiles(logs['executed'], lambda log: duration_to_ms(log['latency']))
+    nice_percentiles = [-999999] + percentiles + [999999]
+    plot.plot(nice_percentiles, [0, 0.1] + list(range(1, 100)) + [99.9, 100], **ALGORITHMS[experiment],
               markevery=(26, 25))
     legends.append(Line2D([0], [0], **ALGORITHMS[experiment]))
+    if percentiles[-1] > max_x:
+        max_x = percentiles[-1]
+        plot.set_xlim(0, percentiles[-1])
 
 fig.legend(handles=legends, bbox_to_anchor=(0.1, 1.29, 0.75, 0.01),
            loc='center', edgecolor='black', borderaxespad=0, ncols=3,
