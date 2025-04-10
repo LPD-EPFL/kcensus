@@ -1,19 +1,17 @@
-use crate::cassandra::Request;
 use crate::connector::connect_all;
 use crate::consensus::paxos_family::{Mode, PaxosFamily};
 use crate::consensus::Consensus;
 use crate::topology::Topology;
 use chrono::prelude::*;
 use clap::Parser;
-use consensus::command::{Command, CommittedCommand};
 use consensus::kcensus::propagation::PropagationGraphs;
 use consensus::kcensus::KCensus;
 use env_logger::fmt::style;
-use log::{debug, trace};
+use log::debug;
 use std::io;
 use std::io::Write;
 use std::time::Instant;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::mpsc;
 
 mod cassandra;
 mod connector;
@@ -96,81 +94,22 @@ async fn main() -> io::Result<()> {
         delayed_msg_tx,
     ));
 
-    let (new_client_request_tx, mut new_client_request_rx) = mpsc::channel(1);
-    let (committed_request_tx, mut committed_request_rx) = mpsc::channel::<Command>(1);
-    let (client_response_tx, client_response_rx) = mpsc::channel(1);
-    let (num_committed_watch_tx, num_committed_watch_rx) = watch::channel(0usize);
-
-    let cassandra = if let Some(uri) = args.db {
-        // docker run --name cassandra -p 9042:9042 -d cassandra
-        // -db 127.0.0.1:9042
-        // docker stop cassandra && docker rm cassandra
-        let cassandra = cassandra::Handler::new(&uri).await;
-        cassandra.reset_database().await;
-        cassandra.prepare().await.into()
-    } else {
-        None
-    };
+    let ((client, mut new_client_request_rx), (app, committed_request_tx)) =
+        cassandra::App::new(args.db, my_pid).await;
 
     let start = Instant::now();
 
-    let client_task = tokio::task::spawn(async move {
-        let client = cassandra::Client {
-            my_pid,
-            new_client_request_tx,
-            client_response_rx,
-            num_committed_watch_rx,
-        };
-        client
-            .run(cassandra::Workload {
-                nb_requests: args.requests,
-                rw_ratio: args.writes,
-                interval: match args.ingress {
-                    Ingress::RoundRobin => cassandra::RequestInterval::RoundRobin { nb_nodes },
-                    Ingress::Exponential => {
-                        cassandra::RequestInterval::new_exponential(args.throughput)
-                    }
-                    Ingress::Constant => cassandra::RequestInterval::Constant {
-                        reqs_per_second: args.throughput,
-                    },
-                },
-            })
-            .await;
-    });
-
-    let app = async {
-        let mut num_committed = if let Algo::Unreplicated | Algo::WeakReplication = args.algo {
-            my_pid
-        } else {
-            0
-        };
-        num_committed_watch_tx.send(num_committed).ok(); // Client not listening for back pressure
-        while let Some(command) = committed_request_rx.recv().await {
-            let command: CommittedCommand<Request> = command.into();
-            num_committed += if let Algo::Unreplicated | Algo::WeakReplication = args.algo {
-                nb_nodes
-            } else {
-                1
-            };
-            trace!("About to execute committed request: {:?}", command);
-            let response = if let Some(cassandra) = cassandra.as_ref() {
-                cassandra.execute(command.app_request).await
-            } else {
-                // We mock Cassandra
-                match command.app_request {
-                    Request::Put { key, value } => cassandra::Response::Put { key, value },
-                    Request::Get { key } => cassandra::Response::Get { key, value: None },
-                }
-            };
-            if command.proposer == my_pid {
-                client_response_tx
-                    .send(response)
-                    .await
-                    .expect("Server failed to enqueue client Response");
-            }
-            num_committed_watch_tx.send(num_committed).ok(); // Client not listening for back pressure
-        }
-    };
+    let client_task = tokio::task::spawn(client.run(cassandra::Workload {
+        nb_requests: args.requests,
+        rw_ratio: args.writes,
+        interval: match args.ingress {
+            Ingress::RoundRobin => cassandra::RequestInterval::RoundRobin { nb_nodes },
+            Ingress::Exponential => cassandra::RequestInterval::new_exponential(args.throughput),
+            Ingress::Constant => cassandra::RequestInterval::Constant {
+                reqs_per_second: args.throughput,
+            },
+        },
+    }));
 
     match args.algo {
         Algo::KCensus => {
@@ -189,7 +128,7 @@ async fn main() -> io::Result<()> {
             );
             let consensus =
                 consensus_obj.run(delayed_msg_rx, new_client_request_rx, committed_request_tx);
-            let _ = tokio::join!(app, consensus);
+            let _ = tokio::join!(app.run(), consensus);
         }
         Algo::Paxos => {
             let mut leader_prio: Vec<_> = (0..nb_nodes).collect();
@@ -208,7 +147,7 @@ async fn main() -> io::Result<()> {
             );
             let consensus =
                 consensus_obj.run(delayed_msg_rx, new_client_request_rx, committed_request_tx);
-            let _ = tokio::join!(app, consensus);
+            let _ = tokio::join!(app.run(), consensus);
         }
         Algo::EPaxos => {
             let mut leader_prio: Vec<_> = (0..nb_nodes).collect();
@@ -226,7 +165,7 @@ async fn main() -> io::Result<()> {
             );
             let consensus =
                 consensus_obj.run(delayed_msg_rx, new_client_request_rx, committed_request_tx);
-            let _ = tokio::join!(app, consensus);
+            let _ = tokio::join!(app.run(), consensus);
         }
         Algo::MultiPaxos => {
             let mut leader_prio: Vec<_> = (0..nb_nodes).collect();
@@ -246,10 +185,10 @@ async fn main() -> io::Result<()> {
             );
             let consensus =
                 consensus_obj.run(delayed_msg_rx, new_client_request_rx, committed_request_tx);
-            let _ = tokio::join!(app, consensus);
+            let _ = tokio::join!(app.run(), consensus);
         }
         Algo::Unreplicated | Algo::WeakReplication => {
-            let unreplicated = async {
+            let latency_mock = async {
                 // For simplicity, requests will be executed locally after a ping delay.
                 // This is a lower bound as this consumes no network + compute is sharded.
                 let rtt = match args.algo {
@@ -276,13 +215,13 @@ async fn main() -> io::Result<()> {
                         .await
                         .expect("Unreplicated or weakly replicated server failed to sleep");
                     committed_request_tx.send(command).await.expect(
-                        "Unreplicated or weakly replicated server failed to send CommittedRequest",
+                        "Unreplicated or weakly replicated server failed to send committed request",
                     );
                 }
                 drop(committed_request_tx); // So the app stops
                 drop(delayed_msg_rx); // So the delayer stops
             };
-            let _ = tokio::join!(app, unreplicated);
+            let _ = tokio::join!(app.run(), latency_mock);
         }
     };
 

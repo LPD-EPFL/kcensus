@@ -1,4 +1,6 @@
-use crate::consensus::command::Command;
+use crate::cassandra;
+use crate::consensus::command::{Command, CommittedCommand};
+use log::trace;
 use rand_distr::{Distribution, Exp};
 use scylla::client::{session::Session, session_builder::SessionBuilder};
 use scylla::statement::prepared::PreparedStatement;
@@ -6,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::watch::Receiver as WatchReceiver;
+use tokio::sync::{mpsc, watch};
 use tokio::time::Instant;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -233,4 +236,77 @@ fn log<Event: Serialize>(key: &str, readable: &str, event: &Event) {
         readable,
         serde_json::to_string(event).expect("Failed to serialize event")
     );
+}
+
+pub struct App {
+    my_pid: usize,
+    cassandra_handler: Option<PreparedHandler>,
+    committed_request_rx: Receiver<Command>,
+    client_response_tx: Sender<Response>,
+    rr_iteration_tx: watch::Sender<usize>,
+}
+
+impl App {
+    pub async fn new(
+        db: Option<String>,
+        my_pid: usize,
+    ) -> ((Client, Receiver<Command>), (Self, Sender<Command>)) {
+        let (new_client_request_tx, new_client_request_rx) = mpsc::channel(1);
+        let (committed_request_tx, committed_request_rx) = mpsc::channel::<Command>(1);
+        let (client_response_tx, client_response_rx) = mpsc::channel(1);
+        let (rr_iteration_tx, rr_iteration_rx) = watch::channel(0usize);
+
+        let cassandra_handler = if let Some(uri) = db {
+            // docker run --name cassandra -p 9042:9042 -d cassandra
+            // -db 127.0.0.1:9042
+            // docker stop cassandra && docker rm cassandra
+            let cassandra = Handler::new(&uri).await;
+            cassandra.reset_database().await;
+            cassandra.prepare().await.into()
+        } else {
+            None
+        };
+
+        let client = Client {
+            my_pid,
+            new_client_request_tx,
+            client_response_rx,
+            num_committed_watch_rx: rr_iteration_rx,
+        };
+        let app = Self {
+            my_pid,
+            cassandra_handler,
+            committed_request_rx,
+            client_response_tx,
+            rr_iteration_tx,
+        };
+
+        ((client, new_client_request_rx), (app, committed_request_tx))
+    }
+
+    pub async fn run(mut self) {
+        let mut rr_iteration = 0;
+        self.rr_iteration_tx.send(rr_iteration).ok(); // Client not listening for back pressure
+        while let Some(command) = self.committed_request_rx.recv().await {
+            let command: CommittedCommand<Request> = command.into();
+            rr_iteration += 1;
+            trace!("About to execute committed request: {:?}", command);
+            let response = if let Some(cassandra_handler) = self.cassandra_handler.as_ref() {
+                cassandra_handler.execute(command.app_request).await
+            } else {
+                // We mock Cassandra
+                match command.app_request {
+                    Request::Put { key, value } => cassandra::Response::Put { key, value },
+                    Request::Get { key } => cassandra::Response::Get { key, value: None },
+                }
+            };
+            if command.proposer == self.my_pid {
+                self.client_response_tx
+                    .send(response)
+                    .await
+                    .expect("Server failed to enqueue client Response");
+            }
+            self.rr_iteration_tx.send(rr_iteration).ok(); // Client not listening for back pressure
+        }
+    }
 }
