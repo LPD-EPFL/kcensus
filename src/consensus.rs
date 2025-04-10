@@ -6,7 +6,6 @@ use crate::message::MsgWithSource;
 use crate::multi_sink::MultiSink;
 use command::Command;
 use log::{debug, info};
-use scylla::_macro_internal::SerializeRow;
 use std::collections::{HashMap, VecDeque};
 use std::io;
 use tokio::select;
