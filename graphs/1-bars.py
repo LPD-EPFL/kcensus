@@ -8,7 +8,7 @@ fig, plot = plt.subplots(figsize=(2.975, 0.8), tight_layout=True)
 plt.tight_layout(pad=0, w_pad=0, h_pad=0)  # , rect=(0,0,.80,1))
 
 plot.set_title('Average Request Latency', pad=0)
-plot.set_ylabel('Duration (ms)', labelpad=1)
+plot.set_ylabel('Latency (ms)', labelpad=1)
 plot.grid(axis='y', which='major', linestyle='--', linewidth='0.5')
 plot.grid(axis='y', which='minor', linestyle=':', linewidth='0.25')
 plot.tick_params(axis='both', which='major', pad=0.5)
