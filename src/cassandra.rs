@@ -247,6 +247,8 @@ impl Client {
                     synchronizer.notify().await;
                     continue;
                 }
+            } else if workload.faulty {
+                continue;
             }
             let request = if rand::random_range(0. ..1.) < workload.rw_ratio {
                 Command::new_write(
