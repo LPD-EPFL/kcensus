@@ -20,7 +20,6 @@ impl MultiSink {
         msg: ConsensusMsg,
         value: Option<CommandBatch>,
     ) -> io::Result<()> {
-        debug!("Broadcasting {:?} with_value={}", msg, value.is_some());
         self.inner_broadcast(self.build_msg(msg, value)).await
     }
 
@@ -31,12 +30,12 @@ impl MultiSink {
         value: Option<CommandBatch>,
         pid: usize,
     ) -> io::Result<()> {
-        debug!("Sending to {pid}: {:?} with_value={}", msg, value.is_some());
         self.inner_send(self.build_msg(msg, value), pid).await
     }
 
     #[inline]
     pub async fn inner_broadcast(&mut self, msg: Message) -> io::Result<()> {
+        debug!("Broadcasting {:?}", msg);
         for (dest, sink) in self.sinks.iter_mut() {
             if self.faults.contains(*dest) && msg.delayed() {
                 continue;
@@ -48,6 +47,7 @@ impl MultiSink {
 
     #[inline]
     pub async fn inner_send(&mut self, msg: Message, pid: usize) -> io::Result<()> {
+        debug!("Sending to {pid}: {:?}", msg);
         debug_assert!(pid != self.my_pid);
         if self.faults.contains(pid) && msg.delayed() {
             return Ok(());
