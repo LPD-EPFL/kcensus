@@ -2,13 +2,13 @@
 from itertools import combinations
 
 from matplotlib import patches
-from matplotlib.ticker import NullLocator, NullFormatter
+from matplotlib.ticker import NullLocator, NullFormatter, MultipleLocator
 
 from common import ALGORITHMS, args, serialized_args
 from logparser import *
 from prelude import plt
 
-algorithms = ['k-census', 'e-paxos', 'multi-paxos', 'paxos', 'weak-replication']
+algorithms = ['weak-replication', 'k-census', 'e-paxos', 'multi-paxos', 'paxos']
 
 fig, plots = plt.subplots(1, 5, figsize=(2.975, 0.8), tight_layout=True)
 plt.tight_layout(pad=0, w_pad=0, h_pad=0)  # , rect=(0,0,.80,1))
@@ -25,6 +25,8 @@ for num_faults, plot in enumerate(plots):
     plot.tick_params(axis='both', which='minor', pad=0.5)
     plot.xaxis.set_major_locator(NullLocator())
     plot.xaxis.set_minor_locator(NullLocator())
+    plot.yaxis.set_major_locator(MultipleLocator(1000))
+    plot.yaxis.set_minor_locator(MultipleLocator(250))
     plt.gca().xaxis.set_tick_params(pad=10)
     plot.set_axisbelow(True)
     plt.xticks(ha='center', va='center')
@@ -57,20 +59,20 @@ for num_faults, plot in enumerate(plots):
 
     plot.bar(labels, ys, lw=0, color=colors)
     plot.errorbar(xs, ys, [delta_ys_bottom, delta_ys_top], ls='none', color='black', solid_capstyle='projecting',
-                  capsize=2.5)
+                  capsize=1.5)
 
 max_y = max(plot.get_ylim()[1] for plot in plots)
 for plot in plots:
     plot.set_ylim(0, max_y * 1.1)
-fig.subplots_adjust(wspace=0.25, hspace=0)
+fig.subplots_adjust(wspace=0, hspace=0)
 
 legends = [
     patches.Patch(color=ALGORITHMS[algo]['color'], label=ALGORITHMS[algo]['label'])
     for algo in algorithms
 ]
 
-fig.legend(handles=legends, bbox_to_anchor=(0.1, 1.29, 0.75, 0.01),
-           loc='center', edgecolor='black', borderaxespad=0, ncols=3,
+fig.legend(handles=legends, bbox_to_anchor=(0, 1.29, 1, 0.01),
+           loc='center', edgecolor='black', borderaxespad=0, ncols=5,
            borderpad=.3, labelspacing=0.1, mode='expand',
            handlelength=0.8, handletextpad=0.5)
 

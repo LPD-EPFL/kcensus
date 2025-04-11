@@ -143,7 +143,7 @@ function exp-4() {
   local writes=1
   local requests=10
   for algo in "${REPLICATED_ALGOS[@]}"; do
-    for faults in $(all_faults 9); do
+    for faults in "" $(all_faults "$(digits "$config")"); do
       run "$config" "$algo" $writes $requests round-robin 0 "$faults"
     done
   done

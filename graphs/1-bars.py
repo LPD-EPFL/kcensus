@@ -49,7 +49,7 @@ plot.errorbar(xs, ys, [delta_ys_bottom, delta_ys_top], ls='none', color='black',
 
 # For the average text to fit
 ymin, ymax = plot.get_ylim()
-plot.set_ylim(ymin, ymax * 1.2)
+plot.set_ylim(ymin, ymax * 1.3)
 
 pdf_path = f'plots/1-bars{serialized_args}.pdf'
 plt.savefig(pdf_path,
