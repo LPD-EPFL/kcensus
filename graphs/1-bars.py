@@ -27,7 +27,7 @@ labels = []
 colors = []
 for i, experiment in enumerate(ALGORITHMS.keys()):
     logs = parse(algo=experiment, config=args.config, writes=args.writes, requests=args.requests, ingress=args.ingress,
-                 throughput=args.throughput, speedup=args.speedup)
+                 throughput=args.throughput, speedup=args.speedup, faults=args.faults)
     average = compute_average(logs['executed'], lambda log: duration_to_ms(log['latency']))
     percentiles = compute_percentiles(logs['executed'], lambda log: duration_to_ms(log['latency']))
     MOUSTACHES = (5, 95)

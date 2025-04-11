@@ -2,8 +2,9 @@
 
 CASSANDRA_BASE_PORT="9042"
 BASE_LOG_DIR="./logs"
-ALGOS=(k-census e-paxos multi-paxos paxos no-replication weak-replication)
-CONFIGS=(aws-europe-7-alt.toml aws-north-america-7.toml aws-world-ring-9.toml aws-world-ring-13.toml aws-all-31.toml aws-europe-7.toml)
+REPLICATED_ALGOS=(k-census e-paxos multi-paxos paxos weak-replication)
+ALGOS=(no-replication ${REPLICATED_ALGOS[@]})
+CONFIGS=(aws-europe-7-alt.toml aws-north-america-7.toml aws-world-ring-13.toml) # aws-europe-7.toml aws-world-ring-9.toml
 YCSB=(1 0.5 0.05)
 REQUESTS=100
 SPEEDUP=1
@@ -49,7 +50,8 @@ function run() {
   local REQUESTS="$4"
   local INGRESS="$5"
   local THROUGHPUT="$6"
-  local TITLE="c=$CONFIG/a=$ALGO/w=$WRITES/r=$REQUESTS/i=$INGRESS/t=$THROUGHPUT/s=$SPEEDUP"
+  local FAULTS="$7"
+  local TITLE="c=$CONFIG/a=$ALGO/w=$WRITES/r=$REQUESTS/i=$INGRESS/t=$THROUGHPUT/s=$SPEEDUP/f=$FAULTS"
   local LOG_DIR="$BASE_LOG_DIR/$TITLE/"
   mkdir -p "$LOG_DIR"
   killall kcensus 2>/dev/null
@@ -63,11 +65,12 @@ function run() {
     if [[ "${CASSANDRA,,}" != "false" && "$CASSANDRA" != "0" ]]; then
       CASSANDRA_ARG="-d 127.0.0.1:$((CASSANDRA_BASE_PORT + pid))"
     fi
-    cargo run -r -- -p "$pid" --config "configs/$CONFIG" $CASSANDRA_ARG -a "$ALGO" -w "$WRITES" -r "$REQUESTS" -i "$INGRESS" -t "$THROUGHPUT" -s "$SPEEDUP" >"$LOG_DIR/$pid.stdout" 2>>"$LOG_DIR/$pid.stderr" &
+    cargo run -r -- -p "$pid" --config "configs/$CONFIG" $CASSANDRA_ARG -a "$ALGO" -w "$WRITES" -r "$REQUESTS" -i "$INGRESS" -t "$THROUGHPUT" -s "$SPEEDUP" -f "$FAULTS" >"$LOG_DIR/$pid.stdout" 2>>"$LOG_DIR/$pid.stderr" &
   done
   wait
 }
 
+# No load, pure latency
 function exp-1() {
   for writes in "${YCSB[@]}"; do
     for config in "${CONFIGS[@]}"; do
@@ -85,6 +88,7 @@ function exp-1() {
   done
 }
 
+# Latency under load
 function exp-2() {
   local LOADS=(10 100 1000) # req/s per client
   for writes in "${YCSB[@]}"; do
@@ -98,8 +102,9 @@ function exp-2() {
   done
 }
 
+# Scalability
 function exp-3() {
-  local LARGE_CONFIGS=(aws-europe-3.toml aws-europe-7.toml)
+  local LARGE_CONFIGS=(aws-all-31.toml)
   for writes in "${YCSB[@]}"; do
     for config in "${LARGE_CONFIGS[@]}"; do
       for algo in "${ALGOS[@]}"; do
@@ -109,6 +114,30 @@ function exp-3() {
   done
 }
 
+function all_faults() {
+  local REPLICAS="$1"
+  local MAJORITY=$((REPLICAS / 2))
+python3 - <<END
+from itertools import combinations
+for r in range(1, $MAJORITY + 1):
+    for comb in combinations(range($REPLICAS), r):
+        print(','.join(map(str, comb)), end=' ')
+END
+}
+
+# Faults
+function exp-4() {
+  local config=aws-world-ring-9.toml
+  local writes=1
+  local requests=10
+  for algo in "${REPLICATED_ALGOS[@]}"; do
+    for faults in $(all_faults 9); do
+      run "$config" "$algo" $writes $requests round-robin 0 "$faults"
+    done
+  done
+}
+
 exp-1
 exp-2
 exp-3
+exp-4

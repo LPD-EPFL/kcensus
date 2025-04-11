@@ -26,7 +26,7 @@ max_x = 0
 legends = []
 for experiment in ALGORITHMS.keys():
     logs = parse(algo=experiment, config=args.config, writes=args.writes, requests=args.requests, ingress=args.ingress,
-                 throughput=args.throughput, speedup=args.speedup)
+                 throughput=args.throughput, speedup=args.speedup, faults=args.faults)
     average = compute_average(logs['executed'], lambda log: duration_to_ms(log['latency']))
     percentiles = compute_percentiles(logs['executed'], lambda log: duration_to_ms(log['latency']))
     nice_percentiles = [-999999] + percentiles + [999999]
