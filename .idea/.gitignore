@@ -6,4 +6,7 @@
 # Datasource local storage ignored files
 /dataSources/
 /dataSources.local.xml
+# Location dependent files
 /*.iml
+/modules.xml
+/vcs.xml
