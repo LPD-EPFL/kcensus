@@ -243,12 +243,10 @@ impl Client {
         for i in 0..workload.nb_requests {
             if let RequestInterval::RoundRobin { synchronizer } = &mut workload.interval {
                 synchronizer.wait().await;
-            }
-            if workload.faulty {
-                if let RequestInterval::RoundRobin { synchronizer } = &mut workload.interval {
+                if workload.faulty {
                     synchronizer.notify().await;
+                    continue;
                 }
-                continue;
             }
             let request = if rand::random_range(0. ..1.) < workload.rw_ratio {
                 Command::new_write(
