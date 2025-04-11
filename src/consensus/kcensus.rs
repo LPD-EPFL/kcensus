@@ -94,6 +94,7 @@ impl Consensus for KCensus {
                 msg_id,
                 remote_states,
                 with_value,
+                new_value,
             } => {
                 let msg_v = msg_v.expect("Spread messages should have a value uid");
                 if slot < self.slot || round < self.round {
@@ -184,7 +185,7 @@ impl Consensus for KCensus {
 
                 if proposer_count == 1 {
                     let msg_id = msg_id.expect("Single proposer means messages should have ids");
-                    self.graph_spread(msg_id, with_value).await?;
+                    self.graph_spread(msg_id, new_value).await?;
                     return Ok(None);
                 }
 
@@ -341,6 +342,7 @@ impl KCensus {
             msg_id: None,
             remote_states: self.round_state.clone_node_states(),
             with_value: false,
+            new_value: false,
         };
         send_msg!(self, msg, dest)
     }
@@ -352,11 +354,12 @@ impl KCensus {
             msg_id: None,
             remote_states: self.round_state.clone_node_states(),
             with_value: false,
+            new_value: false,
         };
         self.broadcast(msg).await
     }
 
-    async fn propose_and_spread(&mut self, v: usize, with_value: bool) -> io::Result<()> {
+    async fn propose_and_spread(&mut self, v: usize, new_value: bool) -> io::Result<()> {
         self.round_state.set_my_v(v);
         self.round_state.become_proposer();
 
@@ -364,7 +367,7 @@ impl KCensus {
             debug_assert!(
                 self.propagation_graphs
                     .get_by_id(msg_id)
-                    .initial_spreading_tree()
+                    .get_includes_new_values()
             );
             debug_assert!(
                 self.propagation_graphs
@@ -378,7 +381,8 @@ impl KCensus {
                 round: self.round,
                 msg_id: Some(*msg_id),
                 remote_states: self.round_state.clone_node_states(),
-                with_value,
+                with_value: new_value,
+                new_value,
             };
             let dest = msg_id.dest;
             send_msg!(self, msg, dest)?;
@@ -386,7 +390,7 @@ impl KCensus {
         Ok(())
     }
 
-    async fn graph_spread(&mut self, prev_msg_id: MessageId, with_value: bool) -> io::Result<()> {
+    async fn graph_spread(&mut self, prev_msg_id: MessageId, new_value: bool) -> io::Result<()> {
         let prev_msg_info = self.propagation_graphs.get_by_id(&prev_msg_id);
         // Potential follow-up messages:
         for msg_id in prev_msg_info.get_needed_by().iter() {
@@ -396,7 +400,6 @@ impl KCensus {
             let msg_info = self.propagation_graphs.get_by_id(msg_id);
 
             if !self.round_state.can_send(msg_info.get_dependencies()) {
-                debug_assert!(!msg_info.initial_spreading_tree());
                 continue;
             }
 
@@ -407,7 +410,8 @@ impl KCensus {
                 round: self.round,
                 msg_id: Some(*msg_id),
                 remote_states: self.round_state.clone_node_states(),
-                with_value: with_value && msg_info.initial_spreading_tree(),
+                with_value: new_value && msg_info.get_includes_new_values(),
+                new_value,
             };
             send_msg!(self, msg, msg_id.dest)?;
         }
@@ -427,7 +431,7 @@ impl KCensus {
             }
             let msg_info = self.propagation_graphs.get_by_id(msg_id);
 
-            if !msg_info.initial_spreading_tree() {
+            if !msg_info.get_includes_new_values() {
                 continue;
             }
             debug_assert!(msg_info.get_dependencies().len() == 1);
@@ -444,7 +448,7 @@ impl KCensus {
             debug_assert_eq!(msg_id.src, self.my_pid);
             let msg_info = self.propagation_graphs.get_by_id(msg_id);
 
-            debug_assert!(msg_info.initial_spreading_tree());
+            debug_assert!(msg_info.get_includes_new_values());
             debug_assert!(msg_info.get_dependencies().is_empty());
 
             let msg = SpreadValueOnly { msg_id: *msg_id, v };

@@ -36,12 +36,12 @@ impl Display for MessageId {
 pub struct MessageInfo {
     dependencies: HashSet<MessageId>,
     needed_by: Vec<MessageId>,
-    initial_spreading_tree: bool,
+    includes_new_values: bool,
 }
 
 impl Display for MessageInfo {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{{val={},deps=[", self.initial_spreading_tree)?;
+        write!(f, "{{val={},deps=[", self.includes_new_values)?;
         for (i, x) in self.dependencies.iter().enumerate() {
             write!(f, "{}{}", if i == 0 { "" } else { ", " }, x)?;
         }
@@ -66,8 +66,8 @@ impl MessageInfo {
     }
 
     #[inline]
-    pub fn initial_spreading_tree(&self) -> bool {
-        self.initial_spreading_tree
+    pub fn get_includes_new_values(&self) -> bool {
+        self.includes_new_values
     }
 }
 
@@ -415,7 +415,7 @@ fn compute_propagation_graphs(topology: &Topology) -> PropagationGraphs {
                                 MessageInfo {
                                     dependencies,
                                     needed_by: vec![],
-                                    initial_spreading_tree: shortest_path_from_proposer,
+                                    includes_new_values: false, // Will be set bellow
                                 },
                             )
                             .is_none();
@@ -430,6 +430,31 @@ fn compute_propagation_graphs(topology: &Topology) -> PropagationGraphs {
                     prev_msg_id = Some(msg_id);
                 }
             }
+        }
+
+        for dest in 0..nb_nodes {
+            if dest == proposer {
+                continue;
+            }
+            let mut first_msg_time = None;
+            let mut first_src = None;
+            for src in 0..nb_nodes {
+                let msg_time = message_times[src][dest].first().copied();
+                if first_msg_time.is_none() || (msg_time.is_some() && msg_time < first_msg_time) {
+                    first_msg_time = msg_time;
+                    first_src = Some(src);
+                }
+            }
+            let first_msg_id = MessageId {
+                proposer,
+                src: first_src.unwrap(),
+                dest,
+                time: first_msg_time.unwrap(),
+            };
+            message_graph
+                .get_mut(&first_msg_id)
+                .unwrap()
+                .includes_new_values = true
         }
 
         debug_assert!(propagation_graphs.len() == proposer);

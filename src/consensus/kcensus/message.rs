@@ -12,6 +12,7 @@ pub enum KCensusMsg {
         msg_id: Option<MessageId>,
         remote_states: Vec<NodeState>,
         with_value: bool,
+        new_value: bool,
     },
     SpreadValueOnly {
         msg_id: MessageId,

@@ -245,9 +245,9 @@ impl Client {
                 synchronizer.wait().await;
                 if workload.faulty {
                     synchronizer.notify().await;
-                    continue;
                 }
-            } else if workload.faulty {
+            }
+            if workload.faulty {
                 continue;
             }
             let request = if rand::random_range(0. ..1.) < workload.rw_ratio {
