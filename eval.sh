@@ -65,7 +65,11 @@ function run() {
     if [[ "${CASSANDRA,,}" != "false" && "$CASSANDRA" != "0" ]]; then
       CASSANDRA_ARG="-d 127.0.0.1:$((CASSANDRA_BASE_PORT + pid))"
     fi
-    cargo run -r -- -p "$pid" --config "configs/$CONFIG" $CASSANDRA_ARG -a "$ALGO" -w "$WRITES" -r "$REQUESTS" -i "$INGRESS" -t "$THROUGHPUT" -s "$SPEEDUP" -f "$FAULTS" >"$LOG_DIR/$pid.stdout" 2>>"$LOG_DIR/$pid.stderr" &
+    local FAULTS_ARG=""
+    if [[ "$FAULTS" != "" ]]; then
+       FAULTS_ARG="-f $FAULTS"
+    fi
+    cargo run -r -- -p "$pid" --config "configs/$CONFIG" $CASSANDRA_ARG -a "$ALGO" -w "$WRITES" -r "$REQUESTS" -i "$INGRESS" -t "$THROUGHPUT" -s "$SPEEDUP" $FAULTS_ARG >"$LOG_DIR/$pid.stdout" 2>>"$LOG_DIR/$pid.stderr" &
   done
   wait
 }
@@ -81,8 +85,7 @@ function exp-1() {
         cd graphs &&
         source env.sh >/dev/null 2>&1 &&
         python3 1-bars.py -c "$config" -w "$writes" -r "$REQUESTS" -i round-robin -t 0 -s "$SPEEDUP" &&
-        python3 2-cdfs.py -c "$config" -w "$writes" -r "$REQUESTS" -i round-robin -t 0 -s "$SPEEDUP" &&
-        cd ..
+        python3 2-cdfs.py -c "$config" -w "$writes" -r "$REQUESTS" -i round-robin -t 0 -s "$SPEEDUP"
       )
     done
   done
@@ -115,13 +118,22 @@ function exp-3() {
 }
 
 function all_faults() {
-  local REPLICAS="$1"
-  local MAJORITY=$((REPLICAS / 2))
 python3 - <<END
 from itertools import combinations
-for r in range(1, $MAJORITY + 1):
-    for comb in combinations(range($REPLICAS), r):
-        print(','.join(map(str, comb)), end=' ')
+REPLICAS=$1
+FROM="$2"
+TO="$3"
+MAJORITY=REPLICAS // 2
+done = False
+should_yield = FROM == ''
+for r in range(1, MAJORITY + 1):
+    if done: break
+    for comb in combinations(range(REPLICAS), r):
+        formatted = ','.join(map(str, comb))
+        if formatted == FROM: should_yield = True
+        if formatted == TO and TO != '': done = True; break;
+        if should_yield:
+          print(formatted, end=' ')
 END
 }
 
@@ -135,6 +147,11 @@ function exp-4() {
       run "$config" "$algo" $writes $requests round-robin 0 "$faults"
     done
   done
+  (
+    cd graphs &&
+    source env.sh >/dev/null 2>&1 &&
+    python3 4-faults.py -c "$config" -w "$writes" -r "$requests" -i round-robin -t 0 -s "$SPEEDUP"
+  )
 }
 
 exp-1
