@@ -9,7 +9,7 @@ struct Args {
     #[arg(short, long)]
     config: String,
     #[clap(short, long)]
-    faults: usize,
+    fault_count: usize,
     #[clap(long, default_value = "1000")]
     min_warmup: u32,
     #[clap(short, long, default_value = "1000")]
@@ -21,7 +21,7 @@ fn main() {
     let args = Args::parse();
     let mut topology = Topology::from_path(&args.config, None);
     let nb_nodes = topology.nb_nodes;
-    let mut faults = Vec::with_capacity(args.faults);
+    let mut faults = Vec::with_capacity(args.fault_count);
     let mut start = Instant::now();
     let mut count: u32 = 0;
     for target in [args.min_warmup, args.min_samples] {
@@ -29,7 +29,7 @@ fn main() {
         count = 0;
         while count < target {
             faults.clear();
-            faults.extend(0..args.faults);
+            faults.extend(0..args.fault_count);
             loop {
                 topology.faults.clear();
                 topology.faults.extend(faults.iter().copied());
