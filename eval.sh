@@ -93,13 +93,19 @@ function exp-1() {
 
 # Latency under load
 function exp-2() {
-  local LOADS=(10 100 1000) # req/s per client
+  local LOADS=(0.05 0.1) # req/s per client
   for writes in "${YCSB[@]}"; do
-    for config in "${CONFIGS[@]}"; do
+    for config in aws-world-ring-13.toml; do # "${CONFIGS[@]}"; do
       for load in "${LOADS[@]}"; do
         for algo in "${ALGOS[@]}"; do
           run "$config" "$algo" "$writes" "$REQUESTS" exponential "$load"
         done
+        (
+          cd graphs &&
+          source env.sh >/dev/null 2>&1 &&
+          python3 1-bars.py -c "$config" -w "$writes" -r "$REQUESTS" -i exponential -t "$load" -s "$SPEEDUP" &&
+          python3 2-cdfs.py -c "$config" -w "$writes" -r "$REQUESTS" -i exponential -t "$load" -s "$SPEEDUP"
+        )
       done
     done
   done
@@ -107,12 +113,19 @@ function exp-2() {
 
 # Scalability
 function exp-3() {
-  local LARGE_CONFIGS=(aws-all-31.toml)
-  for writes in "${YCSB[@]}"; do
-    for config in "${LARGE_CONFIGS[@]}"; do
-      for algo in "${ALGOS[@]}"; do
-        run "$config" "$algo" "$writes" "$REQUESTS" round-robin 0
+  local requests=10
+  for configs in aws-random aws-from-paris; do
+    for writes in "${YCSB[@]}"; do
+      for num_replicas in $(seq 3 2 31); do
+        for algo in "${ALGOS[@]}"; do
+          run "${configs}/${num_replicas}.toml" "$algo" "$writes" "$requests" round-robin 0
+        done
       done
+      (
+        cd graphs &&
+        source env.sh >/dev/null 2>&1 &&
+        python3 3-scalability.py -c "${configs}/@.toml" -w "$writes" -r "$requests" -i round-robin -t 0 -s "$SPEEDUP"
+      )
     done
   done
 }

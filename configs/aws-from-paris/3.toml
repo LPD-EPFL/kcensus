@@ -1,0 +1,6 @@
+regions = ['Paris (eu-west-3)', 'London (eu-west-2)', 'Zurich (eu-central-2)']
+raw_latencies = [
+    [0, 9.02, 10.11],
+    [9.13, 0, 17.2],
+    [10.03, 17.39, 0]
+]
