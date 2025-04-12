@@ -7,6 +7,7 @@ use std::io::Read;
 use std::time::Duration;
 
 pub const FAULTY_LATENCY_SECS: u64 = 1000000;
+pub const FAULTY_LATENCY: Duration = Duration::from_secs(FAULTY_LATENCY_SECS);
 
 #[derive(Deserialize, Debug)]
 pub struct Config {
@@ -18,7 +19,7 @@ pub struct Config {
 pub struct Topology {
     pub nb_nodes: usize,
     pub regions: Vec<String>,
-    pub link_latencies: Vec<Vec<Duration>>,
+    link_latencies: Vec<Vec<Duration>>,
     pub faults: BitSet,
 }
 
@@ -37,7 +38,7 @@ impl Display for Topology {
 }
 
 impl Topology {
-    pub fn from_path(toml_path: &String, faults: Vec<usize>) -> Self {
+    pub fn from_path(toml_path: &String, faults: Option<Vec<usize>>) -> Self {
         let mut file = File::open(toml_path).expect("Failed to open toml config");
         let mut contents = String::new();
         file.read_to_string(&mut contents)
@@ -47,8 +48,7 @@ impl Topology {
         Self::from_config(config, faults)
     }
 
-    fn from_config(config: Config, faults: Vec<usize>) -> Self {
-        let faults = BitSet::from_iter(faults);
+    fn from_config(config: Config, faults: Option<Vec<usize>>) -> Self {
         let Config {
             raw_latencies,
             regions,
@@ -60,20 +60,29 @@ impl Topology {
         let mut link_latencies = vec![vec![Duration::default(); nb_nodes]; nb_nodes];
         for src in 0..nb_nodes {
             for dest in 0..nb_nodes {
-                link_latencies[src][dest] = if faults.contains(src) || faults.contains(dest) {
-                    Duration::from_secs(FAULTY_LATENCY_SECS)
-                } else {
-                    let nanos = raw_latencies[src][dest] * 1000. * 1000.;
-                    Duration::from_nanos(nanos.round() as u64)
-                }
+                let nanos = raw_latencies[src][dest] * 1000. * 1000.;
+                link_latencies[src][dest] = Duration::from_nanos(nanos.round() as u64);
             }
         }
+
+        let faults = match faults {
+            Some(faults) => BitSet::from_iter(faults),
+            None => BitSet::with_capacity(nb_nodes),
+        };
 
         Topology {
             nb_nodes,
             regions,
             link_latencies,
             faults,
+        }
+    }
+
+    pub fn link_latency(&self, src: usize, dest: usize) -> Duration {
+        if self.faults.contains(src) || self.faults.contains(dest) {
+            FAULTY_LATENCY
+        } else {
+            self.link_latencies[src][dest]
         }
     }
 }

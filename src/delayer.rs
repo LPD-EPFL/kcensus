@@ -76,7 +76,7 @@ impl Delayer {
                         continue
                     }
 
-                    let deadline = Instant::now() + topology.link_latencies[msg.src][my_pid] / speedup;
+                    let deadline = Instant::now() + topology.link_latency(msg.src,my_pid) / speedup;
 
                     queues[msg.src].push_back(
                         msg.with_deadline(deadline)

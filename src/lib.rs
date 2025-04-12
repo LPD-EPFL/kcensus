@@ -82,7 +82,7 @@ async fn main() -> io::Result<()> {
 
     let args = Args::parse();
     let my_pid = args.pid;
-    let topology = Topology::from_path(&args.config, args.faults);
+    let topology = Topology::from_path(&args.config, Some(args.faults));
 
     let epaxos_max_faults = topology.nb_nodes - ((topology.nb_nodes * 3) / 4);
     let algo = match args.algo {

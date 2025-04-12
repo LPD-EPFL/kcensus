@@ -141,7 +141,7 @@ fn compute_propagation_graphs(topology: &Topology) -> PropagationGraphs {
     for src in 0..nb_nodes {
         for dest in 0..nb_nodes {
             if src != dest {
-                let nanos = topology.link_latencies[src][dest].as_nanos();
+                let nanos = topology.link_latency(src,dest).as_nanos();
                 graph.add_edge(src.into(), dest.into(), nanos as f64);
             }
         }
@@ -172,7 +172,7 @@ fn compute_propagation_graphs(topology: &Topology) -> PropagationGraphs {
     let rtts: Vec<Vec<_>> = (0..nb_nodes)
         .map(|src| {
             (0..nb_nodes)
-                .map(|dest| topology.link_latencies[src][dest] + topology.link_latencies[dest][src])
+                .map(|dest| topology.link_latency(src,dest) + topology.link_latency(dest,src))
                 .collect()
         })
         .collect();
@@ -426,7 +426,7 @@ fn compute_propagation_graphs(topology: &Topology) -> PropagationGraphs {
                     };
 
                     max_slack = deadline - msg_id.time;
-                    current_time = msg_id.time + topology.link_latencies[src][current];
+                    current_time = msg_id.time + topology.link_latency(src,current);
                     prev_msg_id = Some(msg_id);
                 }
             }
