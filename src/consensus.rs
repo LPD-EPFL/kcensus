@@ -11,13 +11,13 @@ use std::io;
 use tokio::select;
 use tokio::sync::mpsc::{Receiver, Sender};
 
-pub mod command;
+pub(crate) mod command;
 pub mod kcensus;
-pub mod message;
-pub mod paxos_family;
+pub(crate) mod message;
+pub(crate) mod paxos_family;
 mod read_tracker;
 
-pub trait Consensus {
+pub(crate) trait Consensus {
     async fn run(
         &mut self,
         mut msg_rx: Receiver<MsgWithSource>,

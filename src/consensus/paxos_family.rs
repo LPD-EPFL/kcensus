@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::io;
 
 mod epaxos_round_state;
-pub mod message;
+pub(crate) mod message;
 mod paxos_round_state;
 
 pub struct PaxosFamily {

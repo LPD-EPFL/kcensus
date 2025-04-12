@@ -11,8 +11,8 @@ use log::{debug, trace};
 use std::collections::HashMap;
 use std::io;
 
-pub mod message;
-pub mod node_state;
+pub(crate) mod message;
+mod node_state;
 pub mod propagation;
 mod round_state;
 

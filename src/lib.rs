@@ -15,11 +15,11 @@ use std::time::{Duration, Instant};
 
 mod cassandra;
 mod connector;
-mod consensus;
+pub mod consensus;
 mod delayer;
 mod message;
 mod multi_sink;
-mod topology;
+pub mod topology;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -63,8 +63,7 @@ enum Ingress {
     Constant,
 }
 
-#[tokio::main(flavor = "current_thread")]
-async fn main() -> io::Result<()> {
+pub async fn run() -> io::Result<()> {
     env_logger::builder()
         .format(|buf, record| {
             let time = Utc::now();
