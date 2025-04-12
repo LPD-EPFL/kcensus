@@ -32,7 +32,7 @@ impl Message {
         MsgWithSource { msg: self, src }
     }
 
-    pub fn delayed(&self) -> bool {
+    pub fn is_consensus_msg(&self) -> bool {
         match self {
             Message::ConsensusM { .. } => true,
             _ => false,

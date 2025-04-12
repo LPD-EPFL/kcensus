@@ -65,7 +65,7 @@ impl Delayer {
                         }
                     };
 
-                    if !msg.msg.delayed() {
+                    if !msg.msg.is_consensus_msg() {
                         self.delayed_msg_tx.send(msg).await.expect(
                             "Channel should not be closed yet"
                         );
