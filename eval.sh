@@ -167,7 +167,31 @@ function exp-4() {
   )
 }
 
+# Propagation
+function exp-5() {
+  for configs in aws-random aws-from-paris; do
+    for num_replicas in $(seq 3 2 31); do
+      local TITLE="c=$configs/${num_replicas}.toml"
+      local LOG_DIR="$BASE_LOG_DIR/$TITLE/"
+      local STDOUT="${LOG_DIR}/graph_bench.stdout"
+      local STDERR="${LOG_DIR}/graph_bench.stderr"
+      mkdir -p "$LOG_DIR"
+      echo "" >"$STDOUT" 2>>"$STDERR"
+      for num_faults in 0; do # $(seq 0 $(((num_replicas / 2) < 2 ? (num_replicas / 2) : 2))); do
+        echo "Running graph bench on $TITLE with $num_faults faults"
+        cargo run --bin graph_bench -- --config "configs/${configs}/${num_replicas}.toml" --fault-count "$num_faults">>"$STDOUT" 2>>"$STDERR"
+      done
+    done
+  done
+  (
+    cd graphs &&
+    source env.sh >/dev/null 2>&1 &&
+    python3 5-propagation.py
+  )
+}
+
 exp-1
 exp-2
 exp-3
 exp-4
+exp-5

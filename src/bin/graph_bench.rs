@@ -1,7 +1,9 @@
-use std::time::Instant;
 use clap::Parser;
 use kcensus::consensus::kcensus::propagation::PropagationGraphs;
+use kcensus::eval;
 use kcensus::topology::Topology;
+use serde::Serialize;
+use std::time::{Duration, Instant};
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -37,12 +39,32 @@ fn main() {
                 let _: PropagationGraphs = (&topology).into();
                 count += 1;
                 if !next_combination(&mut faults, nb_nodes) {
-                    break
+                    break;
                 }
             }
         }
     }
-    println!("Average graph generation time: {:?} ({} samples)", start.elapsed() / count, count);
+    let total = start.elapsed();
+    eval::log(
+        "graph-generation",
+        &format!(
+            "Average graph generation time: {:?} ({} samples)",
+            total / count,
+            count
+        ),
+        &GraphGenerationEvent {
+            num_faults: args.fault_count,
+            average: total / count,
+            count,
+        },
+    )
+}
+
+#[derive(Serialize)]
+struct GraphGenerationEvent {
+    num_faults: usize,
+    average: Duration,
+    count: u32,
 }
 
 #[inline]

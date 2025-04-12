@@ -1,5 +1,6 @@
 use crate::connector::connect_all;
 use crate::consensus::command::{Command, CommittedCommand};
+use crate::eval;
 use crate::message::{Message, MsgWithSource};
 use crate::multi_sink::MultiSink;
 use futures::StreamExt;
@@ -300,7 +301,7 @@ impl Client {
                 queueing: issued.duration_since(request_generated) * self.speedup,
                 processing: responded.duration_since(request_generated) * self.speedup,
             };
-            log("executed", &readable, &event);
+            eval::log("executed", &readable, &event);
             if let RequestInterval::RoundRobin { synchronizer } = &mut workload.interval {
                 synchronizer.notify().await;
             }
@@ -314,15 +315,6 @@ struct ExecutedEvent {
     latency: Duration,
     queueing: Duration,
     processing: Duration,
-}
-
-fn log<Event: Serialize>(key: &str, readable: &str, event: &Event) {
-    println!(
-        "[log={}] {} | {}",
-        key,
-        readable,
-        serde_json::to_string(event).expect("Failed to serialize event")
-    );
 }
 
 pub struct App {

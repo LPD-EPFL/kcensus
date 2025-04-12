@@ -17,6 +17,7 @@ mod cassandra;
 mod connector;
 pub mod consensus;
 mod delayer;
+pub mod eval;
 mod message;
 mod multi_sink;
 pub mod topology;
