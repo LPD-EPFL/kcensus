@@ -48,15 +48,6 @@ pub(crate) trait Consensus {
             }
 
             if count_done == self.get_nb_nodes() {
-                let sinks = self.get_sinks();
-                eval::log(
-                    "network-done",
-                    &format!(
-                        "Sent {} messages ({} bytes)",
-                        sinks.stats.msg_count, sinks.stats.byte_count
-                    ),
-                    &sinks.stats,
-                );
                 break 'main_loop;
             }
 
@@ -127,6 +118,16 @@ pub(crate) trait Consensus {
                 _ => panic!("Unexpected message type"),
             }
         } // 'main_loop: loop
+
+        let sinks = self.get_sinks();
+        eval::log(
+            "network-done",
+            &format!(
+                "Sent {} messages ({} bytes)",
+                sinks.stats.msg_count, sinks.stats.byte_count
+            ),
+            &sinks.stats,
+        );
 
         new_client_commands_rx.close();
         msg_rx.close();
