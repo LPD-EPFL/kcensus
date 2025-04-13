@@ -141,7 +141,7 @@ fn compute_propagation_graphs(topology: &Topology) -> PropagationGraphs {
     for src in 0..nb_nodes {
         for dest in 0..nb_nodes {
             if src != dest {
-                let nanos = topology.link_latency(src,dest).as_nanos();
+                let nanos = topology.link_latency(src, dest).as_nanos();
                 graph.add_edge(src.into(), dest.into(), nanos as f64);
             }
         }
@@ -172,7 +172,7 @@ fn compute_propagation_graphs(topology: &Topology) -> PropagationGraphs {
     let rtts: Vec<Vec<_>> = (0..nb_nodes)
         .map(|src| {
             (0..nb_nodes)
-                .map(|dest| topology.link_latency(src,dest) + topology.link_latency(dest,src))
+                .map(|dest| topology.link_latency(src, dest) + topology.link_latency(dest, src))
                 .collect()
         })
         .collect();
@@ -272,21 +272,21 @@ fn compute_propagation_graphs(topology: &Topology) -> PropagationGraphs {
         let mut message_graph: HashMap<MessageId, MessageInfo> = HashMap::new();
         let mut start_messages: Vec<MessageId> = Vec::new();
         // Remove extra triangles
-        let mut i = count; // desc
-        let mut j = 0; // asc
-        while j < nb_nodes {
-            let value_only_path = i == 0;
-            let t = if !value_only_path {
+        let mut i = nb_nodes; // first: send values (desc order, but does not matter)
+        let mut j = count; // second: triangles to commit, from longest to shortest (desc)
+        while 0 < j {
+            let value_only_path = 0 < i;
+            let t = if value_only_path {
                 i -= 1;
-                &triangular_paths[i]
+                &value_only_paths[i]
             } else {
-                j += 1;
-                &value_only_paths[j - 1]
+                j -= 1;
+                &triangular_paths[j]
             };
 
             if !value_only_path {
                 if round_state.can_commit() {
-                    i = 0;
+                    j = 0;
                     trace!("Messages in graph (before adding \"value only\" paths): ");
                     let mut messages = message_graph.iter().collect::<Vec<_>>();
                     messages.sort_by_key(|(x, _)| (x.time, x.src, x.dest));
@@ -316,7 +316,11 @@ fn compute_propagation_graphs(topology: &Topology) -> PropagationGraphs {
             let mut shortest_path_from_proposer = true;
             let mut shortest_path_to_proposer = false;
 
-            let checkpoints = [t.first, t.second, proposer];
+            let checkpoints = if value_only_path {
+                [t.first, t.first, t.first]
+            } else {
+                [t.first, t.second, proposer]
+            };
             for (step, target) in checkpoints.into_iter().enumerate() {
                 if step > 0 && target == proposer {
                     shortest_path_from_proposer = false;
@@ -331,8 +335,10 @@ fn compute_propagation_graphs(topology: &Topology) -> PropagationGraphs {
                         current = target;
                     }
                     debug_assert!(src != current);
-                    k.insert(current);
-                    round_state.learn(current, &k);
+                    if !value_only_path {
+                        k.insert(current);
+                        round_state.learn(current, &k);
+                    }
 
                     if step > 0 {
                         shortest_path_from_proposer &= prev_dest[proposer][current] == src;
@@ -415,7 +421,7 @@ fn compute_propagation_graphs(topology: &Topology) -> PropagationGraphs {
                                 MessageInfo {
                                     dependencies,
                                     needed_by: vec![],
-                                    includes_new_values: false, // Will be set bellow
+                                    includes_new_values: value_only_path,
                                 },
                             )
                             .is_none();
@@ -426,23 +432,29 @@ fn compute_propagation_graphs(topology: &Topology) -> PropagationGraphs {
                     };
 
                     max_slack = deadline - msg_id.time;
-                    current_time = msg_id.time + topology.link_latency(src,current);
+                    current_time = msg_id.time + topology.link_latency(src, current);
                     prev_msg_id = Some(msg_id);
                 }
             }
         }
 
+        // TODO: probably no longer needed. Kept to be safe
         for dest in 0..nb_nodes {
             if dest == proposer {
                 continue;
             }
             let mut first_msg_time = None;
+            let mut first_receive_time = None;
             let mut first_src = None;
             for src in 0..nb_nodes {
                 let msg_time = message_times[src][dest].first().copied();
-                if first_msg_time.is_none() || (msg_time.is_some() && msg_time < first_msg_time) {
-                    first_msg_time = msg_time;
-                    first_src = Some(src);
+                if let Some(msg_time) = msg_time {
+                    let receive_time = msg_time + topology.link_latency(src, dest);
+                    if first_receive_time.is_none() || Some(receive_time) < first_receive_time {
+                        first_msg_time = Some(msg_time);
+                        first_receive_time = Some(receive_time);
+                        first_src = Some(src);
+                    }
                 }
             }
             let first_msg_id = MessageId {
@@ -451,6 +463,12 @@ fn compute_propagation_graphs(topology: &Topology) -> PropagationGraphs {
                 dest,
                 time: first_msg_time.unwrap(),
             };
+            debug_assert!(
+                message_graph
+                    .get_mut(&first_msg_id)
+                    .unwrap()
+                    .includes_new_values
+            );
             message_graph
                 .get_mut(&first_msg_id)
                 .unwrap()
