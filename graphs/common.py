@@ -25,7 +25,7 @@ parser.add_argument('-t', '--throughput', type=float, default='10', help='Target
 parser.add_argument('-s', '--speedup', type=int, default='1', help='How much the network was sped up')
 parser.add_argument('-f', '--faults', type=str, default='', help='Comma-separated list of faults')
 args = parser.parse_args()
-serialized_args = f'-c={args.config.replace('/', '-')}-w={args.writes:g}-r={args.requests}-i={args.ingress}-t={args.throughput:g}-s={args.speedup}-f={args.faults}'
+serialized_args = f'-c={args.config.replace("/", "-")}-w={args.writes:g}-r={args.requests}-i={args.ingress}-t={args.throughput:g}-s={args.speedup}-f={args.faults}'
 
 
 def k_formatter(x, _):
