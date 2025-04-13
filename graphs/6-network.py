@@ -33,6 +33,8 @@ for experiment in ALGORITHMS:
         config = args.config.replace('@', str(num_replicas))
         logs = parse(algo=experiment, config=config, writes=args.writes, requests=args.requests,
                      ingress=args.ingress, throughput=args.throughput, speedup=args.speedup)
+        assert len(logs[
+                       'network-done']) == num_replicas, f'Some replicas ({num_replicas - len(logs["network-done"])} out of {num_replicas}) did not report networking stats'
         total_bytes = sum(log['byte_count'] for log in logs['network-done'])
         total_msgs = sum(log['msg_count'] for log in logs['network-done'])
         print(experiment, num_replicas, total_bytes, total_msgs)

@@ -36,6 +36,8 @@ for experiment in ALGORITHMS:
         config = args.config.replace('@', str(num_replicas))
         logs = parse(algo=experiment, config=config, writes=args.writes, requests=args.requests,
                      ingress=args.ingress, throughput=args.throughput, speedup=args.speedup, std='err')
+        assert len(logs[
+                       'time']) == num_replicas, f'Some replicas ({num_replicas - len(logs["time"])} out of {num_replicas}) did not report CPU+mem stats'
         cpu = compute_average(logs['time'], lambda log: log['user'] + log['system']) / num_replicas
         mem = compute_average(logs['time'], lambda log: log['memory'] * 1024)
         xs.append(num_replicas)

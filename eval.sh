@@ -204,7 +204,7 @@ function exp-6() {
   local requests=10
   for configs in aws-random aws-from-paris; do
     for writes in "${YCSB[@]}"; do
-      for num_replicas in $(seq 1 2 31); do
+      for num_replicas in $(seq 3 2 31); do
         for algo in "${ALGOS[@]}"; do
           run "${configs}/${num_replicas}.toml" "$algo" "$writes" "$requests" round-robin 0
         done
