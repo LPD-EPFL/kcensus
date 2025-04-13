@@ -1,6 +1,7 @@
 use crate::consensus::message::ConsensusMsg::{Commit, ReadRequest, ReadResponse};
 use crate::consensus::message::{CommandBatch, ConsensusMessage};
 use crate::consensus::read_tracker::ReadTracker;
+use crate::eval;
 use crate::message::Message::{ConsensusM, Done};
 use crate::message::MsgWithSource;
 use crate::multi_sink::MultiSink;
@@ -47,6 +48,15 @@ pub(crate) trait Consensus {
             }
 
             if count_done == self.get_nb_nodes() {
+                let sinks = self.get_sinks();
+                eval::log(
+                    "network-done",
+                    &format!(
+                        "Sent {} messages ({} bytes)",
+                        sinks.stats.msg_count, sinks.stats.byte_count
+                    ),
+                    &sinks.stats,
+                );
                 break 'main_loop;
             }
 

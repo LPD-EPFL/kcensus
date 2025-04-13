@@ -6,13 +6,13 @@ LOG_DIR = '../logs'
 
 
 def parse(pids=None, config='aws-europe-7.toml', algo='k-census', writes=0.5, requests=100, ingress='round-robin',
-          throughput=0, speedup=1, faults=''):
+          throughput=0, speedup=1, faults='', std='out'):
     if not pids:
         num_replicas = int(''.join([char for char in config if char.isdigit()]))
         pids = list(range(num_replicas))
     output = defaultdict(list)
     for pid in pids:
-        file_path = f'{LOG_DIR}/c={config}/a={algo}/w={writes:g}/r={requests}/i={ingress}/t={throughput:g}/s={speedup}/f={faults}/{pid}.stdout'
+        file_path = f'{LOG_DIR}/c={config}/a={algo}/w={writes:g}/r={requests}/i={ingress}/t={throughput:g}/s={speedup}/f={faults}/{pid}.std{std}'
         with open(file_path) as file:
             for key, items in parse_file(file).items():
                 output[key] += items

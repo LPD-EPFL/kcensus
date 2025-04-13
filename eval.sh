@@ -9,6 +9,12 @@ YCSB=(1 0.5 0.05)
 REQUESTS=100
 SPEEDUP=1
 
+if ! command -v "/usr/bin/time" >/dev/null 2>&1
+then
+    echo "/usr/bin/time not installed"
+    exit 1
+fi
+
 function digits() {
   echo "$1" | tr -d -c 0-9
 }
@@ -69,7 +75,9 @@ function run() {
     if [[ "$FAULTS" != "" ]]; then
        FAULTS_ARG="-f $FAULTS"
     fi
-    cargo run -r -- -p "$pid" --config "configs/$CONFIG" $CASSANDRA_ARG -a "$ALGO" -w "$WRITES" -r "$REQUESTS" -i "$INGRESS" -t "$THROUGHPUT" -s "$SPEEDUP" $FAULTS_ARG >"$LOG_DIR/$pid.stdout" 2>>"$LOG_DIR/$pid.stderr" &
+    cargo build -r 2>"$LOG_DIR/$pid.stderr"
+    local time_format='[log=time] Memory (KB): %M, System (s): %S User (s): %U | {"memory": %M, "system": %S, "user": %U}'
+    (/usr/bin/time -f "$time_format" target/release/kcensus -p "$pid" --config "configs/$CONFIG" $CASSANDRA_ARG -a "$ALGO" -w "$WRITES" -r "$REQUESTS" -i "$INGRESS" -t "$THROUGHPUT" -s "$SPEEDUP" $FAULTS_ARG)>"$LOG_DIR/$pid.stdout" 2>>"$LOG_DIR/$pid.stderr" &
   done
   wait
 }
@@ -190,8 +198,30 @@ function exp-5() {
   )
 }
 
+# Resources
+function exp-6() {
+  SPEEDUP=100000 # latency precision does not matter
+  local requests=10
+  for configs in aws-random aws-from-paris; do
+    for writes in "${YCSB[@]}"; do
+      for num_replicas in $(seq 1 2 31); do
+        for algo in "${ALGOS[@]}"; do
+          run "${configs}/${num_replicas}.toml" "$algo" "$writes" "$requests" round-robin 0
+        done
+      done
+      (
+        cd graphs &&
+        source env.sh >/dev/null 2>&1 &&
+        python3 6-network.py -c "${configs}/@.toml" -w "$writes" -r "$requests" -i round-robin -t 0 -s "$SPEEDUP" &&
+        python3 7-cpu-mem.py -c "${configs}/@.toml" -w "$writes" -r "$requests" -i round-robin -t 0 -s "$SPEEDUP"
+      )
+    done
+  done
+}
+
 exp-1
 exp-2
 exp-3
 exp-4
 exp-5
+exp-6

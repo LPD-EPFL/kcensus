@@ -5,6 +5,7 @@ use bincode::Options;
 use bit_set::BitSet;
 use futures::SinkExt;
 use log::debug;
+use serde::Serialize;
 use std::collections::HashMap;
 use std::io;
 use tokio_util::bytes::Bytes;
@@ -13,8 +14,13 @@ pub struct MultiSink {
     my_pid: usize,
     sinks: HashMap<usize, WrappedSink>,
     pub faults: BitSet,
-    msg_count: usize,
-    byte_count: usize,
+    pub stats: Stats,
+}
+
+#[derive(Serialize, Default)]
+pub struct Stats {
+    pub msg_count: usize,
+    pub byte_count: usize,
 }
 
 pub fn encode(msg: &Message) -> Bytes {
@@ -30,8 +36,7 @@ impl MultiSink {
             my_pid,
             sinks: HashMap::with_capacity(nb_nodes - 1),
             faults: BitSet::with_capacity(nb_nodes),
-            msg_count: 0,
-            byte_count: 0,
+            stats: Stats::default(),
         }
     }
 
@@ -77,8 +82,8 @@ impl MultiSink {
                 if self.faults.contains(*dest) {
                     continue;
                 }
-                self.msg_count += 1;
-                self.byte_count += bytes.len();
+                self.stats.msg_count += 1;
+                self.stats.byte_count += bytes.len();
             }
 
             sink.send(bytes.clone()).await?;
@@ -95,8 +100,8 @@ impl MultiSink {
         }
         let bytes = encode(&msg);
         if msg.is_consensus_msg() {
-            self.msg_count += 1;
-            self.byte_count += bytes.len();
+            self.stats.msg_count += 1;
+            self.stats.byte_count += bytes.len();
         }
         let sink = self.sinks.get_mut(&pid).unwrap();
         sink.send(bytes).await

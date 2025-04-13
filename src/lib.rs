@@ -3,6 +3,7 @@ use crate::consensus::paxos_family::{Mode, PaxosFamily};
 use crate::consensus::Consensus;
 use crate::delayer::Delayer;
 use crate::topology::Topology;
+use bincode::Options;
 use chrono::prelude::*;
 use clap::{arg, Parser};
 use consensus::kcensus::propagation::PropagationGraphs;
@@ -238,7 +239,7 @@ pub async fn run() -> io::Result<()> {
             let latency_mock = async {
                 // For simplicity, requests will be executed locally after a ping delay.
                 // This is a lower bound as this consumes no network + compute is sharded.
-                let rtt = match algo {
+                let (rtt, quorum) = match algo {
                     Algo::NoReplication => {
                         // The leader is the node with the lowest median ping.
                         let leader = (0..topology.nb_nodes)
@@ -248,16 +249,65 @@ pub async fn run() -> io::Result<()> {
                                 rtts[rtts.len() / 2]
                             })
                             .expect("There should be a leader");
-                        propagation_graphs.rtts[leader][my_pid] / args.speedup
+                        (propagation_graphs.rtts[leader][my_pid] / args.speedup, 1)
                     }
                     Algo::WeakReplication => {
                         let mut rtts = propagation_graphs.path_rtts[my_pid].clone();
                         rtts.sort();
-                        rtts[rtts.len() / 2] / args.speedup
+                        (rtts[rtts.len() / 2] / args.speedup, rtts.len() / 2)
                     }
                     _ => unreachable!("Algo::(No|Weak)Replication"),
                 };
+                let mut network_stats = multi_sink::Stats::default();
+                let serializer = bincode::DefaultOptions::new();
+
+                // We will send the messages to ourselves.
+                use tokio::io::AsyncReadExt;
+                use tokio::io::AsyncWriteExt;
+                // :0 tells the OS to pick an open port.
+                let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let addr = listener.local_addr().unwrap();
+                let mut writer = tokio::net::TcpStream::connect(addr).await.unwrap();
+                let (mut reader, _addr) = listener.accept().await.unwrap();
+                let mut read_buffer = vec![];
+
                 while let Some(command) = new_client_request_rx.recv().await {
+                    if rtt.is_zero() {
+                        committed_request_tx
+                            .send(command)
+                            .await
+                            .expect("Unreplicated server failed to send committed request");
+                        continue;
+                    } // Purely local operation
+                    let serialized = serializer
+                        .serialize(&command)
+                        .expect("Local server failed to serialize command");
+                    read_buffer.resize(serialized.len(), 0);
+                    for _ in 0..1.max(quorum - 1) {
+                        // No need to send to ourselves.
+                        writer
+                            .write_all(&serialized)
+                            .await
+                            .expect("Local server failed to write command");
+                        network_stats.msg_count += 1;
+                        network_stats.byte_count += serialized.len();
+                        let read = reader
+                            .read(&mut read_buffer)
+                            .await
+                            .expect("Remote server failed to read command");
+                        assert_eq!(read, serialized.len(), "Read a partial command.");
+                        writer
+                            .write_all(&serialized)
+                            .await
+                            .expect("Remote server failed to write reply");
+                        network_stats.msg_count += 1;
+                        network_stats.byte_count += serialized.len();
+                        let read = reader
+                            .read(&mut read_buffer)
+                            .await
+                            .expect("Local server failed to read reply");
+                        assert_eq!(read, serialized.len(), "Read a partial reply.");
+                    }
                     tokio_timerfd::sleep(rtt)
                         .await
                         .expect("Unreplicated or weakly replicated server failed to sleep");
@@ -265,6 +315,14 @@ pub async fn run() -> io::Result<()> {
                         "Unreplicated or weakly replicated server failed to send committed request",
                     );
                 }
+                eval::log(
+                    "network-done",
+                    &format!(
+                        "Sent+Received {} messages ({} bytes)",
+                        network_stats.msg_count, network_stats.byte_count
+                    ),
+                    &network_stats,
+                );
                 drop(committed_request_tx); // So the app stops
                 drop(delayed_msg_rx); // So the delayer stops
             };
