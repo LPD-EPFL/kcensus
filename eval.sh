@@ -200,8 +200,8 @@ function exp-5() {
 
 # Resources
 function exp-6() {
-  SPEEDUP=100000 # latency precision does not matter
-  local requests=10
+  SPEEDUP=10000000 # latency precision does not matter
+  local requests=1000
   for configs in aws-random aws-from-paris; do
     for writes in "${YCSB[@]}"; do
       for num_replicas in $(seq 3 2 31); do
