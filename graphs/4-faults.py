@@ -37,6 +37,7 @@ for num_faults, plot in enumerate(plots):
     delta_ys_bottom = []
     labels = []
     colors = []
+    hatches = []
     for i, experiment in enumerate(algorithms):
         executed = []
         num_replicas = int(''.join([char for char in args.config if char.isdigit()]))
@@ -56,8 +57,9 @@ for num_faults, plot in enumerate(plots):
         delta_ys_top.append(percentiles[MOUSTACHES[1]] - average)
         delta_ys_bottom.append(average - percentiles[MOUSTACHES[0]])
         colors.append(ALGORITHMS[experiment]['color'])
+        hatches.append(ALGORITHMS[experiment]['hatch'])
 
-    plot.bar(labels, ys, lw=0, color=colors)
+    plot.bar(labels, ys, lw=0, color=colors, hatch=hatches, edgecolor='black')
     plot.errorbar(xs, ys, [delta_ys_bottom, delta_ys_top], ls='none', color='black', solid_capstyle='projecting',
                   capsize=1.5)
 
@@ -67,7 +69,8 @@ for plot in plots:
 fig.subplots_adjust(wspace=0, hspace=0)
 
 legends = [
-    patches.Patch(color=ALGORITHMS[algo]['color'], label=ALGORITHMS[algo]['label'])
+    patches.Patch(facecolor=ALGORITHMS[algo]['color'], label=ALGORITHMS[algo]['label'], edgecolor='black',
+                  hatch=ALGORITHMS[algo]['hatch'], lw=0)
     for algo in algorithms
 ]
 
