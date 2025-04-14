@@ -206,7 +206,7 @@ function exp-6() {
     for writes in "${YCSB[@]}"; do
       for num_replicas in $(seq 3 2 31); do
         for algo in "${ALGOS[@]}"; do
-          run "${configs}/${num_replicas}.toml" "$algo" "$writes" "$requests" round-robin 0
+          run "${configs}/${num_replicas}.toml" "$algo" "$writes" "$((requests / num_replicas))" round-robin 0
         done
       done
       (

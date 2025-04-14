@@ -31,7 +31,7 @@ for experiment in ALGORITHMS:
     ys_msgs = []
     for num_replicas in range(3, 33, 2):
         config = args.config.replace('@', str(num_replicas))
-        logs = parse(algo=experiment, config=config, writes=args.writes, requests=args.requests,
+        logs = parse(algo=experiment, config=config, writes=args.writes, requests=args.requests // num_replicas,
                      ingress=args.ingress, throughput=args.throughput, speedup=args.speedup)
         assert len(logs[
                        'network-done']) == num_replicas, f'Some replicas ({num_replicas - len(logs["network-done"])} out of {num_replicas}) did not report networking stats'
