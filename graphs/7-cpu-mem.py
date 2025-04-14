@@ -8,7 +8,7 @@ from prelude import plt
 
 fig, plots = plt.subplots(1, 2, figsize=(2.975, 0.8), tight_layout=True)
 plt.tight_layout(pad=0, w_pad=0, h_pad=0)  # , rect=(0,0,.80,1))
-plots[0].set_title("Average Compute", pad=0)
+plots[0].set_title("Total Compute", pad=0)
 plots[0].set_ylabel('CPU time (s, sys.+user)', labelpad=1)
 # plots[0].yaxis.set_major_locator(MultipleLocator(10))
 # plots[0].yaxis.set_major_formatter(k_formatter)
@@ -38,7 +38,8 @@ for experiment in ALGORITHMS:
                      ingress=args.ingress, throughput=args.throughput, speedup=args.speedup, std='err')
         assert len(logs[
                        'time']) == num_replicas, f'Some replicas ({num_replicas - len(logs["time"])} out of {num_replicas}) did not report CPU+mem stats'
-        cpu = compute_average(logs['time'], lambda log: log['user'] + log['system']) / num_replicas
+        cpu = sum(map(lambda log: log['user'] + log['system'], logs['time']))
+        # cpu = compute_average(logs['time'], lambda log: log['user'] + log['system'])
         mem = compute_average(logs['time'], lambda log: log['memory'] * 1024)
         xs.append(num_replicas)
         ys_cpu.append(cpu)

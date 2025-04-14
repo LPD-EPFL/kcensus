@@ -30,8 +30,9 @@ for experiment in ALGORITHMS:
     ys_bytes = []
     ys_msgs = []
     for num_replicas in range(3, 33, 2):
+        req_per_replica = args.requests // num_replicas
         config = args.config.replace('@', str(num_replicas))
-        logs = parse(algo=experiment, config=config, writes=args.writes, requests=args.requests // num_replicas,
+        logs = parse(algo=experiment, config=config, writes=args.writes, requests=req_per_replica,
                      ingress=args.ingress, throughput=args.throughput, speedup=args.speedup)
         assert len(logs[
                        'network-done']) == num_replicas, f'Some replicas ({num_replicas - len(logs["network-done"])} out of {num_replicas}) did not report networking stats'
@@ -39,8 +40,8 @@ for experiment in ALGORITHMS:
         total_msgs = sum(log['msg_count'] for log in logs['network-done'])
         print(experiment, num_replicas, total_bytes, total_msgs)
         xs.append(num_replicas)
-        ys_bytes.append(total_bytes / args.requests / num_replicas)
-        ys_msgs.append(total_msgs / args.requests / num_replicas)
+        ys_bytes.append(total_bytes / req_per_replica / num_replicas)
+        ys_msgs.append(total_msgs / req_per_replica / num_replicas)
     plots[0].plot(xs, ys_bytes, **ALGORITHMS[experiment], markevery=(1, 3))
     plots[1].plot(xs, ys_msgs, **ALGORITHMS[experiment], markevery=(1, 3))
 
