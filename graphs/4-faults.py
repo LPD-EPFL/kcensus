@@ -10,6 +10,14 @@ from prelude import plt
 
 algorithms = ['weak-replication', 'k-census', 'e-paxos', 'multi-paxos', 'paxos']
 
+HATCHES = {
+    'weak-replication': '',
+    'k-census': '/////',
+    'e-paxos': '-----',
+    'multi-paxos': '\\\\\\\\\\',
+    'paxos': 'xxxxx'
+}
+
 fig, plots = plt.subplots(1, 5, figsize=(2.975, 0.8), tight_layout=True)
 plt.tight_layout(pad=0, w_pad=0, h_pad=0)  # , rect=(0,0,.80,1))
 
@@ -57,7 +65,7 @@ for num_faults, plot in enumerate(plots):
         delta_ys_top.append(percentiles[MOUSTACHES[1]] - average)
         delta_ys_bottom.append(average - percentiles[MOUSTACHES[0]])
         colors.append(ALGORITHMS[experiment]['color'])
-        hatches.append(ALGORITHMS[experiment]['hatch'])
+        hatches.append(HATCHES[experiment])
 
     plot.bar(labels, ys, lw=0, color=colors, hatch=hatches, edgecolor='black')
     plot.errorbar(xs, ys, [delta_ys_bottom, delta_ys_top], ls='none', color='black', solid_capstyle='projecting',
@@ -70,7 +78,7 @@ fig.subplots_adjust(wspace=0, hspace=0)
 
 legends = [
     patches.Patch(facecolor=ALGORITHMS[algo]['color'], label=ALGORITHMS[algo]['label'], edgecolor='black',
-                  hatch=ALGORITHMS[algo]['hatch'], lw=0)
+                  hatch=HATCHES[algo], lw=0)
     for algo in algorithms
 ]
 

@@ -6,13 +6,12 @@ orange = '#DD8452'
 red = '#C44E52'
 
 ALGORITHMS = {
-    'no-replication': {'label': 'No Rep.', 'color': lavanda, 'lw': 0.8, 'marker': '', 'markersize': 3.5, 'hatch': ''},
-    'weak-replication': {'label': 'Maj. Rep.', 'color': blue, 'lw': 0.8, 'marker': '^', 'markersize': 3.5, 'hatch': ''},
-    'k-census': {'label': 'K-Census', 'color': green, 'lw': 0.8, 'marker': '>', 'markersize': 3.5, 'hatch': '/////'},
-    'e-paxos': {'label': 'EPaxos', 'color': yellow, 'lw': 0.8, 'marker': 'x', 'markersize': 3.5, 'hatch': '-----'},
-    'multi-paxos': {'label': 'Multi-Paxos', 'color': orange, 'lw': 0.8, 'marker': 's', 'markersize': 3.5,
-                    'hatch': '\\\\\\\\\\'},
-    'paxos': {'label': 'Paxos', 'color': red, 'lw': 0.8, 'marker': 'o', 'markersize': 3.5, 'hatch': 'xxxxx'},
+    'no-replication': {'label': 'No Rep.', 'color': lavanda, 'lw': 0.8, 'marker': '', 'markersize': 3.5},
+    'weak-replication': {'label': 'Min. Effort', 'color': blue, 'lw': 0.8, 'marker': '^', 'markersize': 3.5},
+    'k-census': {'label': 'K-Census', 'color': green, 'lw': 0.8, 'marker': '>', 'markersize': 3.5},
+    'e-paxos': {'label': 'EPaxos', 'color': yellow, 'lw': 0.8, 'marker': 'x', 'markersize': 3.5},
+    'multi-paxos': {'label': 'Multi-Paxos', 'color': orange, 'lw': 0.8, 'marker': 's', 'markersize': 3.5},
+    'paxos': {'label': 'Paxos', 'color': red, 'lw': 0.8, 'marker': 'o', 'markersize': 3.5},
 }
 
 import argparse
