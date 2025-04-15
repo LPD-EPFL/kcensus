@@ -1,5 +1,6 @@
 use crate::consensus::kcensus::node_state::Knowledge;
 use crate::consensus::kcensus::round_state::KCensusRoundState;
+use crate::topology;
 use crate::topology::Topology;
 use bit_set::BitSet;
 use log::trace;
@@ -100,12 +101,6 @@ impl PropagationGraphs {
     }
 }
 
-impl From<&Topology> for PropagationGraphs {
-    fn from(topology: &Topology) -> Self {
-        compute_propagation_graphs(topology)
-    }
-}
-
 #[derive(Debug)]
 struct TriangularPath {
     first: ProcId,
@@ -127,44 +122,59 @@ fn triangle_latency(t: &TriangularPath) -> Duration {
     t.total_latency
 }
 
-fn compute_propagation_graphs(topology: &Topology) -> PropagationGraphs {
+pub fn compute_propagation_graphs(
+    topology: &Topology,
+    kcensus_graph: bool,
+    shortest_paths: bool,
+    single_proposer: Option<usize>,
+) -> PropagationGraphs {
     let nb_nodes = topology.nb_nodes;
     let mut path_latencies = vec![vec![Duration::default(); nb_nodes]; nb_nodes];
     let mut prev_dest = vec![vec![0; nb_nodes]; nb_nodes];
     let mut next_src = vec![vec![0; nb_nodes]; nb_nodes];
 
-    // Generate graph nodes
-    let mut graph = NetworkGraph::with_capacity(nb_nodes);
-    for _ in 0..nb_nodes {
-        graph.add_node(());
-    }
-    for src in 0..nb_nodes {
-        for dest in 0..nb_nodes {
-            if src != dest {
-                let nanos = topology.link_latency(src, dest).as_nanos();
-                graph.add_edge(src.into(), dest.into(), nanos as f64);
+    if shortest_paths {
+        // Generate graph nodes
+        let mut graph = NetworkGraph::with_capacity(nb_nodes);
+        for _ in 0..nb_nodes {
+            graph.add_node(());
+        }
+        for src in 0..nb_nodes {
+            for dest in 0..nb_nodes {
+                if src != dest {
+                    let nanos = topology.link_latency(src, dest).as_nanos();
+                    graph.add_edge(src.into(), dest.into(), nanos as f64);
+                }
             }
         }
-    }
 
-    // Compute the shortest paths
-    for src in 0..nb_nodes {
-        let paths = bellman_ford(&graph, src.into()).expect("Latencies can not be negative");
-        for dest in 0..nb_nodes {
-            let mut last_pred = dest;
-            let mut pred = paths.predecessors[dest].unwrap_or(src.into()).index();
-            prev_dest[src][dest] = pred;
-            while pred != src {
-                last_pred = pred;
-                pred = paths.predecessors[last_pred].unwrap_or(src.into()).index();
+        // Compute the shortest paths
+        for src in 0..nb_nodes {
+            let paths = bellman_ford(&graph, src.into()).expect("Latencies can not be negative");
+            for dest in 0..nb_nodes {
+                let mut last_pred = dest;
+                let mut pred = paths.predecessors[dest].unwrap_or(src.into()).index();
+                prev_dest[src][dest] = pred;
+                while pred != src {
+                    last_pred = pred;
+                    pred = paths.predecessors[last_pred].unwrap_or(src.into()).index();
+                }
+                next_src[src][dest] = last_pred;
+                let nanos = paths.distances[dest];
+                if paths.distances[dest] > (u64::MAX / 4) as f64 {
+                    path_latencies[src][dest] =
+                        Duration::from_secs(crate::topology::FAULTY_LATENCY_SECS);
+                } else {
+                    path_latencies[src][dest] = Duration::from_nanos(nanos.round() as u64);
+                }
             }
-            next_src[src][dest] = last_pred;
-            let nanos = paths.distances[dest];
-            if paths.distances[dest] > (u64::MAX / 4) as f64 {
-                path_latencies[src][dest] =
-                    Duration::from_secs(crate::topology::FAULTY_LATENCY_SECS);
-            } else {
-                path_latencies[src][dest] = Duration::from_nanos(nanos.round() as u64);
+        }
+    } else {
+        for src in 0..nb_nodes {
+            for dest in 0..nb_nodes {
+                path_latencies[src][dest] = topology.link_latency(src, dest);
+                prev_dest[src][dest] = src;
+                next_src[src][dest] = dest;
             }
         }
     }
@@ -204,6 +214,18 @@ fn compute_propagation_graphs(topology: &Topology) -> PropagationGraphs {
             .map(|requester| rtts[requester][proposer] + proposer_round_trips[majority - 1])
             .collect();
         multi_paxos_latencies.push(multi_paxos_latency);
+
+        if !kcensus_graph
+            || topology.faults.contains(proposer)
+            || single_proposer.is_some_and(|p| p != proposer)
+        {
+            propagation_graphs.push(PropagationGraph {
+                start_messages: Vec::new(),
+                graph: HashMap::new(),
+            });
+            kcensus_latencies.push(topology::FAULTY_LATENCY);
+            continue;
+        }
 
         let mut triangular_paths: Vec<TriangularPath> = Vec::with_capacity(nb_nodes * nb_nodes);
         for first in 0..nb_nodes {
@@ -259,8 +281,6 @@ fn compute_propagation_graphs(topology: &Topology) -> PropagationGraphs {
             triangular_paths.len()
         );
         trace!("longest path: {}", triangular_paths[count - 1]);
-
-        kcensus_latencies.push(max_latency);
 
         // TODO: Some triangles might still not be needed to commit.
         //   Try to check if they are needed for can_commit? (can be merged with bellow logic?)
@@ -475,7 +495,9 @@ fn compute_propagation_graphs(topology: &Topology) -> PropagationGraphs {
                 .includes_new_values = true
         }
 
+        debug_assert!(kcensus_latencies.len() == proposer);
         debug_assert!(propagation_graphs.len() == proposer);
+        kcensus_latencies.push(max_latency);
         propagation_graphs.push(PropagationGraph {
             start_messages,
             graph: message_graph,

@@ -1,5 +1,5 @@
 use clap::Parser;
-use kcensus::consensus::kcensus::propagation::PropagationGraphs;
+use kcensus::consensus::kcensus::propagation::compute_propagation_graphs;
 use kcensus::eval;
 use kcensus::topology::Topology;
 use serde::Serialize;
@@ -36,8 +36,13 @@ fn main() {
                 topology.faults.clear();
                 topology.faults.extend(faults.iter().copied());
                 // println!("faults: {:?}", topology.faults);
-                let _: PropagationGraphs = (&topology).into();
-                count += 1;
+                for proposer in 0..nb_nodes {
+                    if topology.faults.contains(proposer) {
+                        continue;
+                    }
+                    let _ = compute_propagation_graphs(&topology, true, true, Some(proposer));
+                    count += 1;
+                }
                 if !next_combination(&mut faults, nb_nodes) {
                     break;
                 }

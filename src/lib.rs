@@ -1,4 +1,5 @@
 use crate::connector::connect_all;
+use crate::consensus::kcensus::propagation::compute_propagation_graphs;
 use crate::consensus::paxos_family::{Mode, PaxosFamily};
 use crate::consensus::Consensus;
 use crate::delayer::Delayer;
@@ -6,7 +7,6 @@ use crate::topology::Topology;
 use bincode::Options;
 use chrono::prelude::*;
 use clap::{arg, Parser};
-use consensus::kcensus::propagation::PropagationGraphs;
 use consensus::kcensus::KCensus;
 use env_logger::fmt::style;
 use log::debug;
@@ -99,7 +99,12 @@ pub async fn run() -> io::Result<()> {
     let faulty = topology.faults.contains(my_pid);
     debug!("Loaded topology:{}", topology);
     let start = Instant::now();
-    let propagation_graphs = PropagationGraphs::from(&topology);
+    let propagation_graphs = compute_propagation_graphs(
+        &topology,
+        matches!(algo, Algo::KCensus),
+        matches!(algo, Algo::KCensus | Algo::WeakReplication),
+        None,
+    );
     println!("Computed propagation graphs in {:?}", start.elapsed());
     let nb_nodes = topology.regions.len();
 
