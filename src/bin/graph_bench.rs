@@ -10,11 +10,11 @@ use std::time::{Duration, Instant};
 struct Args {
     #[arg(short, long)]
     config: String,
-    #[clap(short, long)]
+    #[clap(short, long, default_value = "0")]
     fault_count: usize,
-    #[clap(long, default_value = "1000")]
+    #[clap(long, default_value = "1000", short_alias = 'w')]
     min_warmup: u32,
-    #[clap(short, long, default_value = "1000")]
+    #[clap(short, long, default_value = "1000", short_alias = 's')]
     min_samples: u32,
 }
 
