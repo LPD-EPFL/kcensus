@@ -28,6 +28,7 @@ for experiment in ALGORITHMS:
                  throughput=args.throughput, speedup=args.speedup, faults=args.faults)
     average = compute_average(logs['executed'], lambda log: duration_to_ms(log['latency']))
     percentiles = compute_percentiles(logs['executed'], lambda log: duration_to_ms(log['latency']))
+    print(experiment, list(enumerate(percentiles)))
     nice_percentiles = [-999999] + percentiles + [999999]
     plot.plot(nice_percentiles, [0, 0.1] + list(range(1, 100)) + [99.9, 100], **ALGORITHMS[experiment],
               markevery=(26, 25))

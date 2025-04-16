@@ -38,10 +38,10 @@ for experiment in ALGORITHMS:
                        'network-done']) == num_replicas, f'Some replicas ({num_replicas - len(logs["network-done"])} out of {num_replicas}) did not report networking stats'
         total_bytes = sum(log['byte_count'] for log in logs['network-done'])
         total_msgs = sum(log['msg_count'] for log in logs['network-done'])
-        print(experiment, num_replicas, total_bytes, total_msgs)
         xs.append(num_replicas)
-        ys_bytes.append(total_bytes / req_per_replica / num_replicas)
-        ys_msgs.append(total_msgs / req_per_replica / num_replicas)
+        ys_bytes.append(total_bytes / (req_per_replica * num_replicas))
+        ys_msgs.append(total_msgs / (req_per_replica * num_replicas))
+        print(experiment, num_replicas, ys_bytes[-1], ys_msgs[-1])
     plots[0].plot(xs, ys_bytes, **ALGORITHMS[experiment], markevery=(1, 3))
     plots[1].plot(xs, ys_msgs, **ALGORITHMS[experiment], markevery=(1, 3))
 

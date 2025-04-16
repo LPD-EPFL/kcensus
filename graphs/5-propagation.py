@@ -13,7 +13,7 @@ config_lists = {
 
 fig, plot = plt.subplots(figsize=(2.975, 0.8), tight_layout=True)
 plt.tight_layout(pad=0, w_pad=0, h_pad=0)  # , rect=(0,0,.80,1))
-plot.set_title("Optimal Knowledge Spread Computation", pad=0)
+plot.set_title("Knowledge Spread Optimization", pad=0)
 plot.set_ylabel('Duration (ms)', labelpad=1)
 plot.set_xlabel('Number of Replicas', labelpad=1)
 plot.grid(axis='y', which='major', linestyle='--', linewidth='0.5')
@@ -22,8 +22,8 @@ plot.tick_params(axis='both', which='major', pad=0.5)
 plot.tick_params(axis='both', which='minor', pad=0.5)
 plot.xaxis.set_major_locator(MultipleLocator(4, 3))
 plot.xaxis.set_minor_locator(MultipleLocator(2, 3))
-plot.yaxis.set_major_locator(MultipleLocator(100))
-plot.yaxis.set_minor_locator(MultipleLocator(50))
+plot.yaxis.set_major_locator(MultipleLocator(10))
+plot.yaxis.set_minor_locator(MultipleLocator(5))
 plot.set_xlim(3, 31)
 
 for config_list, cl_style in config_lists.items():
@@ -37,6 +37,7 @@ for config_list, cl_style in config_lists.items():
             assert len(logs) == 1
             xs.append(num_replicas)
             ys.append(duration_to_ms(logs[0]['average']))
+            print(config, xs[-1], ys[-1])
     plot.plot(xs, ys, **cl_style, markevery=(1, 3))
 
 legends = [

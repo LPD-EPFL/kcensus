@@ -225,3 +225,16 @@ exp-3
 exp-4
 exp-5
 exp-6
+
+#python3 1-bars.py -c=aws-world-ring-13.toml -w=1 -r=100 -i=round-robin -t=0
+#python3 1-bars.py -c=aws-north-america-7.toml -w=1 -r=100 -i=round-robin -t=0
+#python3 1-bars.py -c=aws-europe-7-alt.toml -w=1 -r=100 -i=round-robin -t=0
+#python3 4-faults.py -c=aws-world-ring-9.toml -w=1 -r=10 -i=round-robin -t=0
+#python3 2-cdfs.py -c=aws-world-ring-13.toml -w=1 -r=100 -i=round-robin -t=0
+#python3 2-cdfs.py -c=aws-world-ring-13.toml -w=1 -r=100 -i=exponential -t=0.05
+#python3 2-cdfs.py -c=aws-world-ring-13.toml -w=1 -r=100 -i=exponential -t=0.1
+#python3 3-scalability.py -c=aws-random/@.toml -w=1 -r=10 -i=round-robin -t=0
+#python3 3-scalability.py -c=aws-from-paris/@.toml -w=1 -r=10 -i=round-robin -t=0
+#python3 5-propagation.py
+#python3 6-network.py -r 1000 -c aws-random/@.toml -s 10000000 -w 1 -t=0
+#python3 7-cpu-mem.py -r 1000 -c aws-random/@.toml -s 10000000 -w 1 -t=0
