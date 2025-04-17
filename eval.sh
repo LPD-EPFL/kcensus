@@ -187,7 +187,7 @@ function exp-5() {
       echo "" >"$STDOUT" 2>>"$STDERR"
       for num_faults in 0; do # $(seq 0 $(((num_replicas / 2) < 2 ? (num_replicas / 2) : 2))); do
         echo "Running graph bench on $TITLE with $num_faults faults"
-        cargo run --bin graph_bench -- --config "configs/${configs}/${num_replicas}.toml" --fault-count "$num_faults">>"$STDOUT" 2>>"$STDERR"
+        cargo run --bin graph_bench -r -- --config "configs/${configs}/${num_replicas}.toml" --fault-count "$num_faults">>"$STDOUT" 2>>"$STDERR"
       done
     done
   done
