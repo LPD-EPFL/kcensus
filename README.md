@@ -1,2 +1,3 @@
 # K-Census
-Low-Latency Strongly-Consistent Replication by Gossiping Knowledge
+
+Fast Consensus Through Knowledge Gossiping
