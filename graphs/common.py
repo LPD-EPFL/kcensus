@@ -2,7 +2,7 @@ lavanda = "#a084d1"
 blue = "#194881"
 green = "#2b7941"
 yellow = "#bca01b"
-orange = "#a65e36"
+orange = "#a95c30"
 red = "#811d27"
 
 ALGORITHMS = {

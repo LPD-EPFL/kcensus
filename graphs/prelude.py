@@ -24,7 +24,7 @@ plt.rc("xtick", labelsize=SMALL_SIZE)  # fontsize of the tick labels
 plt.rc("ytick", labelsize=SMALL_SIZE)  # fontsize of the tick labels
 
 
-def lighten_color(color, amount=0.9):
+def lighten_color(color):
     """
     Lightens the given color by multiplying (1-luminosity) by the given amount.
     Input can be matplotlib color string, hex string, or RGB tuple.
@@ -41,4 +41,4 @@ def lighten_color(color, amount=0.9):
     except:
         c = color
     c = colorsys.rgb_to_hls(*mpl.colors.to_rgb(c))
-    return colorsys.hls_to_rgb(c[0], 1 - amount * (1 - c[1]), sqrt(amount) * c[2])
+    return colorsys.hls_to_rgb(c[0], (1 - (1 - c[1] * 0.58) * 0.66), c[2] * 0.75)

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from itertools import combinations
 
+import matplotlib as mpl
 from matplotlib import patches
 from matplotlib.ticker import NullLocator, NullFormatter, MultipleLocator
 
@@ -10,6 +11,7 @@ from prelude import lighten_color, plt
 
 algorithms = ["weak-replication", "k-census", "e-paxos", "multi-paxos", "paxos"]
 
+mpl.rcParams["hatch.linewidth"] = 0.5
 HATCHES = {
     "weak-replication": "",
     "k-census": "xxxx",
