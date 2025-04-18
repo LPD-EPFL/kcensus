@@ -15,11 +15,11 @@ throughput = 0.0
 speedup = 1
 faults = ""
 
-fig, subplots = plt.subplots(2, 1, figsize=(3.155, 2.25), tight_layout=True)
+fig, subplots = plt.subplots(2, 1, figsize=(3.155, 2.265), tight_layout=True)
 plt.tight_layout(pad=0, w_pad=0, h_pad=0)  # , rect=(0,0,.80,1))
 fig.subplots_adjust(
     # wspace=0.22,
-    hspace=0.65,
+    hspace=0.35,
     # top=.80,
 )
 

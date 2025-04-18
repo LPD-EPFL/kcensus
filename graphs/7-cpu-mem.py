@@ -6,7 +6,7 @@ from common import ALGORITHMS, args, serialized_args, ki_formatter
 from logparser import *
 from prelude import plt
 
-fig, plots = plt.subplots(1, 2, figsize=(3.26, 0.9), tight_layout=True)
+fig, plots = plt.subplots(1, 2, figsize=(3.26, 0.93), tight_layout=True)
 plt.tight_layout(pad=0, w_pad=0, h_pad=0)  # , rect=(0,0,.80,1))
 plots[0].set_title("Total Compute", pad=0)
 plots[0].set_ylabel("CPU time (s)", labelpad=1)
