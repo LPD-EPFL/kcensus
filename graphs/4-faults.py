@@ -6,16 +6,16 @@ from matplotlib.ticker import NullLocator, NullFormatter, MultipleLocator
 
 from common import ALGORITHMS, args, serialized_args
 from logparser import *
-from prelude import plt
+from prelude import lighten_color, plt
 
 algorithms = ["weak-replication", "k-census", "e-paxos", "multi-paxos", "paxos"]
 
 HATCHES = {
     "weak-replication": "",
-    "k-census": "/////",
-    "e-paxos": "----",
-    "multi-paxos": "\\\\\\\\\\",
-    "paxos": "xxxxx",
+    "k-census": "xxxx",
+    "e-paxos": "\\\\\\\\\\",
+    "multi-paxos": "----",
+    "paxos": "////",
 }
 
 fig, plots = plt.subplots(1, 5, figsize=(3.22, 0.95), tight_layout=True)
@@ -88,7 +88,7 @@ for num_faults, plot in enumerate(plots):
         ys.append(average)
         delta_ys_top.append(percentiles[MOUSTACHES[1]] - average)
         delta_ys_bottom.append(average - percentiles[MOUSTACHES[0]])
-        colors.append(ALGORITHMS[experiment]["color"])
+        colors.append(lighten_color(ALGORITHMS[experiment]["color"]))
         hatches.append(HATCHES[experiment])
 
     plot.bar(labels, ys, lw=0, color=colors, hatch=hatches, edgecolor="black")
@@ -109,7 +109,7 @@ fig.subplots_adjust(wspace=0, hspace=0)
 
 legends = [
     patches.Patch(
-        facecolor=ALGORITHMS[algo]["color"],
+        facecolor=lighten_color(ALGORITHMS[algo]["color"]),
         label=ALGORITHMS[algo]["label"],
         edgecolor="black",
         hatch=HATCHES[algo],

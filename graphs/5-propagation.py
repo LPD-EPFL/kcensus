@@ -10,12 +10,17 @@ config_lists = {
     "aws-random/@.toml": {
         "label": "Random Deployments",
         "marker": "o",
-        "color": "#d59729",
+        "markersize": 3.5,
+        "color": "#808078",
+        "linewidth": 1.2,
     },
     "aws-from-paris/@.toml": {
         "label": "Parisian Deployments",
         "marker": "x",
-        "color": "#2d7cc5",
+        "markersize": 3.5,
+        "color": "#000008",
+        "linewidth": 0.8,
+        "linestyle": "--",
     },
 }
 
@@ -62,7 +67,7 @@ fig.legend(
     borderpad=0.3,
     labelspacing=0.1,
     mode="expand",
-    handlelength=0.8,
+    handlelength=1.2,
     handletextpad=0.5,
 )
 

@@ -3,7 +3,7 @@
 from matplotlib.ticker import MultipleLocator
 from common import ALGORITHMS
 from logparser import *
-from prelude import plt
+from prelude import lighten_color, plt
 
 # python3 1-bars.py -c=aws-world-ring-13.toml -w=1 -r=100 -i=round-robin -t=0
 # python3 1-bars.py -c=aws-north-america-7.toml -w=1 -r=100 -i=round-robin -t=0
@@ -84,7 +84,7 @@ for c in range(3):
         labels.append(
             ALGORITHMS[experiment]["label"].replace(" ", "\n").replace("-", "-\n")
         )
-        colors.append(ALGORITHMS[experiment]["color"])
+        colors.append(lighten_color(ALGORITHMS[experiment]["color"]))
         text_y = percentiles[MOUSTACHES[1]]  # average / 2
         plot.text(
             i,

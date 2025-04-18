@@ -1,52 +1,59 @@
-lavanda = "#a689d7"
-blue = "#3a629f"
-green = "#479359"
-yellow = "#c8ab29"
-orange = "#c3784e"
-red = "#af484a"
+lavanda = "#a084d1"
+blue = "#194881"
+green = "#2b7941"
+yellow = "#bca01b"
+orange = "#a65e36"
+red = "#811d27"
 
 ALGORITHMS = {
     "no-replication": {
         "label": "No Rep.",
         "color": lavanda,
-        "lw": 0.8,
+        "lw": 0.7,
+        "linestyle": "--",
         "marker": "",
         "markersize": 3.5,
     },
     "weak-replication": {
         "label": "Min. Effort",
         "color": blue,
-        "lw": 0.8,
-        "marker": "^",
+        "lw": 0.9,
+        "linestyle": ":",
+        "marker": "",
         "markersize": 2.5,
     },
     "k-census": {
         "label": "K-Census",
         "color": green,
-        "lw": 0.8,
-        "marker": "x",
-        "markersize": 3.5,
+        "lw": 0.7,
+        "linestyle": "-",
+        "marker": "d",
+        "markersize": 2.4,
     },
     "e-paxos": {
         "label": "EPaxos",
         "color": yellow,
-        "lw": 0.8,
-        "marker": "d",
-        "markersize": 2.8,
+        "lw": 0.7,
+        "linestyle": "-",
+        "marker": "o",
+        "markersize": 2.1,
     },
     "multi-paxos": {
         "label": "Multi-Paxos",
         "color": orange,
-        "lw": 0.8,
-        "marker": "s",
-        "markersize": 2.7,
+        "lw": 0.7,
+        "linestyle": "-",
+        "marker": "x",
+        "markersize": 4,
+        "markeredgewidth": 0.7,
     },
     "paxos": {
         "label": "Paxos",
         "color": red,
-        "lw": 0.8,
-        "marker": "o",
-        "markersize": 2.9,
+        "lw": 0.7,
+        "linestyle": "-",
+        "marker": "s",
+        "markersize": 1.4,
     },
 }
 
