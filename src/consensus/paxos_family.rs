@@ -2,7 +2,7 @@ use crate::consensus::message::ConsensusMsg::{Commit, PaxosM};
 use crate::consensus::message::{CommandBatch, ConsensusMessage};
 use crate::consensus::paxos_family::message::PaxosMsg::{Accept, ForwardRequest, Prepare};
 use crate::consensus::paxos_family::message::{PaxosMsg, PaxosRound};
-use crate::consensus::paxos_family::paxos_round_state::PaxosFamilyRoundState;
+use crate::consensus::paxos_family::round_state::PaxosFamilyRoundState;
 use crate::consensus::paxos_family::Mode::{EPaxos, MultiPaxos, Paxos};
 use crate::consensus::read_tracker::ReadTracker;
 use crate::consensus::{Consensus, ConsensusTrait};
@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::io;
 
 pub(crate) mod message;
-mod paxos_round_state;
+mod round_state;
 
 pub struct PaxosFamilySettings {
     // Settings
