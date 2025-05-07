@@ -110,10 +110,7 @@ impl PaxosMsg {
 
     #[inline]
     pub fn should_include_value(&self) -> bool {
-        match self {
-            ForwardRequest { .. } => true,
-            _ => false,
-        }
+        matches!(self, ForwardRequest { .. })
     }
 }
 

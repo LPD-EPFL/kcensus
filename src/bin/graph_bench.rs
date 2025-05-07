@@ -73,7 +73,7 @@ struct GraphGenerationEvent {
 }
 
 #[inline]
-fn next_combination(faults: &mut Vec<usize>, nb_nodes: usize) -> bool {
+fn next_combination(faults: &mut [usize], nb_nodes: usize) -> bool {
     debug_assert!(faults.len() < nb_nodes);
     let len = faults.len();
 

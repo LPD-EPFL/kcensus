@@ -6,7 +6,7 @@ use std::fs::File;
 use std::io::Read;
 use std::time::Duration;
 
-pub const FAULTY_LATENCY_SECS: u64 = 1000000;
+const FAULTY_LATENCY_SECS: u64 = 1000000;
 pub const FAULTY_LATENCY: Duration = Duration::from_secs(FAULTY_LATENCY_SECS);
 
 #[derive(Deserialize, Debug)]

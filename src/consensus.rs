@@ -190,7 +190,7 @@ pub(crate) trait Consensus {
             return Ok(self
                 .get_read_tracker()
                 .receive_ready(uid)
-                .map(|c| CommandBatch::Single(c)));
+                .map(CommandBatch::Single));
         }
         debug!("Processing message: {:?}", msg);
         self.process_message(msg).await

@@ -33,10 +33,7 @@ impl Message {
     }
 
     pub fn is_consensus_msg(&self) -> bool {
-        match self {
-            Message::ConsensusM { .. } => true,
-            _ => false,
-        }
+        matches!(self, Message::ConsensusM { .. })
     }
 }
 

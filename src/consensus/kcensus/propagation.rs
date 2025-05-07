@@ -162,8 +162,7 @@ pub fn compute_propagation_graphs(
                 next_src[src][dest] = last_pred;
                 let nanos = paths.distances[dest];
                 if paths.distances[dest] > (u64::MAX / 4) as f64 {
-                    path_latencies[src][dest] =
-                        Duration::from_secs(crate::topology::FAULTY_LATENCY_SECS);
+                    path_latencies[src][dest] = topology::FAULTY_LATENCY;
                 } else {
                     path_latencies[src][dest] = Duration::from_nanos(nanos.round() as u64);
                 }
@@ -458,7 +457,7 @@ pub fn compute_propagation_graphs(
             }
         }
 
-        // TODO: probably no longer needed. Kept to be safe
+        // TODO: This is only an assertion check
         for dest in 0..nb_nodes {
             if dest == proposer {
                 continue;
@@ -466,8 +465,8 @@ pub fn compute_propagation_graphs(
             let mut first_msg_time = None;
             let mut first_receive_time = None;
             let mut first_src = None;
-            for src in 0..nb_nodes {
-                let msg_time = message_times[src][dest].first().copied();
+            for (src, src_message_times) in message_times.iter().enumerate() {
+                let msg_time = src_message_times[dest].first().copied();
                 if let Some(msg_time) = msg_time {
                     let receive_time = msg_time + topology.link_latency(src, dest);
                     if first_receive_time.is_none() || Some(receive_time) < first_receive_time {
@@ -483,16 +482,7 @@ pub fn compute_propagation_graphs(
                 dest,
                 time: first_msg_time.unwrap(),
             };
-            debug_assert!(
-                message_graph
-                    .get_mut(&first_msg_id)
-                    .unwrap()
-                    .includes_new_values
-            );
-            message_graph
-                .get_mut(&first_msg_id)
-                .unwrap()
-                .includes_new_values = true
+            assert!(message_graph[&first_msg_id].includes_new_values);
         }
 
         debug_assert!(kcensus_latencies.len() == proposer);
