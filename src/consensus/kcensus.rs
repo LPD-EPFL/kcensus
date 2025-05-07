@@ -5,7 +5,7 @@ use crate::consensus::kcensus::round_state::KCensusRoundState;
 use crate::consensus::message::ConsensusMsg::{Commit, KCensusM};
 use crate::consensus::message::{CommandBatch, ConsensusMessage};
 use crate::consensus::read_tracker::ReadTracker;
-use crate::consensus::Consensus;
+use crate::consensus::{Consensus, ConsensusTrait};
 use crate::multi_sink::MultiSink;
 use log::{debug, trace};
 use std::collections::HashMap;
@@ -16,28 +16,11 @@ mod node_state;
 pub mod propagation;
 mod round_state;
 
-pub struct KCensus {
-    // Settings
-    nb_nodes: usize,
-    my_pid: usize,
-    leader_priority: Vec<usize>,
-
-    // Connections
-    sinks: MultiSink,
-
-    // Propagation graphs
+pub struct KCensusSettings {
     propagation_graphs: PropagationGraphs,
-
-    // Overall state
-    next_uid: usize,
-    slot: usize,
-    round: usize,
-    queued_commands: HashMap<usize, CommandBatch>,
-
-    round_state: KCensusRoundState,
-
-    read_tracker: ReadTracker,
 }
+
+pub(crate) type KCensus = Consensus<KCensusSettings, usize, KCensusRoundState>;
 
 macro_rules! send_msg {
     ($self:ident, $msg:expr, $dest:expr) => {{
@@ -51,8 +34,8 @@ impl KCensus {
         nb_nodes: usize,
         my_pid: usize,
         sinks: MultiSink,
-        propagation_graphs: PropagationGraphs,
         leader_priority: Vec<usize>,
+        propagation_graphs: PropagationGraphs,
     ) -> Self {
         assert!(my_pid < nb_nodes);
         Self {
@@ -62,21 +45,20 @@ impl KCensus {
 
             sinks,
 
-            propagation_graphs,
-
             next_uid: my_pid,
             slot: 0,
-            round: 0,
             queued_commands: HashMap::with_capacity(nb_nodes),
 
-            round_state: KCensusRoundState::new(nb_nodes, my_pid),
-
             read_tracker: ReadTracker::new(1 + nb_nodes / 2),
+
+            settings: KCensusSettings { propagation_graphs },
+            round: 0,
+            round_state: KCensusRoundState::new(nb_nodes, my_pid),
         }
     }
 }
 
-impl Consensus for KCensus {
+impl ConsensusTrait for KCensus {
     async fn process_message(&mut self, msg: ConsensusMessage) -> io::Result<Option<CommandBatch>> {
         let msg_v = msg.get_v();
         let src = msg.src;
@@ -249,16 +231,6 @@ impl Consensus for KCensus {
     }
 
     #[inline]
-    fn get_nb_nodes(&self) -> usize {
-        self.nb_nodes
-    }
-
-    #[inline]
-    fn get_slot(&self) -> usize {
-        self.slot
-    }
-
-    #[inline]
     fn get_my_v(&self) -> Option<usize> {
         self.round_state.get_my_v()
     }
@@ -266,35 +238,6 @@ impl Consensus for KCensus {
     #[inline]
     fn should_lead(&self) -> bool {
         self.my_pid == self.leader_priority[0]
-    }
-
-    fn get_next_uid(&mut self) -> usize {
-        let uid = self.next_uid;
-        self.next_uid += self.nb_nodes;
-        uid
-    }
-
-    #[inline]
-    fn get_v_to_repropose(&self) -> usize {
-        *self.queued_commands.keys().min().unwrap()
-    }
-
-    fn get_queued_commands(&self) -> &HashMap<usize, CommandBatch> {
-        &self.queued_commands
-    }
-
-    fn get_queued_commands_mut(&mut self) -> &mut HashMap<usize, CommandBatch> {
-        &mut self.queued_commands
-    }
-
-    #[inline]
-    fn get_read_tracker(&mut self) -> &mut ReadTracker {
-        &mut self.read_tracker
-    }
-
-    #[inline]
-    fn get_sinks(&mut self) -> &mut MultiSink {
-        &mut self.sinks
     }
 }
 
@@ -363,14 +306,21 @@ impl KCensus {
         self.round_state.set_my_v(v);
         self.round_state.become_proposer();
 
-        for msg_id in self.propagation_graphs.get_start(self.my_pid).iter() {
+        for msg_id in self
+            .settings
+            .propagation_graphs
+            .get_start(self.my_pid)
+            .iter()
+        {
             debug_assert!(
-                self.propagation_graphs
+                self.settings
+                    .propagation_graphs
                     .get_by_id(msg_id)
                     .get_includes_new_values()
             );
             debug_assert!(
-                self.propagation_graphs
+                self.settings
+                    .propagation_graphs
                     .get_by_id(msg_id)
                     .get_dependencies()
                     .is_empty()
@@ -391,13 +341,13 @@ impl KCensus {
     }
 
     async fn graph_spread(&mut self, prev_msg_id: MessageId, new_value: bool) -> io::Result<()> {
-        let prev_msg_info = self.propagation_graphs.get_by_id(&prev_msg_id);
+        let prev_msg_info = self.settings.propagation_graphs.get_by_id(&prev_msg_id);
         // Potential follow-up messages:
         for msg_id in prev_msg_info.get_needed_by().iter() {
             if msg_id.src != self.my_pid {
                 continue;
             }
-            let msg_info = self.propagation_graphs.get_by_id(msg_id);
+            let msg_info = self.settings.propagation_graphs.get_by_id(msg_id);
 
             if !self.round_state.can_send(msg_info.get_dependencies()) {
                 continue;
@@ -423,13 +373,13 @@ impl KCensus {
         prev_msg_id: MessageId,
         v: usize,
     ) -> io::Result<()> {
-        let prev_msg_info = self.propagation_graphs.get_by_id(&prev_msg_id);
+        let prev_msg_info = self.settings.propagation_graphs.get_by_id(&prev_msg_id);
         // Potential follow-up messages:
         for msg_id in prev_msg_info.get_needed_by() {
             if msg_id.src != self.my_pid {
                 continue;
             }
-            let msg_info = self.propagation_graphs.get_by_id(msg_id);
+            let msg_info = self.settings.propagation_graphs.get_by_id(msg_id);
 
             if !msg_info.get_includes_new_values() {
                 continue;
@@ -444,9 +394,9 @@ impl KCensus {
     }
 
     async fn graph_spread_new_value_only(&mut self, v: usize) -> io::Result<()> {
-        for msg_id in self.propagation_graphs.get_start(self.my_pid) {
+        for msg_id in self.settings.propagation_graphs.get_start(self.my_pid) {
             debug_assert_eq!(msg_id.src, self.my_pid);
-            let msg_info = self.propagation_graphs.get_by_id(msg_id);
+            let msg_info = self.settings.propagation_graphs.get_by_id(msg_id);
 
             debug_assert!(msg_info.get_includes_new_values());
             debug_assert!(msg_info.get_dependencies().is_empty());

@@ -1,7 +1,6 @@
 use crate::connector::connect_all;
 use crate::consensus::kcensus::propagation::compute_propagation_graphs;
 use crate::consensus::paxos_family::{Mode, PaxosFamily};
-use crate::consensus::Consensus;
 use crate::delayer::Delayer;
 use crate::topology::Topology;
 use bincode::Options;
@@ -172,8 +171,8 @@ pub async fn run() -> io::Result<()> {
                 nb_nodes,
                 my_pid,
                 consensus_msg_sinks,
-                propagation_graphs,
                 leader_prio,
+                propagation_graphs,
             );
             let consensus =
                 consensus_obj.run(delayed_msg_rx, new_client_request_rx, committed_request_tx);

@@ -18,15 +18,55 @@ pub(crate) mod message;
 pub(crate) mod paxos_family;
 mod read_tracker;
 
-pub(crate) trait Consensus {
-    async fn run(
+pub(crate) struct Consensus<AlgoSettings, AlgoRound, AlgoRoundState> {
+    // Settings
+    nb_nodes: usize,
+    my_pid: usize,
+    leader_priority: Vec<usize>,
+
+    // Connections
+    sinks: MultiSink,
+
+    // Overall state
+    next_uid: usize,
+    slot: usize,
+    queued_commands: HashMap<usize, CommandBatch>,
+
+    read_tracker: ReadTracker,
+
+    settings: AlgoSettings,
+    round: AlgoRound,
+    round_state: AlgoRoundState,
+}
+
+pub(crate) trait ConsensusTrait {
+    async fn process_message(&mut self, msg: ConsensusMessage) -> io::Result<Option<CommandBatch>>;
+
+    fn can_forward_proposals(&mut self) -> bool;
+
+    async fn propose_start(&mut self, value: CommandBatch, contention: bool) -> io::Result<()>;
+
+    async fn repropose_start(&mut self, v: usize) -> io::Result<()>;
+
+    fn commit_slot(&mut self, v: usize, from_commit_msg: bool) -> CommandBatch;
+
+    fn get_my_v(&self) -> Option<usize>;
+
+    fn should_lead(&self) -> bool;
+}
+
+impl<AS, AR, ARS> Consensus<AS, AR, ARS>
+where
+    Consensus<AS, AR, ARS>: ConsensusTrait,
+{
+    pub async fn run(
         &mut self,
         mut msg_rx: Receiver<MsgWithSource>,
         mut new_client_commands_rx: Receiver<Command>,
         committed_commands_tx: Sender<Command>,
     ) -> io::Result<()> {
         let mut queued_messages: VecDeque<ConsensusMessage> =
-            VecDeque::with_capacity(self.get_nb_nodes());
+            VecDeque::with_capacity(self.nb_nodes);
         let mut count_done = 0usize;
         let mut done = false;
         let mut max_queued_slot = 0;
@@ -47,11 +87,11 @@ pub(crate) trait Consensus {
                 }
             }
 
-            if count_done == self.get_nb_nodes() {
+            if count_done == self.nb_nodes {
                 break 'main_loop;
             }
 
-            let ongoing = self.get_my_v().is_some() || max_queued_slot > self.get_slot();
+            let ongoing = self.get_my_v().is_some() || max_queued_slot > self.slot;
             let should_repropose = !ongoing && self.has_queued_commands();
             // TODO: (Optim.) peak connection first ?
             if should_repropose && self.should_lead() {
@@ -76,9 +116,9 @@ pub(crate) trait Consensus {
                         }
                         None => {
                             done = true;
-                            self.get_sinks().inner_broadcast(Done).await?;
+                            self.sinks.inner_broadcast(Done).await?;
                             count_done += 1;
-                            if count_done == self.get_nb_nodes() {
+                            if count_done == self.nb_nodes {
                                 break 'main_loop;
                             }
                         }
@@ -119,14 +159,13 @@ pub(crate) trait Consensus {
             }
         } // 'main_loop: loop
 
-        let sinks = self.get_sinks();
         eval::log(
             "network-done",
             &format!(
                 "Sent {} messages ({} bytes)",
-                sinks.stats.msg_count, sinks.stats.byte_count
+                self.sinks.stats.msg_count, self.sinks.stats.byte_count
             ),
-            &sinks.stats,
+            &self.sinks.stats,
         );
 
         new_client_commands_rx.close();
@@ -137,23 +176,23 @@ pub(crate) trait Consensus {
     #[inline]
     async fn start_read(&mut self, command: Command) -> io::Result<()> {
         let local_ready = self.get_my_v().is_none();
-        let uid = self.get_read_tracker().insert(command, local_ready);
-        self.get_sinks().broadcast(ReadRequest { uid }, None).await
+        let uid = self.read_tracker.insert(command, local_ready);
+        self.sinks.broadcast(ReadRequest { uid }, None).await
     }
 
     #[inline]
     fn ready_to_process(&self, msg: &ConsensusMessage) -> bool {
-        if msg.get_slot() > self.get_slot() {
+        if msg.get_slot() > self.slot {
             false
         } else {
             match msg.get_v() {
                 None => true,
-                Some(v) => match self.get_queued_commands().get(&v) {
+                Some(v) => match self.queued_commands.get(&v) {
                     None => false,
                     Some(CommandBatch::Single(_)) => true,
-                    Some(CommandBatch::Batch(vs)) => vs
-                        .iter()
-                        .all(|v| self.get_queued_commands().contains_key(v)),
+                    Some(CommandBatch::Batch(vs)) => {
+                        vs.iter().all(|v| self.queued_commands.contains_key(v))
+                    }
                 },
             }
         }
@@ -165,16 +204,16 @@ pub(crate) trait Consensus {
     ) -> io::Result<Option<CommandBatch>> {
         debug_assert!(self.ready_to_process(&msg));
         if let Commit { slot, v } = msg.msg {
-            if slot < self.get_slot() {
+            if slot < self.slot {
                 return Ok(None);
             }
-            debug_assert_eq!(slot, self.get_slot());
+            debug_assert_eq!(slot, self.slot);
             info!("Commit msg: v={}", v);
             return Ok(Some(self.commit_slot(v, true)));
         };
         if let ReadRequest { uid } = msg.msg {
-            let next_readable_slot = self.get_slot() + self.get_my_v().is_some() as usize;
-            self.get_sinks()
+            let next_readable_slot = self.slot + self.get_my_v().is_some() as usize;
+            self.sinks
                 .send(
                     ReadResponse {
                         uid,
@@ -188,7 +227,7 @@ pub(crate) trait Consensus {
         }
         if let ReadResponse { uid, .. } = msg.msg {
             return Ok(self
-                .get_read_tracker()
+                .read_tracker
                 .receive_ready(uid)
                 .map(CommandBatch::Single));
         }
@@ -202,16 +241,23 @@ pub(crate) trait Consensus {
         committed_commands_tx: &Sender<Command>,
         batch: Option<CommandBatch>,
     ) -> bool {
+        let commit = async |command: Command| {
+            committed_commands_tx
+                .send(command)
+                .await
+                .expect("Sending commited value");
+        };
+
         if let Some(batch) = batch {
             match batch {
                 CommandBatch::Single(command) => {
-                    commit_command(committed_commands_tx, command).await;
+                    commit(command).await;
                 }
                 CommandBatch::Batch(vs) => {
                     for v in vs {
                         let command = self.remove_command(v);
                         if let CommandBatch::Single(command) = command {
-                            commit_command(committed_commands_tx, command).await;
+                            commit(command).await;
                         } else {
                             panic!("Batches should not include batches.")
                         }
@@ -219,9 +265,9 @@ pub(crate) trait Consensus {
                 }
             }
 
-            let result = self.get_read_tracker().commit_slot();
+            let result = self.read_tracker.commit_slot();
             for read_only_command in result.into_iter() {
-                commit_command(committed_commands_tx, read_only_command).await;
+                commit(read_only_command).await;
             }
 
             true
@@ -230,30 +276,10 @@ pub(crate) trait Consensus {
         }
     }
 
-    async fn process_message(&mut self, msg: ConsensusMessage) -> io::Result<Option<CommandBatch>>;
-
-    fn can_forward_proposals(&mut self) -> bool;
-
-    async fn propose_start(&mut self, value: CommandBatch, contention: bool) -> io::Result<()>;
-
-    async fn repropose_start(&mut self, v: usize) -> io::Result<()>;
-
-    fn commit_slot(&mut self, v: usize, from_commit_msg: bool) -> CommandBatch;
-
-    fn get_nb_nodes(&self) -> usize;
-
-    fn get_slot(&self) -> usize;
-
-    fn get_my_v(&self) -> Option<usize>;
-
-    fn should_lead(&self) -> bool;
-
-    fn get_next_uid(&mut self) -> usize;
-
     #[inline]
     fn store_new_command(&mut self, value: CommandBatch) -> usize {
         let v = self.get_next_uid();
-        let old = self.get_queued_commands_mut().insert(v, value);
+        let old = self.queued_commands.insert(v, value);
         debug_assert!(old.is_none());
         v
     }
@@ -261,48 +287,41 @@ pub(crate) trait Consensus {
     #[inline]
     fn store_remote_command(&mut self, v: usize, value: CommandBatch) {
         // TODO: Allow forwarding values ? (could the value already be there ?)
-        let inserted = self.get_queued_commands_mut().insert(v, value);
+        let inserted = self.queued_commands.insert(v, value);
         debug_assert!(inserted.is_none());
     }
 
     #[inline]
     fn has_queued_commands(&self) -> bool {
-        !self.get_queued_commands().is_empty()
+        !self.queued_commands.is_empty()
     }
 
     fn get_new_batch_to_propose(&self) -> Option<CommandBatch> {
-        if self.get_queued_commands().is_empty() {
+        if self.queued_commands.is_empty() {
             return None;
         }
-        let mut vs: Vec<_> = self.get_queued_commands().keys().copied().collect();
-        vs.retain(|v| matches!(self.get_queued_commands()[v], CommandBatch::Single(_)));
+        let mut vs: Vec<_> = self.queued_commands.keys().copied().collect();
+        vs.retain(|v| matches!(self.queued_commands[v], CommandBatch::Single(_)));
         Some(CommandBatch::Batch(vs))
     }
 
-    fn get_v_to_repropose(&self) -> usize;
-
-    fn get_queued_commands(&self) -> &HashMap<usize, CommandBatch>;
-
-    fn get_queued_commands_mut(&mut self) -> &mut HashMap<usize, CommandBatch>;
+    #[inline]
+    fn get_v_to_repropose(&self) -> usize {
+        *self.queued_commands.keys().min().unwrap()
+    }
 
     fn remove_command(&mut self, v: usize) -> CommandBatch {
-        let out = self.get_queued_commands_mut().remove(&v);
-        self.get_queued_commands_mut()
-            .retain(|_, value| match value {
-                CommandBatch::Single(_) => true,
-                CommandBatch::Batch(vs) => !vs.contains(&v),
-            });
+        let out = self.queued_commands.remove(&v);
+        self.queued_commands.retain(|_, value| match value {
+            CommandBatch::Single(_) => true,
+            CommandBatch::Batch(vs) => !vs.contains(&v),
+        });
         out.expect("Removing command that does not exist")
     }
 
-    fn get_read_tracker(&mut self) -> &mut ReadTracker;
-
-    fn get_sinks(&mut self) -> &mut MultiSink;
-}
-
-async fn commit_command(committed_commands_tx: &Sender<Command>, command: Command) {
-    committed_commands_tx
-        .send(command)
-        .await
-        .expect("Sending commited value");
+    fn get_next_uid(&mut self) -> usize {
+        let uid = self.next_uid;
+        self.next_uid += self.nb_nodes;
+        uid
+    }
 }
