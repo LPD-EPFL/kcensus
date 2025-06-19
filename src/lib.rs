@@ -45,6 +45,8 @@ struct Args {
     faults: Vec<usize>,
     #[arg(short, long, default_value_t = 1u32, value_name = "SIMULATION_SPEED")]
     speedup: u32,
+    #[arg(long, help = "Simulate delays/latencies (set it only when running locally)", default_value_t = false)]
+    simulate_delays: bool,
 }
 
 #[derive(clap::ValueEnum, Clone, Debug)]
@@ -115,6 +117,7 @@ pub async fn run() -> io::Result<()> {
         args.speedup,
         my_pid,
         consensus_msg_streams,
+        args.simulate_delays,
     ));
 
     let ((client, mut new_client_request_rx), (app, committed_request_tx)) =
