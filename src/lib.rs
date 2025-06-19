@@ -108,7 +108,7 @@ pub async fn run() -> io::Result<()> {
     let nb_nodes = topology.regions.len();
 
     let (consensus_msg_sinks, consensus_msg_streams) =
-        connect_all(my_pid, nb_nodes, 9876, Some(topology.faults.clone())).await;
+        connect_all(my_pid, topology.clone(), Some(topology.faults.clone())).await;
     let (delayer, delayed_msg_rx) = Delayer::new();
     let delayer_task = tokio::task::spawn(delayer.run(
         topology.clone(),
@@ -144,7 +144,7 @@ pub async fn run() -> io::Result<()> {
 
                 cassandra::RequestInterval::new_round_robin(
                     my_pid,
-                    nb_nodes,
+                    &topology,
                     commit_notification_time,
                 )
                 .await

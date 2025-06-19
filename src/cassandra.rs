@@ -16,6 +16,7 @@ use tokio::sync::mpsc;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::time::Instant;
 use tokio_stream::Stream;
+use crate::topology::Topology;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum Request {
@@ -141,12 +142,12 @@ pub struct RoundRobinSynchronizer {
 }
 
 impl RoundRobinSynchronizer {
-    async fn new(my_pid: usize, nb_nodes: usize, max_rtt: Duration) -> Self {
-        let (sinks, streams) = connect_all(my_pid, nb_nodes, 6789, None).await;
+    async fn new(my_pid: usize, topology: &Topology, max_rtt: Duration) -> Self {
+        let (sinks, streams) = connect_all(my_pid, topology.clone(), None).await;
         Self {
             my_pid,
             initiate: my_pid == 0,
-            nb_nodes,
+            nb_nodes: topology.nb_nodes,
             max_rtt,
             sinks,
             streams: Box::pin(streams),
@@ -186,8 +187,8 @@ impl RoundRobinSynchronizer {
 }
 
 impl RequestInterval {
-    pub async fn new_round_robin(my_pid: usize, nb_nodes: usize, max_rtt: Duration) -> Self {
-        let synchronizer = RoundRobinSynchronizer::new(my_pid, nb_nodes, max_rtt).await;
+    pub async fn new_round_robin(my_pid: usize, topology: &Topology, max_rtt: Duration) -> Self {
+        let synchronizer = RoundRobinSynchronizer::new(my_pid, topology, max_rtt).await;
         RequestInterval::RoundRobin { synchronizer }
     }
 

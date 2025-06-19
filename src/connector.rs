@@ -13,10 +13,11 @@ use tokio_serde::formats::Bincode;
 use tokio_serde::Framed;
 use tokio_stream::StreamExt;
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
+use crate::topology::Topology;
 
 pub struct Connector {
     listener: TcpListener,
-    base_port: u16,
+    addresses: Vec<String>,
 }
 
 type WrappedStream = FramedRead<OwnedReadHalf, LengthDelimitedCodec>;
@@ -24,17 +25,16 @@ pub type WrappedSink = FramedWrite<OwnedWriteHalf, LengthDelimitedCodec>;
 type SerStream = Framed<WrappedStream, Message, (), Bincode<Message, ()>>;
 
 impl Connector {
-    pub async fn new(my_pid: usize, base_port: u16) -> io::Result<Self> {
-        // TODO: Load addresses from config
-        let my_address = format!("127.0.0.1:{}", base_port + my_pid as u16);
+    pub async fn new(my_pid: usize, addresses: &[String]) -> io::Result<Self> {
+        let my_address = &addresses[my_pid];
         Ok(Self {
             listener: TcpListener::bind(my_address).await?,
-            base_port,
+            addresses: addresses.to_vec(),
         })
     }
 
     pub async fn connect_to(&self, pid: usize) -> io::Result<(SerStream, WrappedSink)> {
-        let address = format!("127.0.0.1:{}", self.base_port + pid as u16);
+        let address = &self.addresses[pid];
         let connection = loop {
             if let Ok(c) = TcpStream::connect(address.clone()).await {
                 break c;
@@ -64,19 +64,19 @@ fn wrap_stream(stream: TcpStream) -> (SerStream, WrappedSink) {
 
 pub async fn connect_all(
     my_pid: usize,
-    nb_nodes: usize,
-    base_port: u16,
+    topology: Topology,
     faults: Option<BitSet>,
 ) -> (
     MultiSink,
     impl Stream<Item = Result<MsgWithSource, io::Error>>,
 ) {
+    let nb_nodes = topology.nb_nodes;
     let mut sinks = MultiSink::new_with_faults(my_pid, nb_nodes, faults.iter().flatten());
     let mut streams = Vec::with_capacity(nb_nodes);
 
     let wrap_with_source_pid = |pid: usize| move |m: Message| m.with_source(pid);
 
-    let connector = Connector::new(my_pid, base_port)
+    let connector = Connector::new(my_pid, &topology.addresses)
         .await
         .expect("Connector failed to init");
     for pid in 0..my_pid {
