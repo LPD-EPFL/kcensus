@@ -30,15 +30,6 @@ impl Delayer {
         simulate_delays: bool,
     ) {
 
-        if !simulate_delays {
-            while let Some(Ok(msg)) = input_stream.next().await {
-                if self.delayed_msg_tx.send(msg).await.is_err() {
-                    return;
-                }
-            }
-            return;
-        }
-
         let dead = topology.faults.contains(my_pid);
         let delay = Delay::new(Instant::now()).expect("Delayer failed to init delay");
         pin!(delay);
@@ -88,11 +79,17 @@ impl Delayer {
                         continue
                     }
 
-                    let deadline = Instant::now() + topology.link_latency(msg.src,my_pid) / speedup;
-
-                    queues[msg.src].push_back(
-                        msg.with_deadline(deadline)
-                    );
+                    if simulate_delays {
+                        let deadline = Instant::now() + topology.link_latency(msg.src,my_pid) / speedup;
+                        queues[msg.src].push_back(
+                            msg.with_deadline(deadline)
+                        );
+                    } else {
+                        let res = self.delayed_msg_tx.send(msg).await;
+                        if res.is_err() {
+                            return;
+                        }
+                    }
                 }
 
                 res = &mut delay, if !is_empty => {
