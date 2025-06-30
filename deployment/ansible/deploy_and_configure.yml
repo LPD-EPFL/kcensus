@@ -1,0 +1,59 @@
+- name: Deploy binary and generate configuration files
+  hosts: kcensus_nodes
+  gather_facts: no
+  order: inventory
+
+  tasks:
+    - name: Create a directory for the application
+      ansible.builtin.file:
+        path: /home/ec2-user/kcensus_app
+        state: directory
+        mode: '0755'
+
+    - name: Copy the compiled kcensus binary
+      ansible.builtin.copy:
+        src: ../../target/x86_64-unknown-linux-musl/release/kcensus
+        dest: /home/ec2-user/kcensus_app/kcensus
+        mode: '0755'
+
+    - name: Generate dynamic region list
+      run_once: true
+      set_fact:
+        dynamic_regions: >-
+          {%- set region_list = [] -%}
+          {%- for i in range(groups['kcensus_nodes'] | length) -%}
+          {%- set _ = region_list.append("region-" ~ i) -%}
+          {%- endfor -%}
+          {{ region_list }}
+
+    - name: step 1 - measure pairwise latencies from each node to all others
+      # this task runs on EVERY host in parallel
+      # each host pings every other host in the inventory
+      ansible.builtin.shell: "ping -c 4 -W 2 {{ item }} | tail -1 | awk '{print $4}' | cut -d '/' -f 2"
+      loop: "{{ groups['kcensus_nodes'] }}"
+      register: all_ping_results # results are stored per host
+      ignore_errors: true
+
+    - name: step 2 - assemble the symmetric latency matrix on the control node
+      run_once: true
+      delegate_to: localhost
+      set_fact:
+        dynamic_latency_matrix: "{{ lookup('template', 'templates/matrix_builder.j2') | from_yaml }}"
+
+    - name: Create config.toml from template
+      ansible.builtin.template:
+        src: config.toml.j2
+        dest: /home/ec2-user/kcensus_app/config.toml
+        mode: '0644'
+
+    - name: Read the content of the generated config file for verification
+      delegate_to: "{{ groups['kcensus_nodes'][0] }}"
+      run_once: true
+      ansible.builtin.slurp:
+        src: /home/ec2-user/kcensus_app/config.toml
+      register: generated_config_file
+
+    - name: Display the generated config.toml content
+      run_once: true
+      ansible.builtin.debug:
+        msg: "{{ generated_config_file.content | b64decode }}"
