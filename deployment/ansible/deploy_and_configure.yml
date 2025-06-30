@@ -26,12 +26,20 @@
           {%- endfor -%}
           {{ region_list }}
 
-    - name: step 1 - measure pairwise latencies from each node to all others
-      # this task runs on EVERY host in parallel
-      # each host pings every other host in the inventory
-      ansible.builtin.shell: "ping -c 4 -W 2 {{ item }} | tail -1 | awk '{print $4}' | cut -d '/' -f 2"
+    - name: Step 1 - Measure pairwise latencies with outlier trimming
+      # This task runs on EVERY host in parallel.
+      # Each host pings every other host 100 times, trims the top/bottom 5% of results,
+      # averages the rest, and divides by 2 for an estimated one-way latency.
+      ansible.builtin.shell: >-
+        ping -c 100 -i 0.2 {{ item }} |
+        grep 'icmp_seq' |
+        grep -oP 'time=\K[0-9.]+' |
+        sort -n |
+        head -n -5 |
+        tail -n +6 |
+        awk '{ total += $1; count++ } END { if (count > 0) print total/count/2; else print "9999" }'
       loop: "{{ groups['kcensus_nodes'] }}"
-      register: all_ping_results # results are stored per host
+      register: all_ping_results
       ignore_errors: true
 
     - name: step 2 - assemble the symmetric latency matrix on the control node

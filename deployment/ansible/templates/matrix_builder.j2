@@ -9,15 +9,15 @@
       {%- set _ = row.append(0.0) -%}
     {%- elif i < j -%}
       {%- set ping_ij_result = hostvars[host_i]['all_ping_results']['results'][j] -%}
-      {%- set ping_ij = ping_ij_result.stdout | float if ping_ij_result.rc == 0 and ping_ij_result.stdout else 999.0 -%}
+      {%- set ping_ij = ping_ij_result.stdout | float if ping_ij_result.rc == 0 and ping_ij_result.stdout else 9999.0 -%}
       {%- set ping_ji_result = hostvars[host_j]['all_ping_results']['results'][i] -%}
-      {%- set ping_ji = ping_ji_result.stdout | float if ping_ji_result.rc == 0 and ping_ji_result.stdout else 999.0 -%}
-      {%- if ping_ij < 999.0 and ping_ji < 999.0 -%}
-        {%- set latency = ((ping_ij + ping_ji) / 2) | round(1, 'floor') -%}
-      {%- elif ping_ij < 999.0 -%}
-        {%- set latency = ping_ij | round(1, 'floor') -%}
+      {%- set ping_ji = ping_ji_result.stdout | float if ping_ji_result.rc == 0 and ping_ji_result.stdout else 9999.0 -%}
+      {%- if ping_ij < 9999.0 and ping_ji < 9999.0 -%}
+        {%- set latency = ((ping_ij + ping_ji) / 2) | round(2, 'floor') -%}
+      {%- elif ping_ij < 9999.0 -%}
+        {%- set latency = ping_ij | round(2, 'floor') -%}
       {%- else -%}
-        {%- set latency = ping_ji | round(1, 'floor') -%}
+        {%- set latency = ping_ji | round(2, 'floor') -%}
       {%- endif -%}
       {%- set _ = row.append(latency) -%}
     {%- else -%}
