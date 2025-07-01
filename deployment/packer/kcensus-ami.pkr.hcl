@@ -9,7 +9,7 @@ packer {
 
 source "amazon-ebs" "kcensus-node" {
   ami_name      = "kcensus-node-{{timestamp}}"
-  instance_type = "t3.micro"
+  instance_type = "t3.medium"
   region        = "eu-central-2"
   ssh_username  = "ec2-user"
 
@@ -66,7 +66,7 @@ build {
       "echo 'Waiting for dnf to be ready...'",
       "sleep 15",
       "sudo dnf update -y",
-      "sudo dnf install -y docker time htop git",
+      "sudo dnf install -y docker time htop git cargo",
       "sudo systemctl enable docker",
       "sudo systemctl start docker",
       "sudo usermod -a -G docker ec2-user",

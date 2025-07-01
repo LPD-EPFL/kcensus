@@ -9,7 +9,7 @@
       ansible.builtin.shell:
         cmd: >
           /usr/bin/time -f "[time] Memory(KB): %M" 
-          ./kcensus --config config.toml -a k-census -w 1 -r 100 -p {{ groups['kcensus_nodes'].index(inventory_hostname) }}
+          ./kcensus --config config.toml -a k-census -w 1 -r 100 -p {{ groups['kcensus_nodes'].index(inventory_hostname) }} -d 127.0.0.1:{{ 9041 + groups['kcensus_nodes'].index(inventory_hostname) + 1 }}
         chdir: /home/ec2-user/kcensus_app
       async: 7200
       poll: 0

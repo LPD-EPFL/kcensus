@@ -11,5 +11,5 @@ variable "ssh_public_key_path" {
 variable "instance_type" {
   description = "The EC2 instance type to use for the servers."
   type        = string
-  default     = "t3.micro"
+  default     = "t3.medium"
 }
