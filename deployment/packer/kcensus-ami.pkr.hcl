@@ -1,3 +1,6 @@
+# This is how we build the AMI with the dependencies needed for the kcensus
+# experiments and copy it to all regions
+
 packer {
   required_plugins {
     amazon = {
@@ -43,7 +46,8 @@ source "amazon-ebs" "kcensus-node" {
     "ap-southeast-7",
     "ap-southeast-5",
     "ap-northeast-3",
-    "ap-southeast-2"
+    "ap-southeast-2",
+    "ap-southeast-4"
   ]
 
   source_ami_filter {

@@ -1,3 +1,6 @@
+# Reusable code that is used to create a single server node (the EC2 instace +
+# security group + ssh key)
+
 terraform {
   required_providers {
     aws = {
@@ -27,15 +30,6 @@ resource "aws_security_group" "kcensus_sg" {
     protocol    = "tcp"
     cidr_blocks = ["${var.my_ip_for_ssh}/32"]
     description = "Allow SSH from my IP"
-  }
-
-  # rule for inter-node communication: allow instances to SSH to each other
-  ingress {
-    from_port   = 22
-    to_port     = 22
-    protocol    = "tcp"
-    self        = true
-    description = "Allow instances in this SG to SSH to each other"
   }
 
   # rule for inter-node ping (ICMP) for latency checks

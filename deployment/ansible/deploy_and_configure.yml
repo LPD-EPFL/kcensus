@@ -1,7 +1,10 @@
+# This playbook deploys the kcensus app, sets up Cassandra containers,
+# and calculates latencies between servers to generate config files.
+
 - name: Deploy binary and generate configuration files
   hosts: kcensus_nodes
   gather_facts: no
-  order: inventory
+  order: inventory # execution order is the same as inventory order
 
   tasks:
     - name: Ensure Cassandra container is running
@@ -36,20 +39,12 @@
         dest: /home/ec2-user/kcensus_app/kcensus
         mode: '0755'
 
-    - name: Generate dynamic region list
-      run_once: true
+    - name: Generate dynamic region list # for the config file
+      run_once: true # only run in 1 host
       set_fact:
-        dynamic_regions: >-
-          {%- set region_list = [] -%}
-          {%- for i in range(groups['kcensus_nodes'] | length) -%}
-          {%- set _ = region_list.append("region-" ~ i) -%}
-          {%- endfor -%}
-          {{ region_list }}
+        dynamic_regions: "{{ groups['kcensus_nodes'] | map('extract', hostvars, 'aws_region') | list }}"
 
-    - name: Step 1 - Measure pairwise latencies with outlier trimming
-      # This task runs on EVERY host in parallel.
-      # Each host pings every other host 100 times, trims the top/bottom 5% of results,
-      # averages the rest, and divides by 2 for an estimated one-way latency.
+    - name: Measure pairwise one-way latencies using ping
       ansible.builtin.shell: >-
         ping -c 100 -i 0.2 {{ item }} |
         grep 'icmp_seq' |
@@ -62,11 +57,28 @@
       register: all_ping_results
       ignore_errors: true
 
-    - name: step 2 - assemble the symmetric latency matrix on the control node
+    - name: Assemble latency matrix on the control node
       run_once: true
       delegate_to: localhost
       set_fact:
-        dynamic_latency_matrix: "{{ lookup('template', 'templates/matrix_builder.j2') | from_yaml }}"
+        dynamic_latency_matrix: >-
+          {%- set matrix = [] -%}
+          {%- set hosts = groups['kcensus_nodes'] -%}
+          {%- for i in range(hosts | length) -%}
+          {%-   set source_host = hosts[i] -%}
+          {%-   set row = [] -%}
+          {%-   for j in range(hosts | length) -%}
+          {%-     if i == j -%}
+          {%-       set _ = row.append(0.0) -%}
+          {%-     else -%}
+          {%-       set ping_result = hostvars[source_host]['all_ping_results']['results'][j] -%}
+          {%-       set latency = ping_result.stdout | float(9999.0) | round(2, 'floor') -%}
+          {%-       set _ = row.append(latency) -%}
+          {%-     endif -%}
+          {%-   endfor -%}
+          {%-   set _ = matrix.append(row) -%}
+          {%- endfor -%}
+          {{ matrix }}
 
     - name: Create config.toml from template
       ansible.builtin.template:
@@ -74,14 +86,14 @@
         dest: /home/ec2-user/kcensus_app/config.toml
         mode: '0644'
 
-    - name: Read the content of the generated config file for verification
+    - name: Read config.toml content
       delegate_to: "{{ groups['kcensus_nodes'][0] }}"
       run_once: true
       ansible.builtin.slurp:
         src: /home/ec2-user/kcensus_app/config.toml
       register: generated_config_file
 
-    - name: Display the generated config.toml content
+    - name: Display config.toml content
       run_once: true
       ansible.builtin.debug:
         msg: "{{ generated_config_file.content | b64decode }}"

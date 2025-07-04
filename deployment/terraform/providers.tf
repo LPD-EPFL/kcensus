@@ -1,3 +1,5 @@
+# Define AWS provider alias corresponding to each region
+
 terraform {
   required_providers {
     aws = {
@@ -135,4 +137,8 @@ provider "aws" {
 provider "aws" {
   alias  = "ap-southeast-7"
   region = "ap-southeast-7"
+}
+provider "aws" {
+  alias  = "ap-southeast-4"
+  region = "ap-southeast-4"
 }

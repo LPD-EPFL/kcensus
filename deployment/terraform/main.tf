@@ -1,3 +1,6 @@
+# main file for EC2 instances deployment across regions, uses server module
+# and populates the ansible inventory after deployment
+
 locals {
   target_regions_set     = toset(var.target_regions)
   ssh_public_key_content = file(var.ssh_public_key_path)
@@ -311,6 +314,16 @@ module "server_stack_ap_southeast_2" { # Sydney
   my_ip_for_ssh  = chomp(data.http.my_ip.response_body)
 }
 
+module "server_stack_ap_southeast_4" { # Melbourne
+  count          = contains(local.target_regions_set, "ap-southeast-4") ? 1 : 0
+  source         = "./modules/server"
+  providers      = { aws = aws.ap-southeast-4 }
+  region         = "ap-southeast-4"
+  instance_type  = var.instance_type
+  ssh_public_key = local.ssh_public_key_content
+  my_ip_for_ssh  = chomp(data.http.my_ip.response_body)
+}
+
 # Local provisioner to manage inventory.ini
 resource "null_resource" "manage_inventory" {
   depends_on = [
@@ -343,7 +356,8 @@ resource "null_resource" "manage_inventory" {
     module.server_stack_ap_southeast_7,
     module.server_stack_ap_southeast_5,
     module.server_stack_ap_northeast_3,
-    module.server_stack_ap_southeast_2
+    module.server_stack_ap_southeast_2,
+    module.server_stack_ap_southeast_4
   ]
 
   triggers = {
@@ -354,8 +368,8 @@ resource "null_resource" "manage_inventory" {
     command = <<-EOF
       cat > ../ansible/inventory.ini << EOL
 [kcensus_nodes]
-%{for ip in values(local.deployed_ips)~}
-${ip}
+%{for region, ip in local.deployed_ips~}
+${ip} aws_region=${region}
 %{endfor~}
 EOL
     EOF
@@ -405,6 +419,7 @@ locals {
     contains(local.target_regions_set, "ap-southeast-7") ? { "ap-southeast-7" = module.server_stack_ap_southeast_7[0].public_ip } : {},
     contains(local.target_regions_set, "ap-southeast-5") ? { "ap-southeast-5" = module.server_stack_ap_southeast_5[0].public_ip } : {},
     contains(local.target_regions_set, "ap-northeast-3") ? { "ap-northeast-3" = module.server_stack_ap_northeast_3[0].public_ip } : {},
-    contains(local.target_regions_set, "ap-southeast-2") ? { "ap-southeast-2" = module.server_stack_ap_southeast_2[0].public_ip } : {}
+    contains(local.target_regions_set, "ap-southeast-2") ? { "ap-southeast-2" = module.server_stack_ap_southeast_2[0].public_ip } : {},
+    contains(local.target_regions_set, "ap-southeast-4") ? { "ap-southeast-4" = module.server_stack_ap_southeast_4[0].public_ip } : {}
   )
 }

@@ -1,3 +1,6 @@
+{# This file is a template for the config file #}
+{# It is automatically generated #}
+
 addresses = [
 {% for host in groups['kcensus_nodes'] %}
   {% if host == inventory_hostname %}
