@@ -45,7 +45,11 @@ struct Args {
     faults: Vec<usize>,
     #[arg(short, long, default_value_t = 1u32, value_name = "SIMULATION_SPEED")]
     speedup: u32,
-    #[arg(long, help = "Simulate delays/latencies (set it only when running locally)", default_value_t = false)]
+    #[arg(
+        long,
+        help = "Simulate delays/latencies (set it only when running locally)",
+        default_value_t = false
+    )]
     simulate_delays: bool,
 }
 
@@ -109,8 +113,13 @@ pub async fn run() -> io::Result<()> {
     println!("Computed propagation graphs in {:?}", start.elapsed());
     let nb_nodes = topology.regions.len();
 
-    let (consensus_msg_sinks, consensus_msg_streams) =
-        connect_all(my_pid, topology.clone(), Some(topology.faults.clone())).await;
+    let (consensus_msg_sinks, consensus_msg_streams) = connect_all(
+        my_pid,
+        topology.nb_nodes,
+        topology.addresses.clone(),
+        Some(topology.faults.clone()),
+    )
+    .await;
     let (delayer, delayed_msg_rx) = Delayer::new();
     let delayer_task = tokio::task::spawn(delayer.run(
         topology.clone(),

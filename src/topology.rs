@@ -13,7 +13,7 @@ pub const FAULTY_LATENCY: Duration = Duration::from_secs(FAULTY_LATENCY_SECS);
 pub struct Config {
     pub regions: Vec<String>,
     pub raw_latencies: Vec<Vec<f64>>,
-    pub addresses: Vec<String>,
+    pub addresses: Vec<(String, u16)>,
 }
 
 #[derive(Debug, Clone)]
@@ -22,7 +22,7 @@ pub struct Topology {
     pub regions: Vec<String>,
     link_latencies: Vec<Vec<Duration>>,
     pub faults: BitSet,
-    pub addresses: Vec<String>,
+    pub addresses: Vec<(String, u16)>,
 }
 
 impl Display for Topology {

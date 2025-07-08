@@ -13,11 +13,10 @@ use tokio_serde::formats::Bincode;
 use tokio_serde::Framed;
 use tokio_stream::StreamExt;
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
-use crate::topology::Topology;
 
 pub struct Connector {
     listener: TcpListener,
-    addresses: Vec<String>,
+    addresses: Vec<(String, u16)>,
 }
 
 type WrappedStream = FramedRead<OwnedReadHalf, LengthDelimitedCodec>;
@@ -25,11 +24,11 @@ pub type WrappedSink = FramedWrite<OwnedWriteHalf, LengthDelimitedCodec>;
 type SerStream = Framed<WrappedStream, Message, (), Bincode<Message, ()>>;
 
 impl Connector {
-    pub async fn new(my_pid: usize, addresses: &[String]) -> io::Result<Self> {
+    pub async fn new(my_pid: usize, addresses: Vec<(String, u16)>) -> io::Result<Self> {
         let my_address = &addresses[my_pid];
         Ok(Self {
             listener: TcpListener::bind(my_address).await?,
-            addresses: addresses.to_vec(),
+            addresses,
         })
     }
 
@@ -41,7 +40,7 @@ impl Connector {
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
         };
-        debug!("Connection initiated to: {}", address);
+        debug!("Connection initiated to: {}:{}", address.0, address.1);
         connection.set_nodelay(true)?;
         Ok(wrap_stream(connection))
     }
@@ -64,19 +63,20 @@ fn wrap_stream(stream: TcpStream) -> (SerStream, WrappedSink) {
 
 pub async fn connect_all(
     my_pid: usize,
-    topology: Topology,
+    nb_nodes: usize,
+    addresses: Vec<(String, u16)>,
     faults: Option<BitSet>,
 ) -> (
     MultiSink,
     impl Stream<Item = Result<MsgWithSource, io::Error>>,
 ) {
-    let nb_nodes = topology.nb_nodes;
+    let nb_nodes = nb_nodes;
     let mut sinks = MultiSink::new_with_faults(my_pid, nb_nodes, faults.iter().flatten());
     let mut streams = Vec::with_capacity(nb_nodes);
 
     let wrap_with_source_pid = |pid: usize| move |m: Message| m.with_source(pid);
 
-    let connector = Connector::new(my_pid, &topology.addresses)
+    let connector = Connector::new(my_pid, addresses.clone())
         .await
         .expect("Connector failed to init");
     for pid in 0..my_pid {

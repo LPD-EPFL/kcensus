@@ -3,6 +3,7 @@ use crate::consensus::command::{Command, CommittedCommand};
 use crate::eval;
 use crate::message::{Message, MsgWithSource};
 use crate::multi_sink::MultiSink;
+use crate::topology::Topology;
 use futures::StreamExt;
 use log::trace;
 use rand_distr::{Distribution, Exp};
@@ -16,7 +17,6 @@ use tokio::sync::mpsc;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::time::Instant;
 use tokio_stream::Stream;
-use crate::topology::Topology;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum Request {
@@ -143,7 +143,17 @@ pub struct RoundRobinSynchronizer {
 
 impl RoundRobinSynchronizer {
     async fn new(my_pid: usize, topology: &Topology, max_rtt: Duration) -> Self {
-        let (sinks, streams) = connect_all(my_pid, topology.clone(), None).await;
+        let (sinks, streams) = connect_all(
+            my_pid,
+            topology.nb_nodes,
+            topology
+                .addresses
+                .iter()
+                .map(|(ip, port)| (ip.clone(), port + 1000))
+                .collect(),
+            None,
+        )
+        .await;
         Self {
             my_pid,
             initiate: my_pid == 0,
