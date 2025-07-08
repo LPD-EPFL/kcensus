@@ -97,6 +97,7 @@ pub async fn connect_all(
             Hello { pid } => pid,
             _ => panic!("First message should be Hello"),
         };
+        assert!(pid < nb_nodes);
         sinks.insert_sink(pid, sink);
         streams.push(stream.map_ok(wrap_with_source_pid(pid)))
     }

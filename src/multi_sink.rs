@@ -51,7 +51,8 @@ impl MultiSink {
     }
 
     pub fn insert_sink(&mut self, pid: usize, sink: WrappedSink) {
-        self.sinks.insert(pid, sink);
+        let out = self.sinks.insert(pid, sink);
+        assert!(out.is_none(), "There should be no 2 sinks with same pid");
     }
 
     #[inline]
