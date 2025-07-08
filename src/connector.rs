@@ -89,17 +89,21 @@ pub async fn connect_all(
         streams.push(stream.map_ok(wrap_with_source_pid(pid)))
     }
     for _ in (my_pid + 1)..nb_nodes {
-        let (mut stream, sink) = connector
-            .accept_connection()
-            .await
-            .expect("Failed to accept connection");
-        let pid = match stream.next().await.unwrap().expect("Should receive Hello") {
-            Hello { pid } => pid,
-            _ => panic!("First message should be Hello"),
-        };
-        assert!(pid < nb_nodes);
-        sinks.insert_sink(pid, sink);
-        streams.push(stream.map_ok(wrap_with_source_pid(pid)))
+        'retry: loop {
+            let (mut stream, sink) = connector
+                .accept_connection()
+                .await
+                .expect("Failed to accept connection");
+            let first_msg = stream.next().await;
+            let pid = match first_msg {
+                Some(Ok(Hello { pid })) => pid,
+                _ => continue 'retry,
+            };
+            assert!(pid < nb_nodes);
+            sinks.insert_sink(pid, sink);
+            streams.push(stream.map_ok(wrap_with_source_pid(pid)));
+            break;
+        }
     }
 
     let streams = select_all(streams);
