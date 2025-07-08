@@ -1,0 +1,13 @@
+- name: Forcefully Terminate Experiment Processes
+  hosts: kcensus_nodes
+  gather_facts: no
+  strategy: free
+
+  tasks:
+    - name: Kill any running kcensus processes
+      ansible.builtin.shell:
+        cmd: "pkill -f kcensus"
+      register: pkill_result
+      # We ignore errors because the process might not be running.
+      failed_when: "pkill_result.rc != 0 and pkill_result.rc != 1"
+      changed_when: pkill_result.rc == 0

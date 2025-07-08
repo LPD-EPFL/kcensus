@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 from matplotlib.ticker import MultipleLocator
-from common import ALGORITHMS
+from common import ALGORITHMS, args
 from logparser import *
 from prelude import lighten_color, plt
 
@@ -25,10 +25,14 @@ fig.subplots_adjust(
 
 for c in range(3):
     config = [
-        "aws-world-ring-13.toml",
-        "aws-europe-7-alt.toml",
-        "aws-north-america-7.toml",
-    ][c]
+        "aws-world-ring-13",
+        "aws-europe-7",
+        "aws-north-america-7",
+    ][c] if args.geo == 1 else [
+            "aws-world-ring-13.toml",
+            "aws-europe-7-alt.toml",
+            "aws-north-america-7.toml",
+        ][c]
     plot = subplots[c]
     title = [
         "13-Machine Northern Hemisphere (NH) Deployments",

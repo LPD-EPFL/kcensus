@@ -6,16 +6,22 @@
   hosts: kcensus_nodes
   gather_facts: no
   order: inventory
-  serial: 1
   vars: # these are just defaults to avoid errors, most of them are overriden
     algo: "k-census"
     writes: "1"
     requests: "100"
     ingress: "round-robin"
     throughput: "0"
+    speedup: "1"
     faults: ""
+    stagger_delay_seconds: 1
 
   tasks:
+    - name: Pause to ensure ordered startup
+      ansible.builtin.pause:
+        seconds: "{{ (groups['kcensus_nodes'].index(inventory_hostname)) * stagger_delay_seconds }}"
+      run_once: false # Ensure this runs on every host
+
     - name: Start kcensus process in the background
       ansible.builtin.shell:
         cmd: >
@@ -27,6 +33,7 @@
           -r "{{ requests }}"
           -i "{{ ingress }}"
           -t "{{ throughput }}"
+          -s "{{ speedup }}"
           {{ "-f " + faults if faults else "" }}
         chdir: /home/ec2-user/kcensus_app
       async: 7200 # 2 hours
@@ -41,9 +48,10 @@
 - name: Wait For Experiments to Finish
   hosts: kcensus_nodes
   gather_facts: no
+  strategy: free
 
   tasks:
-    - name: Wait for kcensus process on this host to finish
+    - name: Wait for kcensus process to finish
       ansible.builtin.async_status:
         jid: "{{ hostvars[inventory_hostname]['kcensus_async_start'].ansible_job_id }}"
       register: job_result
