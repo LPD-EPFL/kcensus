@@ -39,7 +39,7 @@ struct Args {
     ingress: Ingress,
     #[arg(short, long, default_value_t = 10f32, value_name = "TARGET_REQ/S")]
     throughput: f32,
-    #[arg(short, long, default_value_t = 0.5f32, value_name = "WRITE_RATIO")]
+    #[arg(short, long, default_value_t = 1f32, value_name = "WRITE_RATIO")]
     writes: f32,
     #[arg(short, long, num_args = 0.., value_delimiter = ',')]
     faults: Vec<usize>,
