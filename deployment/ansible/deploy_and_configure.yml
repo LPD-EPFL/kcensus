@@ -4,7 +4,6 @@
 - name: Deploy binary and generate configuration files
   hosts: kcensus_nodes
   gather_facts: no
-  order: inventory # execution order is the same as inventory order
 
   tasks:
     - name: Ensure Cassandra container is running

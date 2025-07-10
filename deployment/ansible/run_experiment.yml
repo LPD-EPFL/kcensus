@@ -5,7 +5,6 @@
 - name: Start Experiments Sequentially
   hosts: kcensus_nodes
   gather_facts: no
-  order: inventory
   vars: # these are just defaults to avoid errors, most of them are overriden
     algo: "k-census"
     writes: "1"
@@ -14,14 +13,8 @@
     throughput: "0"
     speedup: "1"
     faults: ""
-    stagger_delay_seconds: 1
 
   tasks:
-    - name: Pause to ensure ordered startup
-      ansible.builtin.pause:
-        seconds: "{{ (groups['kcensus_nodes'].index(inventory_hostname)) * stagger_delay_seconds }}"
-      run_once: false # Ensure this runs on every host
-
     - name: Start kcensus process in the background
       ansible.builtin.shell:
         cmd: >

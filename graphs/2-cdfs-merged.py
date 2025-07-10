@@ -25,7 +25,7 @@ fig.subplots_adjust(
 )
 
 for p in range(3):
-    throughput = [0.0, 0.05, 0.1][p]
+    throughput = [0.0, 0.1, 0.2][p] if args.geo == 1 else [0.0, 0.05, 0.1][p]
     ingress = "exponential" if throughput > 0 else "round-robin"
     plot = subplots[p]
 

@@ -4,10 +4,10 @@
 addresses = [
 {% for host in groups['kcensus_nodes'] %}
   {% if host == inventory_hostname %}
-    "0.0.0.0:8000"
+    ["0.0.0.0", 8000,],
   {% else %}
-    "{{ hostvars[host]['ansible_host'] | default(host) }}:8000"
-  {% endif %}{% if not loop.last %},{% endif %}
+    ["{{ hostvars[host]['ansible_host'] | default(host) }}", 8000,],
+  {% endif %}
 {% endfor %}
 ]
 

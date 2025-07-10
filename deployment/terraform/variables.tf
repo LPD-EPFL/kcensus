@@ -1,3 +1,9 @@
+variable "experiment_id" {
+  description = "A unique identifier for the experiment run to namespace resources."
+  type        = string
+  default     = "exp-default"
+}
+
 variable "target_regions" {
   description = "A list of AWS regions to deploy servers into."
   type        = list(string)

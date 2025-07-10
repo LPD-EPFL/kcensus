@@ -15,13 +15,13 @@ terraform {
 }
 
 resource "aws_key_pair" "kcensus_key" {
-  key_name   = "kcensus-key-${var.region}"
+  key_name   = "kcensus-key-${var.experiment_id}-${var.region}"
   public_key = var.ssh_public_key
 }
 
 resource "aws_security_group" "kcensus_sg" {
-  name        = "kcensus-sg-${var.region}"
-  description = "Allow SSH and internal traffic for nodes in ${var.region}"
+  name        = "kcensus-sg-${var.experiment_id}-${var.region}"
+  description = "Allow SSH and internal traffic for nodes in ${var.region} for experiment ${var.experiment_id}"
 
   # rule for Ansible: allow SSH from control machine
   ingress {
@@ -41,10 +41,18 @@ resource "aws_security_group" "kcensus_sg" {
     description     = "Allow ICMP (ping) from everywhere"
   }
 
-  # rule for application traffic on port 8000
+  # rule for application traffic on port 8000 and 9000
   ingress {
     from_port   = 8000
     to_port     = 8000
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+    description = "Allow kcensus node-to-node traffic"
+  }
+
+  ingress {
+    from_port   = 9000
+    to_port     = 9000
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
     description = "Allow kcensus node-to-node traffic"
@@ -60,7 +68,8 @@ resource "aws_security_group" "kcensus_sg" {
   }
 
   tags = {
-    Name = "kcensus-sg-${var.region}"
+    Name         = "kcensus-sg-${var.experiment_id}-${var.region}"
+    ExperimentID = var.experiment_id
   }
 }
 
@@ -82,6 +91,7 @@ resource "aws_instance" "server" {
   vpc_security_group_ids = [aws_security_group.kcensus_sg.id]
 
   tags = {
-    Name = "kcensus-${var.region}"
+    Name         = "kcensus-${var.experiment_id}-${var.region}"
+    ExperimentID = var.experiment_id
   }
 }

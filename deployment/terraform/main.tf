@@ -20,6 +20,7 @@ module "server_stack_us_west_2" { # Oregon
   instance_type  = var.instance_type
   ssh_public_key = local.ssh_public_key_content
   my_ip_for_ssh  = chomp(data.http.my_ip.response_body)
+  experiment_id  = var.experiment_id
 }
 
 module "server_stack_ca_west_1" { # CA Calgary
@@ -30,6 +31,7 @@ module "server_stack_ca_west_1" { # CA Calgary
   instance_type  = var.instance_type
   ssh_public_key = local.ssh_public_key_content
   my_ip_for_ssh  = chomp(data.http.my_ip.response_body)
+  experiment_id  = var.experiment_id
 }
 
 module "server_stack_ca_central_1" { # CA Central
@@ -40,6 +42,7 @@ module "server_stack_ca_central_1" { # CA Central
   instance_type  = var.instance_type
   ssh_public_key = local.ssh_public_key_content
   my_ip_for_ssh  = chomp(data.http.my_ip.response_body)
+  experiment_id  = var.experiment_id
 }
 
 module "server_stack_us_west_1" { # N. California
@@ -50,6 +53,7 @@ module "server_stack_us_west_1" { # N. California
   instance_type  = var.instance_type
   ssh_public_key = local.ssh_public_key_content
   my_ip_for_ssh  = chomp(data.http.my_ip.response_body)
+  experiment_id  = var.experiment_id
 }
 
 module "server_stack_us_east_2" { # Ohio
@@ -60,6 +64,7 @@ module "server_stack_us_east_2" { # Ohio
   instance_type  = var.instance_type
   ssh_public_key = local.ssh_public_key_content
   my_ip_for_ssh  = chomp(data.http.my_ip.response_body)
+  experiment_id  = var.experiment_id
 }
 
 module "server_stack_us_east_1" { # N. Virginia
@@ -70,6 +75,7 @@ module "server_stack_us_east_1" { # N. Virginia
   instance_type  = var.instance_type
   ssh_public_key = local.ssh_public_key_content
   my_ip_for_ssh  = chomp(data.http.my_ip.response_body)
+  experiment_id  = var.experiment_id
 }
 
 module "server_stack_mx_central_1" { # Mexico
@@ -80,6 +86,7 @@ module "server_stack_mx_central_1" { # Mexico
   instance_type  = var.instance_type
   ssh_public_key = local.ssh_public_key_content
   my_ip_for_ssh  = chomp(data.http.my_ip.response_body)
+  experiment_id  = var.experiment_id
 }
 
 # Europe, Middle East & Africa (EMEA)
@@ -91,6 +98,7 @@ module "server_stack_eu_west_3" { # Paris
   instance_type  = var.instance_type
   ssh_public_key = local.ssh_public_key_content
   my_ip_for_ssh  = chomp(data.http.my_ip.response_body)
+  experiment_id  = var.experiment_id
 }
 
 module "server_stack_eu_west_2" { # London
@@ -101,6 +109,7 @@ module "server_stack_eu_west_2" { # London
   instance_type  = var.instance_type
   ssh_public_key = local.ssh_public_key_content
   my_ip_for_ssh  = chomp(data.http.my_ip.response_body)
+  experiment_id  = var.experiment_id
 }
 
 module "server_stack_eu_west_1" { # Ireland
@@ -111,6 +120,7 @@ module "server_stack_eu_west_1" { # Ireland
   instance_type  = var.instance_type
   ssh_public_key = local.ssh_public_key_content
   my_ip_for_ssh  = chomp(data.http.my_ip.response_body)
+  experiment_id  = var.experiment_id
 }
 
 module "server_stack_me_south_1" { # Bahrain
@@ -121,6 +131,7 @@ module "server_stack_me_south_1" { # Bahrain
   instance_type  = var.instance_type
   ssh_public_key = local.ssh_public_key_content
   my_ip_for_ssh  = chomp(data.http.my_ip.response_body)
+  experiment_id  = var.experiment_id
 }
 
 module "server_stack_eu_south_2" { # Spain
@@ -131,6 +142,7 @@ module "server_stack_eu_south_2" { # Spain
   instance_type  = var.instance_type
   ssh_public_key = local.ssh_public_key_content
   my_ip_for_ssh  = chomp(data.http.my_ip.response_body)
+  experiment_id  = var.experiment_id
 }
 
 module "server_stack_eu_south_1" { # Milan
@@ -141,6 +153,7 @@ module "server_stack_eu_south_1" { # Milan
   instance_type  = var.instance_type
   ssh_public_key = local.ssh_public_key_content
   my_ip_for_ssh  = chomp(data.http.my_ip.response_body)
+  experiment_id  = var.experiment_id
 }
 
 module "server_stack_eu_north_1" { # Stockholm
@@ -151,6 +164,7 @@ module "server_stack_eu_north_1" { # Stockholm
   instance_type  = var.instance_type
   ssh_public_key = local.ssh_public_key_content
   my_ip_for_ssh  = chomp(data.http.my_ip.response_body)
+  experiment_id  = var.experiment_id
 }
 
 module "server_stack_eu_central_2" { # Zurich
@@ -161,6 +175,7 @@ module "server_stack_eu_central_2" { # Zurich
   instance_type  = var.instance_type
   ssh_public_key = local.ssh_public_key_content
   my_ip_for_ssh  = chomp(data.http.my_ip.response_body)
+  experiment_id  = var.experiment_id
 }
 
 module "server_stack_eu_central_1" { # Frankfurt
@@ -171,6 +186,7 @@ module "server_stack_eu_central_1" { # Frankfurt
   instance_type  = var.instance_type
   ssh_public_key = local.ssh_public_key_content
   my_ip_for_ssh  = chomp(data.http.my_ip.response_body)
+  experiment_id  = var.experiment_id
 }
 
 module "server_stack_il_central_1" { # Tel Aviv
@@ -181,6 +197,7 @@ module "server_stack_il_central_1" { # Tel Aviv
   instance_type  = var.instance_type
   ssh_public_key = local.ssh_public_key_content
   my_ip_for_ssh  = chomp(data.http.my_ip.response_body)
+  experiment_id  = var.experiment_id
 }
 
 module "server_stack_me_central_1" { # UAE
@@ -191,6 +208,7 @@ module "server_stack_me_central_1" { # UAE
   instance_type  = var.instance_type
   ssh_public_key = local.ssh_public_key_content
   my_ip_for_ssh  = chomp(data.http.my_ip.response_body)
+  experiment_id  = var.experiment_id
 }
 
 module "server_stack_af_south_1" { # Cape Town
@@ -201,6 +219,7 @@ module "server_stack_af_south_1" { # Cape Town
   instance_type  = var.instance_type
   ssh_public_key = local.ssh_public_key_content
   my_ip_for_ssh  = chomp(data.http.my_ip.response_body)
+  experiment_id  = var.experiment_id
 }
 
 # Asia-Pacific (APAC)
@@ -212,6 +231,7 @@ module "server_stack_ap_south_2" { # Hyderabad
   instance_type  = var.instance_type
   ssh_public_key = local.ssh_public_key_content
   my_ip_for_ssh  = chomp(data.http.my_ip.response_body)
+  experiment_id  = var.experiment_id
 }
 
 module "server_stack_ap_south_1" { # Mumbai
@@ -222,6 +242,7 @@ module "server_stack_ap_south_1" { # Mumbai
   instance_type  = var.instance_type
   ssh_public_key = local.ssh_public_key_content
   my_ip_for_ssh  = chomp(data.http.my_ip.response_body)
+  experiment_id  = var.experiment_id
 }
 
 module "server_stack_ap_southeast_1" { # Singapore
@@ -232,6 +253,7 @@ module "server_stack_ap_southeast_1" { # Singapore
   instance_type  = var.instance_type
   ssh_public_key = local.ssh_public_key_content
   my_ip_for_ssh  = chomp(data.http.my_ip.response_body)
+  experiment_id  = var.experiment_id
 }
 
 module "server_stack_ap_northeast_2" { # Seoul
@@ -242,6 +264,7 @@ module "server_stack_ap_northeast_2" { # Seoul
   instance_type  = var.instance_type
   ssh_public_key = local.ssh_public_key_content
   my_ip_for_ssh  = chomp(data.http.my_ip.response_body)
+  experiment_id  = var.experiment_id
 }
 
 module "server_stack_ap_northeast_1" { # Tokyo
@@ -252,6 +275,7 @@ module "server_stack_ap_northeast_1" { # Tokyo
   instance_type  = var.instance_type
   ssh_public_key = local.ssh_public_key_content
   my_ip_for_ssh  = chomp(data.http.my_ip.response_body)
+  experiment_id  = var.experiment_id
 }
 
 module "server_stack_ap_east_1" { # Hong Kong
@@ -262,6 +286,7 @@ module "server_stack_ap_east_1" { # Hong Kong
   instance_type  = var.instance_type
   ssh_public_key = local.ssh_public_key_content
   my_ip_for_ssh  = chomp(data.http.my_ip.response_body)
+  experiment_id  = var.experiment_id
 }
 
 module "server_stack_ap_southeast_3" { # Jakarta
@@ -272,6 +297,7 @@ module "server_stack_ap_southeast_3" { # Jakarta
   instance_type  = var.instance_type
   ssh_public_key = local.ssh_public_key_content
   my_ip_for_ssh  = chomp(data.http.my_ip.response_body)
+  experiment_id  = var.experiment_id
 }
 
 module "server_stack_ap_southeast_7" { # Thailand
@@ -282,6 +308,7 @@ module "server_stack_ap_southeast_7" { # Thailand
   instance_type  = var.instance_type
   ssh_public_key = local.ssh_public_key_content
   my_ip_for_ssh  = chomp(data.http.my_ip.response_body)
+  experiment_id  = var.experiment_id
 }
 
 module "server_stack_ap_southeast_5" { # Malaysia
@@ -292,6 +319,7 @@ module "server_stack_ap_southeast_5" { # Malaysia
   instance_type  = var.instance_type
   ssh_public_key = local.ssh_public_key_content
   my_ip_for_ssh  = chomp(data.http.my_ip.response_body)
+  experiment_id  = var.experiment_id
 }
 
 module "server_stack_ap_northeast_3" { # Osaka
@@ -302,6 +330,7 @@ module "server_stack_ap_northeast_3" { # Osaka
   instance_type  = var.instance_type
   ssh_public_key = local.ssh_public_key_content
   my_ip_for_ssh  = chomp(data.http.my_ip.response_body)
+  experiment_id  = var.experiment_id
 }
 
 module "server_stack_ap_southeast_2" { # Sydney
@@ -312,6 +341,7 @@ module "server_stack_ap_southeast_2" { # Sydney
   instance_type  = var.instance_type
   ssh_public_key = local.ssh_public_key_content
   my_ip_for_ssh  = chomp(data.http.my_ip.response_body)
+  experiment_id  = var.experiment_id
 }
 
 module "server_stack_ap_southeast_4" { # Melbourne
@@ -322,6 +352,7 @@ module "server_stack_ap_southeast_4" { # Melbourne
   instance_type  = var.instance_type
   ssh_public_key = local.ssh_public_key_content
   my_ip_for_ssh  = chomp(data.http.my_ip.response_body)
+  experiment_id  = var.experiment_id
 }
 
 # Local provisioner to manage inventory.ini
@@ -361,12 +392,13 @@ resource "null_resource" "manage_inventory" {
   ]
 
   triggers = {
-    server_ips = jsonencode(local.deployed_ips)
+    server_ips    = jsonencode(local.deployed_ips)
+    experiment_id = var.experiment_id
   }
 
   provisioner "local-exec" {
     command = <<-EOF
-      cat > ../ansible/inventory.ini << EOL
+      cat > ../ansible/inventory-${self.triggers.experiment_id}.ini << EOL
 [kcensus_nodes]
 %{for region, ip in local.deployed_ips~}
 ${ip} aws_region=${region}
@@ -378,7 +410,7 @@ EOL
   provisioner "local-exec" {
     when    = destroy
     command = <<-EOF
-      cat > ../ansible/inventory.ini << EOL
+      cat > ../ansible/inventory-${self.triggers.experiment_id}.ini << EOL
 [kcensus_nodes]
 EOL
     EOF
