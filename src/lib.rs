@@ -1,12 +1,12 @@
 use crate::connector::connect_all;
 use crate::consensus::kcensus::propagation::compute_propagation_graphs;
+use crate::consensus::kcensus::KCensus;
 use crate::consensus::paxos_family::{Mode, PaxosFamily};
 use crate::delayer::Delayer;
 use crate::topology::Topology;
 use bincode::Options;
 use chrono::prelude::*;
 use clap::{arg, Parser};
-use consensus::kcensus::KCensus;
 use env_logger::fmt::style;
 use log::debug;
 use std::io;
@@ -51,6 +51,8 @@ struct Args {
         default_value_t = false
     )]
     simulate_delays: bool,
+    #[arg(short, long, default_value_t = 1usize, value_name = "KEY_COUNT")]
+    keys: usize,
 }
 
 #[derive(clap::ValueEnum, Clone, Debug)]
@@ -135,6 +137,7 @@ pub async fn run() -> io::Result<()> {
     let start = Instant::now();
 
     let client_task = tokio::task::spawn(client.run(cassandra::Workload {
+        nb_keys: args.keys,
         nb_requests: args.requests,
         rw_ratio: args.writes,
         interval: match args.ingress {
@@ -185,6 +188,7 @@ pub async fn run() -> io::Result<()> {
                 consensus_msg_sinks,
                 leader_prio,
                 propagation_graphs,
+                args.keys,
             );
             let consensus =
                 consensus_obj.run(delayed_msg_rx, new_client_request_rx, committed_request_tx);
@@ -204,6 +208,7 @@ pub async fn run() -> io::Result<()> {
                 consensus_msg_sinks,
                 leader_prio,
                 Mode::Paxos,
+                args.keys,
             );
             let consensus =
                 consensus_obj.run(delayed_msg_rx, new_client_request_rx, committed_request_tx);
@@ -222,6 +227,7 @@ pub async fn run() -> io::Result<()> {
                 consensus_msg_sinks,
                 leader_prio,
                 Mode::EPaxos,
+                args.keys,
             );
             let consensus =
                 consensus_obj.run(delayed_msg_rx, new_client_request_rx, committed_request_tx);
@@ -246,6 +252,7 @@ pub async fn run() -> io::Result<()> {
                 consensus_msg_sinks,
                 leader_prio,
                 Mode::MultiPaxos,
+                args.keys,
             );
             let consensus =
                 consensus_obj.run(delayed_msg_rx, new_client_request_rx, committed_request_tx);

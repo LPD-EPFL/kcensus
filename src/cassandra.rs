@@ -166,7 +166,7 @@ impl RoundRobinSynchronizer {
 
     async fn notify(&mut self) {
         self.sinks
-            .inner_send(Message::RoundRobin, (self.my_pid + 1) % self.nb_nodes)
+            .send(Message::RoundRobin, (self.my_pid + 1) % self.nb_nodes)
             .await
             .expect("Failed to broadcast round robin");
     }
@@ -228,6 +228,7 @@ pub struct Workload {
     pub rw_ratio: f32, // 0 = 100% reads, 1 = 100 %writes
     pub interval: RequestInterval,
     pub faulty: bool,
+    pub nb_keys: usize,
 }
 
 pub struct Client {
@@ -262,19 +263,22 @@ impl Client {
             if workload.faulty {
                 continue;
             }
+            let key = rand::random_range(0..workload.nb_keys);
             let request = if rand::random_range(0. ..1.) < workload.rw_ratio {
                 Command::new_write(
                     self.my_pid,
+                    key,
                     &Request::Put {
-                        key: "single-key".into(),
+                        key: format!("key{}", key),
                         value: format!("v{}.{}!", self.my_pid, i),
                     },
                 )
             } else {
                 Command::new_read_only(
                     self.my_pid,
+                    key,
                     &Request::Get {
-                        key: "single-key".into(),
+                        key: format!("key{}", key),
                     },
                 )
             };

@@ -6,15 +6,23 @@ use bit_set::BitSet;
 use futures::SinkExt;
 use log::debug;
 use serde::Serialize;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io;
+use std::rc::Rc;
 use tokio_util::bytes::Bytes;
 
 pub struct MultiSink {
     my_pid: usize,
+    nb_nodes: usize,
     sinks: HashMap<usize, WrappedSink>,
     pub faults: BitSet,
     pub stats: Stats,
+}
+
+pub struct ShardMultiSink {
+    pub multi_sink: Rc<RefCell<MultiSink>>,
+    pub shard_id: usize,
 }
 
 #[derive(Serialize, Default)]
@@ -34,6 +42,7 @@ impl MultiSink {
     pub fn new(my_pid: usize, nb_nodes: usize) -> Self {
         Self {
             my_pid,
+            nb_nodes,
             sinks: HashMap::with_capacity(nb_nodes - 1),
             faults: BitSet::with_capacity(nb_nodes),
             stats: Stats::default(),
@@ -51,31 +60,14 @@ impl MultiSink {
     }
 
     pub fn insert_sink(&mut self, pid: usize, sink: WrappedSink) {
+        assert!(pid < self.nb_nodes);
+        assert_ne!(pid, self.my_pid);
         let out = self.sinks.insert(pid, sink);
         assert!(out.is_none(), "There should be no 2 sinks with same pid");
     }
 
     #[inline]
-    pub async fn broadcast(
-        &mut self,
-        msg: ConsensusMsg,
-        value: Option<CommandBatch>,
-    ) -> io::Result<()> {
-        self.inner_broadcast(self.build_msg(msg, value)).await
-    }
-
-    #[inline]
-    pub async fn send(
-        &mut self,
-        msg: ConsensusMsg,
-        value: Option<CommandBatch>,
-        pid: usize,
-    ) -> io::Result<()> {
-        self.inner_send(self.build_msg(msg, value), pid).await
-    }
-
-    #[inline]
-    pub async fn inner_broadcast(&mut self, msg: Message) -> io::Result<()> {
+    pub async fn broadcast(&mut self, msg: Message) -> io::Result<()> {
         debug!("Broadcasting {:?}", msg);
         let bytes = encode(&msg);
         for (dest, sink) in self.sinks.iter_mut() {
@@ -93,7 +85,7 @@ impl MultiSink {
     }
 
     #[inline]
-    pub async fn inner_send(&mut self, msg: Message, pid: usize) -> io::Result<()> {
+    pub async fn send(&mut self, msg: Message, pid: usize) -> io::Result<()> {
         debug!("Sending to {pid}: {:?}", msg);
         debug_assert!(pid != self.my_pid);
         if msg.is_consensus_msg() && self.faults.contains(pid) {
@@ -107,13 +99,37 @@ impl MultiSink {
         let sink = self.sinks.get_mut(&pid).unwrap();
         sink.send(bytes).await
     }
+}
+
+impl ShardMultiSink {
+    #[inline]
+    pub async fn broadcast(
+        &self,
+        msg: ConsensusMsg,
+        value: Option<CommandBatch>,
+    ) -> io::Result<()> {
+        let msg = self.build_msg(msg, value);
+        self.multi_sink.borrow_mut().broadcast(msg).await
+    }
+
+    #[inline]
+    pub async fn send(
+        &self,
+        msg: ConsensusMsg,
+        value: Option<CommandBatch>,
+        pid: usize,
+    ) -> io::Result<()> {
+        let msg = self.build_msg(msg, value);
+        self.multi_sink.borrow_mut().send(msg, pid).await
+    }
 
     #[inline]
     fn build_msg(&self, msg: ConsensusMsg, value: Option<CommandBatch>) -> Message {
         Message::ConsensusM {
+            shard: self.shard_id,
             msg: ConsensusMessage {
                 msg,
-                src: self.my_pid,
+                src: self.multi_sink.borrow().my_pid,
             },
             value,
         }

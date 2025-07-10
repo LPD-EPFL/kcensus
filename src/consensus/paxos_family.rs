@@ -5,12 +5,14 @@ use crate::consensus::paxos_family::message::{PaxosMsg, PaxosRound};
 use crate::consensus::paxos_family::round_state::PaxosFamilyRoundState;
 use crate::consensus::paxos_family::Mode::{EPaxos, MultiPaxos, Paxos};
 use crate::consensus::read_tracker::ReadTracker;
-use crate::consensus::{Consensus, ConsensusTrait};
-use crate::multi_sink::MultiSink;
+use crate::consensus::{Consensus, ConsensusShard, ConsensusShardTrait};
+use crate::multi_sink::{MultiSink, ShardMultiSink};
 use log::{debug, info, trace};
 use message::RoundV;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io;
+use std::rc::Rc;
 
 pub(crate) mod message;
 mod round_state;
@@ -21,19 +23,21 @@ pub struct PaxosFamilySettings {
     starting_round: Option<PaxosRound>,
 }
 
-pub type PaxosFamily = Consensus<PaxosFamilySettings, Option<PaxosRound>, PaxosFamilyRoundState>;
+pub type PaxosFamilyShard =
+    ConsensusShard<PaxosFamilySettings, Option<PaxosRound>, PaxosFamilyRoundState>;
 
+#[derive(Copy, Clone)]
 pub enum Mode {
     Paxos,
     MultiPaxos,
     EPaxos,
 }
 
-impl PaxosFamily {
+impl PaxosFamilyShard {
     pub fn new(
         nb_nodes: usize,
         my_pid: usize,
-        sinks: MultiSink,
+        sinks: ShardMultiSink,
         leader_priority: Vec<usize>,
         mode: Mode,
     ) -> Self {
@@ -67,7 +71,7 @@ impl PaxosFamily {
     }
 }
 
-impl ConsensusTrait for PaxosFamily {
+impl ConsensusShardTrait for PaxosFamilyShard {
     async fn process_message(&mut self, msg: ConsensusMessage) -> io::Result<Option<CommandBatch>> {
         let src = msg.src;
         let msg = match msg.msg {
@@ -216,7 +220,7 @@ impl ConsensusTrait for PaxosFamily {
     }
 }
 
-impl PaxosFamily {
+impl PaxosFamilyShard {
     #[inline]
     fn goto_round(&mut self, round: Option<PaxosRound>) {
         if round.unwrap_or_default()
@@ -333,5 +337,40 @@ impl PaxosFamily {
             v: self.round_state.get_v().unwrap(),
         };
         self.sinks.broadcast(msg, None).await
+    }
+}
+
+pub(crate) type PaxosFamily =
+    Consensus<PaxosFamilySettings, Option<PaxosRound>, PaxosFamilyRoundState>;
+
+impl PaxosFamily {
+    pub fn new(
+        nb_nodes: usize,
+        my_pid: usize,
+        sinks: MultiSink,
+        leader_priority: Vec<usize>,
+        mode: Mode,
+        shard_count: usize,
+    ) -> Self {
+        let sinks = Rc::new(RefCell::new(sinks));
+
+        Self {
+            nb_nodes,
+            shards: (0..shard_count)
+                .map(|id| {
+                    PaxosFamilyShard::new(
+                        nb_nodes,
+                        my_pid,
+                        ShardMultiSink {
+                            shard_id: id,
+                            multi_sink: sinks.clone(),
+                        },
+                        leader_priority.clone(),
+                        mode,
+                    )
+                })
+                .collect(),
+            sinks,
+        }
     }
 }

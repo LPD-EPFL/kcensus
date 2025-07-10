@@ -83,7 +83,7 @@ pub async fn connect_all(
         let (stream, sink) = connector.connect_to(pid).await.expect("Failed to connect");
         sinks.insert_sink(pid, sink);
         sinks
-            .inner_send(Hello { pid: my_pid }, pid)
+            .send(Hello { pid: my_pid }, pid)
             .await
             .expect("Should send hello msg");
         streams.push(stream.map_ok(wrap_with_source_pid(pid)))
@@ -99,7 +99,6 @@ pub async fn connect_all(
                 Some(Ok(Hello { pid })) => pid,
                 _ => continue 'retry,
             };
-            assert!(pid < nb_nodes);
             sinks.insert_sink(pid, sink);
             streams.push(stream.map_ok(wrap_with_source_pid(pid)));
             break;

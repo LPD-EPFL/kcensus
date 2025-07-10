@@ -4,11 +4,13 @@ use crate::consensus::read_tracker::ReadTracker;
 use crate::eval;
 use crate::message::Message::{ConsensusM, Done};
 use crate::message::MsgWithSource;
-use crate::multi_sink::MultiSink;
+use crate::multi_sink::{MultiSink, ShardMultiSink};
 use command::Command;
 use log::{debug, info};
+use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::io;
+use std::rc::Rc;
 use tokio::select;
 use tokio::sync::mpsc::{Receiver, Sender};
 
@@ -18,14 +20,14 @@ pub(crate) mod message;
 pub(crate) mod paxos_family;
 mod read_tracker;
 
-pub(crate) struct Consensus<AlgoSettings, AlgoRound, AlgoRoundState> {
+pub(crate) struct ConsensusShard<AlgoSettings, AlgoRound, AlgoRoundState> {
     // Settings
     nb_nodes: usize,
     my_pid: usize,
     leader_priority: Vec<usize>,
 
     // Connections
-    sinks: MultiSink,
+    sinks: ShardMultiSink,
 
     // Overall state
     next_uid: usize,
@@ -39,7 +41,13 @@ pub(crate) struct Consensus<AlgoSettings, AlgoRound, AlgoRoundState> {
     round_state: AlgoRoundState,
 }
 
-pub(crate) trait ConsensusTrait {
+pub(crate) struct Consensus<AlgoSettings, AlgoRound, AlgoRoundState> {
+    nb_nodes: usize,
+    shards: Vec<ConsensusShard<AlgoSettings, AlgoRound, AlgoRoundState>>,
+    sinks: Rc<RefCell<MultiSink>>,
+}
+
+pub(crate) trait ConsensusShardTrait {
     async fn process_message(&mut self, msg: ConsensusMessage) -> io::Result<Option<CommandBatch>>;
 
     fn can_forward_proposals(&mut self) -> bool;
@@ -57,7 +65,7 @@ pub(crate) trait ConsensusTrait {
 
 impl<AS, AR, ARS> Consensus<AS, AR, ARS>
 where
-    Consensus<AS, AR, ARS>: ConsensusTrait,
+    ConsensusShard<AS, AR, ARS>: ConsensusShardTrait,
 {
     pub async fn run(
         &mut self,
@@ -65,92 +73,115 @@ where
         mut new_client_commands_rx: Receiver<Command>,
         committed_commands_tx: Sender<Command>,
     ) -> io::Result<()> {
-        let mut queued_messages: VecDeque<ConsensusMessage> =
-            VecDeque::with_capacity(self.nb_nodes);
         let mut count_done = 0usize;
         let mut done = false;
-        let mut max_queued_slot = 0;
+        let mut active_shard = 0;
 
-        'main_loop: loop {
+        let mut queued_messages: Vec<VecDeque<ConsensusMessage>> =
+            vec![VecDeque::with_capacity(self.nb_nodes); self.shards.len()];
+        let likely_queued = (!self.shards[0].can_forward_proposals()) as usize;
+        let mut my_queued_commands: Vec<VecDeque<Command>> =
+            vec![VecDeque::with_capacity(likely_queued); self.shards.len()];
+        let mut should_recheck_queue = false;
+
+        'main_loop: while count_done < self.nb_nodes {
             // Process queued messages (if possible)
-            let mut i = 0usize;
-            while i < queued_messages.len() {
-                let msg = &queued_messages[i];
-                if self.ready_to_process(msg) {
-                    let msg = queued_messages.remove(i).unwrap();
-                    let batch = self.full_process_message(msg).await?;
-                    if self.commit_commands(&committed_commands_tx, batch).await {
-                        continue 'main_loop; // Restart from the beginning of the queue
+            if should_recheck_queue {
+                let mut i = 0usize;
+                while i < queued_messages[active_shard].len() {
+                    // TODO: (Optim.) check Commit messages first ?
+                    let msg = &queued_messages[active_shard][i];
+                    if self.shards[active_shard].ready_to_process(msg) {
+                        let msg = queued_messages[active_shard].remove(i).unwrap();
+                        let batch = self.shards[active_shard].full_process_message(msg).await?;
+                        if self.shards[active_shard]
+                            .commit_commands(&committed_commands_tx, batch)
+                            .await
+                        {
+                            should_recheck_queue = true;
+                            continue 'main_loop; // Restart from the beginning of the queue
+                        }
+                    } else {
+                        i += 1;
                     }
-                } else {
-                    i += 1;
                 }
+                should_recheck_queue = false;
             }
 
-            if count_done == self.nb_nodes {
-                break 'main_loop;
-            }
+            let ongoing = self.shards[active_shard].get_my_v().is_some()
+                || !queued_messages[active_shard].is_empty();
+            let should_repropose = !ongoing && self.shards[active_shard].has_queued_commands();
+            let mut contention = ongoing || should_repropose;
 
-            let ongoing = self.get_my_v().is_some() || max_queued_slot > self.slot;
-            let should_repropose = !ongoing && self.has_queued_commands();
             // TODO: (Optim.) peak connection first ?
-            if should_repropose && self.should_lead() {
-                if let Some(batch) = self.get_new_batch_to_propose() {
-                    self.propose_start(batch, false).await?;
+            if should_repropose && self.shards[active_shard].should_lead() {
+                if let Some(batch) = self.shards[active_shard].get_new_batch_to_propose() {
+                    self.shards[active_shard]
+                        .propose_start(batch, false)
+                        .await?;
                 } else {
-                    let v = self.get_v_to_repropose();
-                    self.repropose_start(v).await?;
+                    let v = self.shards[active_shard].get_v_to_repropose();
+                    self.shards[active_shard].repropose_start(v).await?;
                 }
+            } else if !contention && !my_queued_commands[active_shard].is_empty() {
+                let command = my_queued_commands[active_shard].pop_front().unwrap();
+                assert!(!command.read_only, "read_only command wrongly queued");
+                self.shards[active_shard]
+                    .propose_start(CommandBatch::Single(command), false)
+                    .await?;
+                contention = true;
             }
 
             // Read new messages and/or new local command
             let msg = select! {
-                command = new_client_commands_rx.recv(), if (!ongoing || self.can_forward_proposals()) && !should_repropose && !done => {
+                command = new_client_commands_rx.recv(), if !done => {
                     match command {
                         Some(command) =>  {
                             if command.read_only {
-                                self.start_read(command).await?;
+                                self.shards[command.shard].start_read(command).await?;
                             } else {
-                                self.propose_start(CommandBatch::Single(command), ongoing).await?;
+                                if !contention || self.shards[command.shard].can_forward_proposals() {
+                                    self.shards[command.shard].propose_start(CommandBatch::Single(command), contention).await?;
+                                } else {
+                                    my_queued_commands[command.shard].push_back(command);
+                                }
                             }
                         }
                         None => {
+                            debug_assert!(my_queued_commands.iter().all(|x| x.is_empty()));
                             done = true;
-                            self.sinks.inner_broadcast(Done).await?;
+                            self.sinks.borrow_mut().broadcast(Done).await?;
                             count_done += 1;
-                            if count_done == self.nb_nodes {
-                                break 'main_loop;
-                            }
                         }
                     }
-                    msg_rx.recv().await.unwrap()
+                    continue 'main_loop; // Rechecks exit condition + wait for next msg or command
                 }
                 opt_msg = msg_rx.recv() => opt_msg.unwrap(),
             };
 
             match msg.msg {
-                ConsensusM { msg, value } => {
+                ConsensusM { shard, msg, value } => {
+                    active_shard = shard;
                     if let Some(value) = value {
                         debug_assert!(msg.can_include_value());
                         let v = msg.get_v().expect("A value should travel with its uid");
-                        self.store_remote_command(v, value);
+                        self.shards[shard].store_remote_command(v, value);
+                        should_recheck_queue = true;
                     } else {
                         debug_assert!(!msg.should_include_value());
-                    }
+                    };
 
-                    if !self.ready_to_process(&msg) {
-                        max_queued_slot = max_queued_slot.max(msg.get_slot());
-                        queued_messages.push_back(msg);
-                        // TODO: recheck queued messages only if
-                        //   "ready_to_process" might have changed
+                    if !self.shards[shard].ready_to_process(&msg) {
+                        queued_messages[shard].push_back(msg);
                         continue 'main_loop;
                     }
 
-                    let res_command = self.full_process_message(msg).await?;
-                    if self
+                    let res_command = self.shards[shard].full_process_message(msg).await?;
+                    if self.shards[shard]
                         .commit_commands(&committed_commands_tx, res_command)
                         .await
                     {
+                        should_recheck_queue = true;
                         continue 'main_loop; // Restart from the beginning of the queue
                     }
                 }
@@ -163,16 +194,22 @@ where
             "network-done",
             &format!(
                 "Sent {} messages ({} bytes)",
-                self.sinks.stats.msg_count, self.sinks.stats.byte_count
+                self.sinks.borrow().stats.msg_count,
+                self.sinks.borrow().stats.byte_count
             ),
-            &self.sinks.stats,
+            &self.sinks.borrow().stats,
         );
 
         new_client_commands_rx.close();
         msg_rx.close();
         Ok(())
     } // run
+}
 
+impl<AS, AR, ARS> ConsensusShard<AS, AR, ARS>
+where
+    ConsensusShard<AS, AR, ARS>: ConsensusShardTrait,
+{
     #[inline]
     async fn start_read(&mut self, command: Command) -> io::Result<()> {
         let local_ready = self.get_my_v().is_none();
@@ -241,14 +278,14 @@ where
         committed_commands_tx: &Sender<Command>,
         batch: Option<CommandBatch>,
     ) -> bool {
-        let commit = async |command: Command| {
-            committed_commands_tx
-                .send(command)
-                .await
-                .expect("Sending commited value");
-        };
-
         if let Some(batch) = batch {
+            let commit = async |command: Command| {
+                committed_commands_tx
+                    .send(command)
+                    .await
+                    .expect("Sending commited value");
+            };
+
             match batch {
                 CommandBatch::Single(command) => {
                     commit(command).await;
