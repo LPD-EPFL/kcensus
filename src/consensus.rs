@@ -75,63 +75,14 @@ where
     ) -> io::Result<()> {
         let mut count_done = 0usize;
         let mut done = false;
-        let mut active_shard = 0;
 
         let mut queued_messages: Vec<VecDeque<ConsensusMessage>> =
             vec![VecDeque::with_capacity(self.nb_nodes); self.shards.len()];
         let likely_queued = (!self.shards[0].can_forward_proposals()) as usize;
         let mut my_queued_commands: Vec<VecDeque<Command>> =
             vec![VecDeque::with_capacity(likely_queued); self.shards.len()];
-        let mut should_recheck_queue = false;
 
         'main_loop: while count_done < self.nb_nodes {
-            // Process queued messages (if possible)
-            if should_recheck_queue {
-                let mut i = 0usize;
-                while i < queued_messages[active_shard].len() {
-                    // TODO: (Optim.) check Commit messages first ?
-                    let msg = &queued_messages[active_shard][i];
-                    if self.shards[active_shard].ready_to_process(msg) {
-                        let msg = queued_messages[active_shard].remove(i).unwrap();
-                        let batch = self.shards[active_shard].full_process_message(msg).await?;
-                        if self.shards[active_shard]
-                            .commit_commands(&committed_commands_tx, batch)
-                            .await
-                        {
-                            should_recheck_queue = true;
-                            continue 'main_loop; // Restart from the beginning of the queue
-                        }
-                    } else {
-                        i += 1;
-                    }
-                }
-                should_recheck_queue = false;
-            }
-
-            let ongoing = self.shards[active_shard].get_my_v().is_some()
-                || !queued_messages[active_shard].is_empty();
-            let should_repropose = !ongoing && self.shards[active_shard].has_queued_commands();
-            let mut contention = ongoing || should_repropose;
-
-            // TODO: (Optim.) peak connection first ?
-            if should_repropose && self.shards[active_shard].should_lead() {
-                if let Some(batch) = self.shards[active_shard].get_new_batch_to_propose() {
-                    self.shards[active_shard]
-                        .propose_start(batch, false)
-                        .await?;
-                } else {
-                    let v = self.shards[active_shard].get_v_to_repropose();
-                    self.shards[active_shard].repropose_start(v).await?;
-                }
-            } else if !contention && !my_queued_commands[active_shard].is_empty() {
-                let command = my_queued_commands[active_shard].pop_front().unwrap();
-                assert!(!command.read_only, "read_only command wrongly queued");
-                self.shards[active_shard]
-                    .propose_start(CommandBatch::Single(command), false)
-                    .await?;
-                contention = true;
-            }
-
             // Read new messages and/or new local command
             let msg = select! {
                 command = new_client_commands_rx.recv(), if !done => {
@@ -140,7 +91,10 @@ where
                             if command.read_only {
                                 self.shards[command.shard].start_read(command).await?;
                             } else {
-                                if !contention || self.shards[command.shard].can_forward_proposals() {
+                                let ongoing = self.shards[command.shard].get_my_v().is_some()
+                                    || !queued_messages[command.shard].is_empty();
+                                let contention = ongoing || self.shards[command.shard].has_queued_commands();
+                                if self.shards[command.shard].can_forward_proposals() || !contention {
                                     self.shards[command.shard].propose_start(CommandBatch::Single(command), contention).await?;
                                 } else {
                                     my_queued_commands[command.shard].push_back(command);
@@ -159,14 +113,13 @@ where
                 opt_msg = msg_rx.recv() => opt_msg.unwrap(),
             };
 
-            match msg.msg {
+            let active_shard = match msg.msg {
                 ConsensusM { shard, msg, value } => {
-                    active_shard = shard;
+                    let new_value = value.is_some();
                     if let Some(value) = value {
                         debug_assert!(msg.can_include_value());
                         let v = msg.get_v().expect("A value should travel with its uid");
                         self.shards[shard].store_remote_command(v, value);
-                        should_recheck_queue = true;
                     } else {
                         debug_assert!(!msg.should_include_value());
                     };
@@ -177,16 +130,63 @@ where
                     }
 
                     let res_command = self.shards[shard].full_process_message(msg).await?;
-                    if self.shards[shard]
+                    let commited = self.shards[shard]
                         .commit_commands(&committed_commands_tx, res_command)
+                        .await;
+
+                    if !commited && !new_value {
+                        continue 'main_loop; // Nothing new, no need to process queue.
+                    }
+                    shard
+                }
+                Done => {
+                    count_done += 1;
+                    continue 'main_loop;
+                }
+                _ => panic!("Unexpected message type"),
+            };
+
+            // Process queued messages (if ready)
+            let mut i = 0usize;
+            while i < queued_messages[active_shard].len() {
+                // TODO: (Optim.) check Commit messages first ?
+                let msg = &queued_messages[active_shard][i];
+                if self.shards[active_shard].ready_to_process(msg) {
+                    let msg = queued_messages[active_shard].remove(i).unwrap();
+                    let batch = self.shards[active_shard].full_process_message(msg).await?;
+                    if self.shards[active_shard]
+                        .commit_commands(&committed_commands_tx, batch)
                         .await
                     {
-                        should_recheck_queue = true;
-                        continue 'main_loop; // Restart from the beginning of the queue
+                        i = 0; // Restart from the beginning of the queue
                     }
+                } else {
+                    i += 1;
                 }
-                Done => count_done += 1,
-                _ => panic!("Unexpected message type"),
+            }
+
+            let ongoing = self.shards[active_shard].get_my_v().is_some()
+                || !queued_messages[active_shard].is_empty();
+            let should_repropose = !ongoing && self.shards[active_shard].has_queued_commands();
+            let contention = ongoing || should_repropose;
+
+            // Process queued commands
+            // TODO: (Optim.) peak connection first ?
+            if should_repropose && self.shards[active_shard].should_lead() {
+                if let Some(batch) = self.shards[active_shard].get_new_batch_to_propose() {
+                    self.shards[active_shard]
+                        .propose_start(batch, false)
+                        .await?;
+                } else {
+                    let v = self.shards[active_shard].get_v_to_repropose();
+                    self.shards[active_shard].repropose_start(v).await?;
+                }
+            } else if !contention && !my_queued_commands[active_shard].is_empty() {
+                let command = my_queued_commands[active_shard].pop_front().unwrap();
+                assert!(!command.read_only, "read_only command wrongly queued");
+                self.shards[active_shard]
+                    .propose_start(CommandBatch::Single(command), false)
+                    .await?;
             }
         } // 'main_loop: loop
 
