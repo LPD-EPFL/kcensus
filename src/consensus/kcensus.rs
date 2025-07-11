@@ -188,7 +188,7 @@ impl ConsensusShardTrait for KCensusShard {
     } // fn process_message
 
     #[inline]
-    fn can_forward_proposals(&mut self) -> bool {
+    fn can_forward_proposals(&self) -> bool {
         true
     }
 
@@ -265,7 +265,7 @@ impl KCensusShard {
     }
 
     #[inline]
-    async fn broadcast(&mut self, msg: KCensusMsg) -> io::Result<()> {
+    async fn broadcast(&self, msg: KCensusMsg) -> io::Result<()> {
         let value = self.value_for_msg(&msg);
         self.sinks.broadcast(KCensusM(msg), value).await
     }
@@ -275,7 +275,7 @@ impl KCensusShard {
         self.sinks.send(KCensusM(msg), value, dest).await
     }
 
-    async fn spread_to(&mut self, dest: usize) -> io::Result<()> {
+    async fn spread_to(&self, dest: usize) -> io::Result<()> {
         if self.my_pid == dest {
             return Ok(());
         }
@@ -290,7 +290,7 @@ impl KCensusShard {
         self.send_to(msg, dest).await
     }
 
-    async fn spread_to_all(&mut self) -> io::Result<()> {
+    async fn spread_to_all(&self) -> io::Result<()> {
         let msg = Spread {
             slot: self.slot,
             round: self.round,
@@ -367,11 +367,7 @@ impl KCensusShard {
         Ok(())
     }
 
-    async fn graph_spread_value_only(
-        &mut self,
-        prev_msg_id: MessageId,
-        v: usize,
-    ) -> io::Result<()> {
+    async fn graph_spread_value_only(&self, prev_msg_id: MessageId, v: usize) -> io::Result<()> {
         let prev_msg_info = self.settings.propagation_graphs.get_by_id(&prev_msg_id);
         // Potential follow-up messages:
         for msg_id in prev_msg_info.get_needed_by() {
@@ -392,7 +388,7 @@ impl KCensusShard {
         Ok(())
     }
 
-    async fn graph_spread_new_value_only(&mut self, v: usize) -> io::Result<()> {
+    async fn graph_spread_new_value_only(&self, v: usize) -> io::Result<()> {
         for msg_id in self.settings.propagation_graphs.get_start(self.my_pid) {
             debug_assert_eq!(msg_id.src, self.my_pid);
             let msg_info = self.settings.propagation_graphs.get_by_id(msg_id);

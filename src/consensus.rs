@@ -50,7 +50,7 @@ pub(crate) struct Consensus<AlgoSettings, AlgoRound, AlgoRoundState> {
 pub(crate) trait ConsensusShardTrait {
     async fn process_message(&mut self, msg: ConsensusMessage) -> io::Result<Option<CommandBatch>>;
 
-    fn can_forward_proposals(&mut self) -> bool;
+    fn can_forward_proposals(&self) -> bool;
 
     async fn propose_start(&mut self, value: CommandBatch, contention: bool) -> io::Result<()>;
 

@@ -159,7 +159,7 @@ impl ConsensusShardTrait for PaxosFamilyShard {
     }
 
     #[inline]
-    fn can_forward_proposals(&mut self) -> bool {
+    fn can_forward_proposals(&self) -> bool {
         matches!(self.settings.mode, MultiPaxos)
     }
 
@@ -247,7 +247,7 @@ impl PaxosFamilyShard {
     }
 
     #[inline]
-    fn value_for_msg(&mut self, msg: &PaxosMsg, with_value: bool) -> Option<CommandBatch> {
+    fn value_for_msg(&self, msg: &PaxosMsg, with_value: bool) -> Option<CommandBatch> {
         if with_value {
             Some(self.queued_commands[&msg.get_v()].clone())
         } else {
@@ -256,12 +256,12 @@ impl PaxosFamilyShard {
     }
 
     #[inline]
-    async fn send(&mut self, msg: PaxosMsg, dest: usize) -> io::Result<()> {
+    async fn send(&self, msg: PaxosMsg, dest: usize) -> io::Result<()> {
         self.sinks.send(PaxosM(msg), None, dest).await
     }
 
     #[inline]
-    async fn broadcast(&mut self, msg: PaxosMsg, with_value: bool) -> io::Result<()> {
+    async fn broadcast(&self, msg: PaxosMsg, with_value: bool) -> io::Result<()> {
         let value = self.value_for_msg(&msg, with_value);
         self.sinks.broadcast(PaxosM(msg), value).await
     }
@@ -303,7 +303,7 @@ impl PaxosFamilyShard {
         self.broadcast(msg, with_value).await
     }
 
-    async fn answer_prepare(&mut self, src: usize) -> io::Result<()> {
+    async fn answer_prepare(&self, src: usize) -> io::Result<()> {
         let msg = Prepare {
             slot: self.slot,
             round: self.round.unwrap(),
@@ -312,7 +312,7 @@ impl PaxosFamilyShard {
         self.send(msg, src).await
     }
 
-    async fn broadcast_accept(&mut self) -> io::Result<()> {
+    async fn broadcast_accept(&self) -> io::Result<()> {
         let msg = Accept {
             slot: self.slot,
             round: self.round.unwrap(),
@@ -321,7 +321,7 @@ impl PaxosFamilyShard {
         self.broadcast(msg, false).await
     }
 
-    async fn answer_accept(&mut self) -> io::Result<()> {
+    async fn answer_accept(&self) -> io::Result<()> {
         let src = self.round.unwrap().proposer;
         let msg = Accept {
             slot: self.slot,
@@ -331,7 +331,7 @@ impl PaxosFamilyShard {
         self.send(msg, src).await
     }
 
-    async fn broadcast_commit(&mut self) -> io::Result<()> {
+    async fn broadcast_commit(&self) -> io::Result<()> {
         let msg = Commit {
             slot: self.slot,
             v: self.round_state.get_v().unwrap(),
