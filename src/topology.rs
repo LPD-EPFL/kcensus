@@ -13,7 +13,7 @@ pub const FAULTY_LATENCY: Duration = Duration::from_secs(FAULTY_LATENCY_SECS);
 pub struct Config {
     pub regions: Vec<String>,
     pub raw_latencies: Vec<Vec<f64>>,
-    pub addresses: Vec<(String, u16)>,
+    pub addresses: Option<Vec<(String, u16)>>,
 }
 
 #[derive(Debug, Clone)]
@@ -58,6 +58,12 @@ impl Topology {
         } = config;
         let nb_nodes = regions.len();
         assert_eq!(nb_nodes, raw_latencies.len());
+        let addresses: Vec<(String, u16)> = match addresses {
+            Some(x) => x,
+            None => (0..nb_nodes)
+                .map(|i| ("localhost".into(), (8000 + i) as u16))
+                .collect(),
+        };
         assert_eq!(nb_nodes, addresses.len());
 
         // Compute raw_latencies
