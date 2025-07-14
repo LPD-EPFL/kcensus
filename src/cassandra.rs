@@ -10,25 +10,42 @@ use rand_distr::{Distribution, Exp};
 use scylla::client::{session::Session, session_builder::SessionBuilder};
 use scylla::statement::prepared::PreparedStatement;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::io;
 use std::pin::Pin;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::{Receiver, Sender};
-use tokio::time::Instant;
+use tokio::{pin, select};
 use tokio_stream::Stream;
+use tokio_timerfd::Delay;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum Request {
-    Put { key: String, value: String },
-    Get { key: String },
+    Put {
+        key: String,
+        value: String,
+        request_id: u64,
+    },
+    Get {
+        key: String,
+        request_id: u64,
+    },
 }
 
 #[derive(Serialize, Debug)]
 #[allow(dead_code)]
 pub enum Response {
-    Put { key: String, value: String },
-    Get { key: String, value: Option<String> },
+    Put {
+        key: String,
+        value: String,
+        request_id: u64,
+    },
+    Get {
+        key: String,
+        value: Option<String>,
+        request_id: u64,
+    },
 }
 
 pub struct Handler {
@@ -108,13 +125,22 @@ impl PreparedHandler {
 
     pub async fn execute(&self, request: Request) -> Response {
         match request {
-            Request::Put { key, value } => {
+            Request::Put {
+                key,
+                value,
+                request_id,
+            } => {
                 self.put(&key, &value).await;
-                Response::Put { key, value }
+                Response::Put {
+                    key,
+                    value,
+                    request_id,
+                }
             }
-            Request::Get { key } => Response::Get {
+            Request::Get { key, request_id } => Response::Get {
                 value: self.get(&key).await,
                 key,
+                request_id,
             },
         }
     }
@@ -251,8 +277,75 @@ impl Client {
         (client, client_request_rx, client_response_tx)
     }
 
-    pub async fn run(mut self, mut workload: Workload) {
-        let mut request_generated = Instant::now();
+    fn generate_request(&self, workload: &Workload, request_id: u64) -> Command {
+        let key = rand::random_range(0..workload.nb_keys);
+        if rand::random_range(0. ..1.) < workload.rw_ratio {
+            Command::new_write(
+                self.my_pid,
+                key,
+                &Request::Put {
+                    key: format!("key{}", key),
+                    value: format!("v{}.{}!", self.my_pid, request_id),
+                    request_id,
+                },
+            )
+        } else {
+            Command::new_read_only(
+                self.my_pid,
+                key,
+                &Request::Get {
+                    key: format!("key{}", key),
+                    request_id,
+                },
+            )
+        }
+    }
+
+    fn log_executed_response(
+        &self,
+        response: Response,
+        scheduled_time: Instant,
+        issued_time: Instant,
+    ) {
+        let responded = Instant::now();
+        let readable = format!(
+            "{} in {:?}",
+            if let Response::Put { .. } = response {
+                "PUT"
+            } else {
+                "GET"
+            },
+            responded.duration_since(scheduled_time) * self.speedup
+        );
+        let event = ExecutedEvent {
+            response,
+            latency: responded.duration_since(scheduled_time) * self.speedup,
+            queueing: issued_time.duration_since(scheduled_time) * self.speedup,
+            processing: responded.duration_since(issued_time) * self.speedup,
+        };
+        eval::log("executed", &readable, &event);
+    }
+
+    pub async fn run(self, workload: Workload) {
+        match workload.interval {
+            RequestInterval::RoundRobin { .. } => {
+                // Keep sequential execution for RoundRobin due to synchronization requirements
+                self.run_sequential(workload).await;
+            }
+            RequestInterval::Exponential { .. } | RequestInterval::Constant { .. } => {
+                // Use parallel execution for Exponential and Constant intervals
+                self.run_parallel(workload).await;
+            }
+        }
+    }
+
+    async fn run_sequential(mut self, mut workload: Workload) {
+        let mut scheduled_time = Instant::now();
+
+        // Initialize delay object for timing
+        let delay = Delay::new(Instant::now()).expect("Failed to init delay");
+        pin!(delay);
+
         for i in 0..workload.nb_requests {
             if let RequestInterval::RoundRobin { synchronizer } = &mut workload.interval {
                 synchronizer.wait().await;
@@ -263,34 +356,14 @@ impl Client {
             if workload.faulty {
                 continue;
             }
-            let key = rand::random_range(0..workload.nb_keys);
-            let request = if rand::random_range(0. ..1.) < workload.rw_ratio {
-                Command::new_write(
-                    self.my_pid,
-                    key,
-                    &Request::Put {
-                        key: format!("key{}", key),
-                        value: format!("v{}.{}!", self.my_pid, i),
-                    },
-                )
-            } else {
-                Command::new_read_only(
-                    self.my_pid,
-                    key,
-                    &Request::Get {
-                        key: format!("key{}", key),
-                    },
-                )
-            };
-            request_generated = workload.interval.next(&request_generated);
-            let time_before_generation =
-                request_generated.saturating_duration_since(Instant::now());
-            if !time_before_generation.is_zero() {
-                tokio_timerfd::sleep(time_before_generation)
-                    .await
-                    .expect("Failed to sleep");
-            }
-            let issued = Instant::now();
+            let request = self.generate_request(&workload, i as u64);
+            scheduled_time = workload.interval.next(&scheduled_time);
+
+            // Use delay to wait until the scheduled time
+            delay.as_mut().reset(scheduled_time);
+            delay.as_mut().await.expect("Delay failed");
+
+            let issued_time = Instant::now();
             self.client_request_tx
                 .send(request)
                 .await
@@ -300,27 +373,89 @@ impl Client {
                 .recv()
                 .await
                 .expect("Client failed to receive response");
-            let responded = Instant::now();
-            let readable = format!(
-                "{} in {:?}",
-                if let Response::Put { .. } = response {
-                    "PUT"
-                } else {
-                    "GET"
-                },
-                responded.duration_since(request_generated) * self.speedup
-            );
-            let event = ExecutedEvent {
-                response,
-                latency: responded.duration_since(request_generated) * self.speedup,
-                queueing: issued.duration_since(request_generated) * self.speedup,
-                processing: responded.duration_since(request_generated) * self.speedup,
-            };
-            eval::log("executed", &readable, &event);
+            self.log_executed_response(response, scheduled_time, issued_time);
             if let RequestInterval::RoundRobin { synchronizer } = &mut workload.interval {
                 synchronizer.notify().await;
             }
         }
+    }
+
+    async fn run_parallel(mut self, mut workload: Workload) {
+        if workload.faulty || workload.nb_requests == 0 {
+            // If the replica is faulty or has no requests, we can skip processing
+            return;
+        }
+        let num_requests = workload.nb_requests;
+
+        // Track scheduled_time and issued_time for each request_id
+        let mut request_timings: HashMap<u64, (Instant, Instant)> = HashMap::new();
+
+        // Prepare the first request
+        let mut next_request = Some(self.generate_request(&workload, 0u64));
+
+        // Initialize delay object and request state
+        let delay = Delay::new(Instant::now()).expect("Failed to init delay");
+        pin!(delay);
+
+        let mut scheduled_time = Instant::now();
+        let mut current_request_id = 0;
+        let mut responses_received = 0;
+
+        // Set initial delay for first request
+        scheduled_time = workload.interval.next(&scheduled_time);
+        delay.as_mut().reset(scheduled_time);
+
+        while responses_received < num_requests {
+            select! {
+                // Handle sending the next request when its time arrives
+                res = &mut delay, if next_request.is_some() => {
+                    res.expect("Delay failed");
+
+                    let request = next_request.take().unwrap();
+
+                    let issued_time = Instant::now();
+                    request_timings.insert(current_request_id as u64, (scheduled_time, issued_time));
+
+                    self.client_request_tx
+                        .send(request)
+                        .await
+                        .expect("Client failed to queue request");
+
+                    current_request_id += 1;
+
+                    // Prepare for next request if there is one
+                    if current_request_id < num_requests {
+                        next_request = Some(
+                            self.generate_request(&workload, current_request_id as u64)
+                        );
+                        scheduled_time = workload.interval.next(&scheduled_time);
+                        delay.as_mut().reset(scheduled_time);
+                    }
+                }
+
+                // Handle receiving responses
+                response = self.client_response_rx.recv() => {
+                    if let Some(response) = response {
+                        // Extract request_id from response and look up timing info
+                        let request_id = match &response {
+                            Response::Put { request_id, .. } => *request_id,
+                            Response::Get { request_id, .. } => *request_id,
+                        };
+
+                        let (scheduled_time, issued_time) = request_timings
+                            .remove(&request_id)
+                            .expect("Response received for an unknown request_id");
+                        self.log_executed_response(response, scheduled_time, issued_time);
+
+                        responses_received += 1;
+                    }
+                }
+            }
+        }
+        assert_eq!(
+            current_request_id, num_requests,
+            "Invalid amount of requests were sent"
+        );
     }
 }
 
@@ -377,8 +512,20 @@ impl App {
             } else {
                 // We mock Cassandra
                 match command.app_request {
-                    Request::Put { key, value } => Response::Put { key, value },
-                    Request::Get { key } => Response::Get { key, value: None },
+                    Request::Put {
+                        key,
+                        value,
+                        request_id,
+                    } => Response::Put {
+                        key,
+                        value,
+                        request_id,
+                    },
+                    Request::Get { key, request_id } => Response::Get {
+                        key,
+                        value: None,
+                        request_id,
+                    },
                 }
             };
             if command.proposer == self.my_pid {
