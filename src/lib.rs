@@ -45,12 +45,8 @@ struct Args {
     faults: Vec<usize>,
     #[arg(short, long, default_value_t = 1u32, value_name = "SIMULATION_SPEED")]
     speedup: u32,
-    #[arg(
-        long,
-        help = "Simulate delays/latencies (set it only when running locally)",
-        default_value_t = false
-    )]
-    simulate_delays: bool,
+    #[arg(long, help = "Simulate link delays. (Default: only if localhost)")]
+    simulate_delays: Option<bool>,
     #[arg(short, long, default_value_t = 1usize, value_name = "KEY_COUNT")]
     keys: usize,
 }
@@ -91,6 +87,12 @@ pub async fn run() -> io::Result<()> {
     let args = Args::parse();
     let my_pid = args.pid;
     let topology = Topology::from_path(&args.config, Some(args.faults));
+    let delay_mode = args.simulate_delays.unwrap_or_else(|| {
+        topology
+            .addresses
+            .iter()
+            .all(|(address, _)| address == "localhost" || address == "127.0.0.1")
+    });
 
     let epaxos_max_faults = topology.nb_nodes - ((topology.nb_nodes * 3) / 4);
     let algo = match args.algo {
@@ -128,7 +130,7 @@ pub async fn run() -> io::Result<()> {
         args.speedup,
         my_pid,
         consensus_msg_streams,
-        args.simulate_delays,
+        delay_mode,
     ));
 
     let ((client, mut new_client_request_rx), (app, committed_request_tx)) =
