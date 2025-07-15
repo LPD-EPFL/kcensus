@@ -93,7 +93,7 @@ for c in range(3):
         plot.text(
             i,
             text_y,
-            f"{int(average)}\N{THIN SPACE}ms",
+            f"{round(average)}\N{THIN SPACE}ms",
             horizontalalignment="center",
             verticalalignment="bottom",
         )

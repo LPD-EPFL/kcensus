@@ -32,9 +32,16 @@ def process_log_file(log_file_path: pathlib.Path):
         parts = before_stderr.split(stdout_marker, 1)
         stdout_content = parts[1].strip()
 
-    digits_only_name = "".join(filter(str.isdigit, log_file_path.stem))
-    stdout_file_path = log_file_path.parent / f"{digits_only_name}.stdout"
-    stderr_file_path = log_file_path.parent / f"{digits_only_name}.stderr"
+    if log_file_path.name == "graph_bench.log":
+        stdout_file_name = "graph_bench.stdout"
+        stderr_file_name = "graph_bench.stderr"
+    else:
+        digits_only_name = "".join(filter(str.isdigit, log_file_path.stem))
+        stdout_file_name = f"{digits_only_name}.stdout"
+        stderr_file_name = f"{digits_only_name}.stderr"
+
+    stdout_file_path = log_file_path.parent / stdout_file_name
+    stderr_file_path = log_file_path.parent / stderr_file_name
 
     if stdout_content:
         try:
@@ -47,7 +54,6 @@ def process_log_file(log_file_path: pathlib.Path):
             stderr_file_path.write_text(stderr_content, encoding='utf-8')
         except Exception as e:
             print(f"  [ERROR] Could not write file {stderr_file_path}: {e}", file=sys.stderr)
-
 
 
 search_path = pathlib.Path(ROOT_DIRECTORY)
