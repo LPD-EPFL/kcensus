@@ -114,9 +114,9 @@ impl ConsensusShardTrait for KCensusShard {
                 }
 
                 let msg_frozen = remote_states[src].frozen;
+                let orig_frozen = self.round_state.am_i_frozen();
 
-                if msg_frozen || msg_v != my_v {
-                    let orig_frozen = self.round_state.am_i_frozen();
+                if msg_frozen || msg_v != my_v || orig_frozen {
                     self.round_state.freeze();
 
                     if with_value {
