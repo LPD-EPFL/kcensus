@@ -160,15 +160,17 @@ impl ConsensusShardTrait for KCensusShard {
                     return Ok(None);
                 }
 
-                if proposer_count == 1 {
-                    let msg_id = msg_id.expect("Single proposer means messages should have ids");
-                    self.graph_spread(msg_id, new_value).await?;
-                    return Ok(None);
+                if let Some(msg_id) = msg_id {
+                    if proposer_count == 1 {
+                        self.graph_spread(msg_id, new_value).await?;
+                        return Ok(None);
+                    } else if with_value {
+                        self.graph_spread_value_only(msg_id, msg_v).await?;
+                    }
                 }
 
                 // Multiple proposers of the same value
                 debug_assert!(proposer_count > 1);
-                debug_assert!(!with_value);
 
                 if old_proposer_count < 2 {
                     // Transition to multi-proposer strategy
