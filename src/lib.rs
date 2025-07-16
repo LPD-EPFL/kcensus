@@ -78,7 +78,7 @@ pub async fn run() -> io::Result<()> {
             writeln!(
                 buf,
                 "{header_style}{}{header_style:#} {level_style}{level:<5}{level_style:#} {}",
-                time.format("%S%.6f"),
+                time.format("%M:%S%.6f"),
                 record.args()
             )
         })
