@@ -1,0 +1,68 @@
+---
+- name: Deploy and run kcensus experiment
+  hosts: kcensus_nodes
+  remote_user: ec2-user
+  become: no
+
+  vars:
+    local_binary_path: "../../target/x86_64-unknown-linux-musl/release/kcensus"
+    local_configs_path: "./configs/"
+    local_script_path: "./exp6.sh"
+    local_results_dir: "./experiment_results"
+    remote_work_dir: "/home/ec2-user/kcensus_run_{{ ansible_date_time.iso8601 }}"
+
+  tasks:
+    - name: Fail if required local files are missing
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: local_files
+      failed_when: not local_files.stat.exists
+      loop:
+        - "{{ local_binary_path }}"
+        - "{{ local_configs_path }}"
+        - "{{ local_script_path }}"
+      run_once: true
+      delegate_to: localhost
+
+    - name: Create remote working directory
+      ansible.builtin.file:
+        path: "{{ remote_work_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Copy the kcensus binary to the server
+      ansible.builtin.copy:
+        src: "{{ local_binary_path }}"
+        dest: "{{ remote_work_dir }}/kcensus"
+        mode: '0755'
+
+    - name: Copy the modified experiment script to the server
+      ansible.builtin.copy:
+        src: "{{ local_script_path }}"
+        dest: "{{ remote_work_dir }}/exp6.sh"
+        mode: '0755'
+
+    - name: Copy the entire 'configs' directory to the server
+      ansible.builtin.copy:
+        src: "{{ local_configs_path }}"
+        dest: "{{ remote_work_dir }}/configs"
+
+    - name: Run the experiment script (asynchronous)
+      ansible.builtin.shell:
+        cmd: "./exp6.sh"
+        chdir: "{{ remote_work_dir }}"
+      async: 14400
+      poll: 30
+      register: experiment_job
+
+    - name: Archive the logs directory on the remote server
+      community.general.archive:
+        path: "{{ remote_work_dir }}/logs"
+        dest: "{{ remote_work_dir }}/logs.tar.gz"
+        format: gz
+
+    - name: Fetch the compressed logs archive to the local machine
+      ansible.builtin.fetch:
+        src: "{{ remote_work_dir }}/logs.tar.gz"
+        dest: "{{ local_results_dir }}/"
+        flat: yes

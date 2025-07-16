@@ -16,6 +16,7 @@ CONFIGS["aws-europe-2"]="deployment/terraform/regions/europe-2.tfvars"
 CONFIGS["aws-north-america-7"]="deployment/terraform/regions/north-america-7.tfvars"
 CONFIGS["aws-world-ring-13"]="deployment/terraform/regions/world-ring-13.tfvars"
 CONFIGS["aws-world-ring-9"]="deployment/terraform/regions/world-ring-9.tfvars"
+CONFIGS["aws-exp-6"]="deployment/terraform/regions/one.tfvars"
 
 function digits() {
   echo "$1" | tr -d -c 0-9
@@ -329,6 +330,29 @@ function exp-3-5() {
   destroy "$varFile" "$EXPERIMENT_ID"
 
   echo "--- Finished Experiments 3 & 5 ---"
+}
+
+function exp-6() {
+  echo "--- Starting Experiment 6: Resources ---"
+
+  local configName="aws-exp-6"
+  local EXPERIMENT_ID="exp-6"
+  local varFile="${CONFIGS[$configName]}"
+  local inventoryFile="inventory-${EXPERIMENT_ID}.ini"
+
+  provision "$varFile" "$EXPERIMENT_ID"
+  sleep 60 # sleep 1 more minute
+
+  (
+    cd deployment/ansible/
+    ansible-playbook -i "${inventoryFile}" exp6.yml
+  )
+
+  destroy "$varFile" "$EXPERIMENT_ID"
+
+  # TODO: unarchive results and merge them
+
+  echo "--- Finished Experiment 6 ---"
 }
 
 

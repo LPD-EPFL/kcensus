@@ -1,5 +1,6 @@
 /ansible/results/
 /ansible/inventory-*.ini
+/ansible/experiment_results
 
 /terraform/.terraform/
 /terraform/.terraform.lock.hcl
