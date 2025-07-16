@@ -267,7 +267,7 @@ pub struct Client {
 impl Client {
     pub fn new(my_pid: usize, speedup: u32) -> (Self, Receiver<Command>, Sender<Response>) {
         let (client_request_tx, client_request_rx) = mpsc::channel(1);
-        let (client_response_tx, client_response_rx) = mpsc::channel(1);
+        let (client_response_tx, client_response_rx) = mpsc::channel(100);
         let client = Self {
             my_pid,
             speedup,
@@ -406,13 +406,13 @@ impl Client {
         delay.as_mut().reset(scheduled_time);
 
         while responses_received < num_requests {
+            let no_response = self.client_response_rx.is_empty();
             select! {
                 // Handle sending the next request when its time arrives
-                res = &mut delay, if next_request.is_some() => {
+                res = &mut delay, if no_response && next_request.is_some() => {
                     res.expect("Delay failed");
 
                     let request = next_request.take().unwrap();
-
                     let issued_time = Instant::now();
                     request_timings.insert(current_request_id as u64, (scheduled_time, issued_time));
 
