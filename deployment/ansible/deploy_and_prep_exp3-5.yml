@@ -1,0 +1,99 @@
+---
+- name: Prepare all nodes for Experiment 3 & 5
+  hosts: kcensus_nodes
+  gather_facts: no
+
+  tasks:
+    - name: Ensure Cassandra container is running
+      community.docker.docker_container:
+        name: "cassandra-{{ groups['kcensus_nodes'].index(inventory_hostname) + 1 }}"
+        image: cassandra:latest
+        state: started
+        detach: yes
+        restart_policy: always
+        env:
+          JVM_OPTS: "-Xms256M -Xmx1024M"
+        ports:
+          - "{{ 9041 + groups['kcensus_nodes'].index(inventory_hostname) + 1 }}:9042"
+
+    - name: Wait for Cassandra to be ready
+      ansible.builtin.shell: >
+        docker exec cassandra-{{ groups['kcensus_nodes'].index(inventory_hostname) + 1 }} cqlsh -e "SELECT now() FROM system.local;"
+      register: cassandra_status
+      until: cassandra_status.rc == 0
+      retries: 50
+      delay: 6
+
+    - name: Create a directory for the application
+      ansible.builtin.file:
+        path: /home/ec2-user/kcensus_app
+        state: directory
+        mode: '0755'
+
+    - name: Copy the kcensus binary
+      ansible.builtin.copy:
+        src: ../../target/x86_64-unknown-linux-musl/release/kcensus
+        dest: /home/ec2-user/kcensus_app/kcensus
+        mode: '0755'
+
+    - name: Copy the graph_bench binary
+      ansible.builtin.copy:
+        src: ../../target/x86_64-unknown-linux-musl/release/graph_bench
+        dest: /home/ec2-user/kcensus_app/graph_bench
+        mode: '0755'
+
+    - name: Measure pairwise one-way latencies using ping
+      ansible.builtin.shell: >-
+        ping -c 100 -i 0.2 {{ item }} |
+        grep 'icmp_seq' |
+        grep -oP 'time=\K[0-9.]+' |
+        sort -n |
+        head -n -5 |
+        tail -n +6 |
+        awk '{ total += $1; count++ } END { if (count > 0) print total/count/2; else print "9999" }'
+      loop: "{{ groups['kcensus_nodes'] }}"
+      register: all_ping_results
+      ignore_errors: true
+
+    - name: Assemble master configuration on the control node
+      run_once: true
+      delegate_to: localhost
+      vars:
+        node_list: "{{ groups['kcensus_nodes'] }}"
+        master_config:
+          nodes: |
+            {%- set nodes = [] -%}
+            {%- for i in range(node_list | length) -%}
+            {%-   set host_ip = node_list[i] -%}
+            {%-   set _ = nodes.append({
+                    "global_id": i,
+                    "ip": host_ip,
+                    "region": hostvars[host_ip]['aws_region'],
+                    "cassandra_port": 9042 + i
+                  }) -%}
+            {%- endfor -%}
+            {{ nodes }}
+          latency_matrix: |
+            {%- set matrix = [] -%}
+            {%- for i in range(node_list | length) -%}
+            {%-   set source_host = node_list[i] -%}
+            {%-   set row = [] -%}
+            {%-   for j in range(node_list | length) -%}
+            {%-     if i == j -%}
+            {%-       set _ = row.append(0.0) -%}
+            {%-     else -%}
+            {%-       set ping_result = hostvars[source_host]['all_ping_results']['results'][j] -%}
+            {%-       set latency = ping_result.stdout | float(9999.0) | round(2, 'floor') -%}
+            {%-       set _ = row.append(latency) -%}
+            {%-     endif -%}
+            {%-   endfor -%}
+            {%-   set _ = matrix.append(row) -%}
+            {%- endfor -%}
+            {{ matrix }}
+      ansible.builtin.copy:
+        dest: "{{ master_config_path }}"
+        content: |
+          {
+            "nodes": {{ master_config.nodes | from_yaml | to_json }},
+            "raw_latencies": {{ master_config.latency_matrix | from_yaml | to_json }}
+          }

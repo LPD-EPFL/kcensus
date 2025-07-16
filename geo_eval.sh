@@ -121,6 +121,50 @@ for r in range(1, MAJORITY + 1):
 END
 }
 
+function build_binaries() {
+  rustup target add x86_64-unknown-linux-musl
+  cargo build --target x86_64-unknown-linux-musl --release
+}
+
+get_regions() {
+  local type=$1
+  local size=$2
+  case "$type-$size" in
+    aws-random-3) echo "ap-southeast-3,ap-southeast-7,ap-east-1";;
+    aws-random-5) echo "us-west-2,mx-central-1,ap-southeast-3,ap-southeast-7,ap-east-1";;
+    aws-random-7) echo "us-west-2,ca-central-1,mx-central-1,me-central-1,ap-southeast-3,ap-southeast-7,ap-east-1";;
+    aws-random-9) echo "us-west-2,us-east-2,ca-central-1,mx-central-1,eu-west-3,me-central-1,ap-southeast-3,ap-southeast-7,ap-east-1";;
+    aws-random-11) echo "us-west-2,us-east-2,ca-central-1,mx-central-1,eu-west-3,eu-south-2,eu-south-1,me-central-1,ap-southeast-3,ap-southeast-7,ap-east-1";;
+    aws-random-13) echo "us-west-2,us-east-2,ca-central-1,mx-central-1,eu-west-3,eu-south-2,eu-south-1,eu-central-2,me-central-1,ap-southeast-3,ap-southeast-7,ap-east-1,af-south-1";;
+    aws-random-15) echo "us-west-2,us-east-2,ca-central-1,mx-central-1,eu-west-3,eu-south-2,eu-south-1,eu-north-1,eu-central-2,eu-central-1,me-central-1,ap-southeast-3,ap-southeast-7,ap-east-1,af-south-1";;
+    aws-random-17) echo "us-west-2,us-east-2,ca-central-1,mx-central-1,eu-west-3,eu-south-2,eu-south-1,eu-north-1,eu-central-2,eu-central-1,me-central-1,ap-southeast-3,ap-southeast-7,ap-southeast-2,ap-southeast-4,ap-east-1,af-south-1";;
+    aws-random-19) echo "us-west-2,us-west-1,us-east-2,ca-central-1,mx-central-1,eu-west-3,eu-west-2,eu-south-2,eu-south-1,eu-north-1,eu-central-2,eu-central-1,me-central-1,ap-southeast-3,ap-southeast-7,ap-southeast-2,ap-southeast-4,ap-east-1,af-south-1";;
+    aws-random-21) echo "us-west-2,us-west-1,us-east-2,ca-central-1,mx-central-1,eu-west-3,eu-west-2,eu-west-1,eu-south-2,eu-south-1,eu-north-1,eu-central-2,eu-central-1,me-south-1,me-central-1,ap-southeast-3,ap-southeast-7,ap-southeast-2,ap-southeast-4,ap-east-1,af-south-1";;
+    aws-random-23) echo "us-west-2,us-west-1,us-east-2,ca-central-1,mx-central-1,eu-west-3,eu-west-2,eu-west-1,eu-south-2,eu-south-1,eu-north-1,eu-central-2,eu-central-1,me-south-1,me-central-1,ap-south-2,ap-southeast-3,ap-southeast-7,ap-southeast-5,ap-southeast-2,ap-southeast-4,ap-east-1,af-south-1";;
+    aws-random-25) echo "us-west-2,us-west-1,us-east-2,ca-central-1,mx-central-1,eu-west-3,eu-west-2,eu-west-1,eu-south-2,eu-south-1,eu-north-1,eu-central-2,eu-central-1,me-south-1,me-central-1,ap-south-2,ap-south-1,ap-southeast-3,ap-southeast-7,ap-southeast-5,ap-southeast-2,ap-southeast-4,ap-northeast-1,ap-east-1,af-south-1";;
+    aws-random-27) echo "us-west-2,us-west-1,us-east-2,ca-central-1,mx-central-1,eu-west-3,eu-west-2,eu-west-1,eu-south-2,eu-south-1,eu-north-1,eu-central-2,eu-central-1,il-central-1,me-south-1,me-central-1,ap-south-2,ap-south-1,ap-southeast-3,ap-southeast-7,ap-southeast-5,ap-northeast-2,ap-southeast-2,ap-southeast-4,ap-northeast-1,ap-east-1,af-south-1";;
+    aws-random-29) echo "us-west-2,us-west-1,us-east-2,us-east-1,ca-central-1,mx-central-1,eu-west-3,eu-west-2,eu-west-1,eu-south-2,eu-south-1,eu-north-1,eu-central-2,eu-central-1,il-central-1,me-south-1,me-central-1,ap-south-2,ap-south-1,ap-southeast-3,ap-southeast-7,ap-southeast-5,ap-northeast-3,ap-northeast-2,ap-southeast-2,ap-southeast-4,ap-northeast-1,ap-east-1,af-south-1";;
+    aws-random-31) echo "us-west-2,us-west-1,us-east-2,us-east-1,ca-west-1,ca-central-1,mx-central-1,eu-west-3,eu-west-2,eu-west-1,eu-south-2,eu-south-1,eu-north-1,eu-central-2,eu-central-1,il-central-1,me-south-1,me-central-1,ap-south-2,ap-south-1,ap-southeast-1,ap-southeast-3,ap-southeast-7,ap-southeast-5,ap-northeast-3,ap-northeast-2,ap-southeast-2,ap-southeast-4,ap-northeast-1,ap-east-1,af-south-1";;
+    
+    aws-from-paris-3) echo "eu-west-3,eu-west-2,eu-central-2";;
+    aws-from-paris-5) echo "eu-west-3,eu-west-2,eu-west-1,eu-central-2,eu-central-1";;
+    aws-from-paris-7) echo "eu-west-3,eu-west-2,eu-west-1,eu-south-2,eu-south-1,eu-central-2,eu-central-1";;
+    aws-from-paris-9) echo "eu-west-3,eu-west-2,eu-west-1,eu-south-2,eu-south-1,eu-north-1,eu-central-2,eu-central-1,il-central-1";;
+    aws-from-paris-11) echo "us-east-1,eu-west-3,eu-west-2,eu-west-1,eu-south-2,eu-south-1,eu-north-1,eu-central-2,eu-central-1,il-central-1,me-south-1";;
+    aws-from-paris-13) echo "us-east-2,us-east-1,ca-central-1,eu-west-3,eu-west-2,eu-west-1,eu-south-2,eu-south-1,eu-north-1,eu-central-2,eu-central-1,il-central-1,me-south-1";;
+    aws-from-paris-15) echo "us-east-2,us-east-1,ca-central-1,eu-west-3,eu-west-2,eu-west-1,eu-south-2,eu-south-1,eu-north-1,eu-central-2,eu-central-1,il-central-1,me-south-1,me-central-1,ap-south-1";;
+    aws-from-paris-17) echo "us-west-2,us-east-2,us-east-1,ca-central-1,eu-west-3,eu-west-2,eu-west-1,eu-south-2,eu-south-1,eu-north-1,eu-central-2,eu-central-1,il-central-1,me-south-1,me-central-1,ap-south-2,ap-south-1";;
+    aws-from-paris-19) echo "us-west-2,us-west-1,us-east-2,us-east-1,ca-central-1,mx-central-1,eu-west-3,eu-west-2,eu-west-1,eu-south-2,eu-south-1,eu-north-1,eu-central-2,eu-central-1,il-central-1,me-south-1,me-central-1,ap-south-2,ap-south-1";;
+    aws-from-paris-21) echo "us-west-2,us-west-1,us-east-2,us-east-1,ca-west-1,ca-central-1,mx-central-1,eu-west-3,eu-west-2,eu-west-1,eu-south-2,eu-south-1,eu-north-1,eu-central-2,eu-central-1,il-central-1,me-south-1,me-central-1,ap-south-2,ap-south-1,af-south-1";;
+    aws-from-paris-23) echo "us-west-2,us-west-1,us-east-2,us-east-1,ca-west-1,ca-central-1,mx-central-1,eu-west-3,eu-west-2,eu-west-1,eu-south-2,eu-south-1,eu-north-1,eu-central-2,eu-central-1,il-central-1,me-south-1,me-central-1,ap-south-2,ap-south-1,ap-southeast-1,ap-southeast-5,af-south-1";;
+    aws-from-paris-25) echo "us-west-2,us-west-1,us-east-2,us-east-1,ca-west-1,ca-central-1,mx-central-1,eu-west-3,eu-west-2,eu-west-1,eu-south-2,eu-south-1,eu-north-1,eu-central-2,eu-central-1,il-central-1,me-south-1,me-central-1,ap-south-2,ap-south-1,ap-southeast-1,ap-southeast-3,ap-southeast-7,ap-southeast-5,af-south-1";;
+    aws-from-paris-27) echo "us-west-2,us-west-1,us-east-2,us-east-1,ca-west-1,ca-central-1,mx-central-1,eu-west-3,eu-west-2,eu-west-1,eu-south-2,eu-south-1,eu-north-1,eu-central-2,eu-central-1,il-central-1,me-south-1,me-central-1,ap-south-2,ap-south-1,ap-southeast-1,ap-southeast-3,ap-southeast-7,ap-southeast-5,ap-northeast-1,ap-east-1,af-south-1";;
+    aws-from-paris-29) echo "us-west-2,us-west-1,us-east-2,us-east-1,ca-west-1,ca-central-1,mx-central-1,eu-west-3,eu-west-2,eu-west-1,eu-south-2,eu-south-1,eu-north-1,eu-central-2,eu-central-1,il-central-1,me-south-1,me-central-1,ap-south-2,ap-south-1,ap-southeast-1,ap-southeast-3,ap-southeast-7,ap-southeast-5,ap-northeast-3,ap-northeast-2,ap-northeast-1,ap-east-1,af-south-1";;
+    aws-from-paris-31) echo "us-west-2,us-west-1,us-east-2,us-east-1,ca-west-1,ca-central-1,mx-central-1,eu-west-3,eu-west-2,eu-west-1,eu-south-2,eu-south-1,eu-north-1,eu-central-2,eu-central-1,il-central-1,me-south-1,me-central-1,ap-south-2,ap-south-1,ap-southeast-1,ap-southeast-3,ap-southeast-7,ap-southeast-5,ap-northeast-3,ap-northeast-2,ap-southeast-2,ap-southeast-4,ap-northeast-1,ap-east-1,af-south-1";;
+    *) echo "";;
+  esac
+}
+
 # No load, pure latency
 # exp-1 <=> 7.1
 function exp-1() {
@@ -140,13 +184,6 @@ function exp-1() {
 
     destroy "$varFile" "$EXPERIMENT_ID"
   done
-
-  (
-    cd graphs &&
-    source env.sh >/dev/null 2>&1 &&
-    python3 parse_geo_logs.py &&
-    python3 1-bars-merged.py -g 1
-  )
 
   echo "--- Finished Experiment 1 ---"
 }
@@ -174,13 +211,6 @@ function exp-2() {
 
   destroy "$varFile" "$EXPERIMENT_ID"
 
-  (
-    cd graphs &&
-    source env.sh >/dev/null 2>&1 &&
-    python3 parse_geo_logs.py &&
-    python3 2-cdfs-merged.py -g 1
-  )
-
   echo "--- Finished Experiment 2 ---"
 }
 
@@ -207,14 +237,98 @@ function exp-4() {
 
   destroy "$varFile" "$EXPERIMENT_ID"
 
-  (
-    cd graphs &&
-    source env.sh >/dev/null 2>&1 &&
-    python3 parse_geo_logs.py &&
-    python3 4-faults.py -c "$configName" -w "$writes" -r "$requests" -i round-robin -t 0 -s "$SPEEDUP" -g 1
-  )
-
   echo "--- Finished Experiment 4 ---"
+}
+
+function exp-3-5() {
+  echo "--- Starting Experiments 3 & 5: Scalability and Propagation ---"
+
+  local EXPERIMENT_ID="exp-3-5"
+  local varFile="deployment/terraform/regions/aws-all-31.tfvars"
+  local tmpDir="$(pwd)/.tmp_configs_${EXPERIMENT_ID}"
+  local masterConfigFile="${tmpDir}/master-config.json"
+
+  pushd graphs >/dev/null
+  source env.sh >/dev/null 2>&1
+  popd >/dev/null
+
+  # step 1: provision servers
+  provision "$varFile" "$EXPERIMENT_ID"
+
+  mkdir -p "$tmpDir"
+
+  # step 2: copy necessary files and generate master config file
+  echo "--> Preparing nodes and generating master config file"
+  (
+    cd deployment/ansible
+    ansible-playbook -i "inventory-${EXPERIMENT_ID}.ini" deploy_and_prep_exp3-5.yml \
+      -e "master_config_path=${masterConfigFile}"
+  )
+  echo "--> Master config created at ${masterConfigFile}"
+
+  local requests=10
+  for configs_type in aws-random aws-from-paris; do
+    for num_replicas in $(seq 3 2 31); do
+      local configName="${configs_type}-${num_replicas}"
+      local target_regions=$(get_regions "$configs_type" "$num_replicas")
+
+      # step 3.1: generate sub-config file for current experiment using master config
+      echo "--> Generating sub-config for ${configName} with ${num_replicas} nodes"
+      local subConfigFile="${tmpDir}/config-${configName}.toml"
+      local subInventoryFile="${tmpDir}/inventory-${configName}.ini"
+      
+      python3 deployment/ansible/scripts/generate_sub_config.py \
+        --master-config "$masterConfigFile" \
+        --regions "$target_regions" \
+        --out-config "$subConfigFile" \
+        --out-inventory "$subInventoryFile"
+      
+      echo "--> Customize and distribute configs for c=${configs_type}/${num_replicas}.toml"
+      (
+        cd deployment/ansible
+        ansible-playbook -i "${subInventoryFile}" prepare_configs.yml \
+          -e "config_path=${subConfigFile}" \
+          -e "master_config_path=${masterConfigFile}"
+      )
+
+      # step 3.2: run the scalability experiments
+      for writes in 1; do
+        for algo in "${ALGOS[@]}"; do
+            run_title="c=${configs_type}/${num_replicas}.toml/a=${algo}/w=${writes}/r=${requests}/i=round-robin/t=0/s=${SPEEDUP}/f="
+            resultPath="${ABSOLUTE_BASE_LOG_DIR}/${run_title}"
+            
+            echo "--> RUNNING: ${run_title}"
+            (
+              cd deployment/ansible
+              ansible-playbook -i "${subInventoryFile}" run_kcensus_sub_exp.yml \
+                -e "algo=${algo}" -e "writes=${writes}" -e "requests=${requests}" \
+                -e "ingress=round-robin" -e "throughput=0" -e "speedup=${SPEEDUP}" \
+                -e "config_path=${subConfigFile}" \
+                -e "result_path=${resultPath}" \
+                -e "master_config_path=${masterConfigFile}"
+            )
+        done
+      done
+
+      # step 3.3: run one propagation experiment per config
+      local graph_bench_title="c=${configs_type}/${num_replicas}.toml"
+      local graphResultPath="${ABSOLUTE_BASE_LOG_DIR}/${graph_bench_title}"
+      mkdir -p "$graphResultPath"
+      
+      echo "--> RUNNING Graph Bench: ${graph_bench_title}"
+      (
+        cd deployment/ansible
+        ansible-playbook -i "${subInventoryFile}" run_graph_bench_sub_exp.yml \
+          -e "config_path=${subConfigFile}" \
+          -e "result_path=${graphResultPath}"
+      )
+    done
+  done
+  
+  # step 4: destroy infrastructure
+  destroy "$varFile" "$EXPERIMENT_ID"
+
+  echo "--- Finished Experiments 3 & 5 ---"
 }
 
 

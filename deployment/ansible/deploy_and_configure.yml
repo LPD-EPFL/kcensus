@@ -1,3 +1,4 @@
+---
 # This playbook deploys the kcensus app, sets up Cassandra containers,
 # and calculates latencies between servers to generate config files.
 
