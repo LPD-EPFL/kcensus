@@ -9,10 +9,10 @@ use crate::consensus::{Consensus, ConsensusShard, ConsensusShardTrait};
 use crate::multi_sink::{MultiSink, ShardMultiSink};
 use log::{debug, info, trace};
 use message::RoundV;
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io;
-use std::rc::Rc;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 pub(crate) mod message;
 mod round_state;
@@ -352,7 +352,7 @@ impl PaxosFamily {
         mode: Mode,
         shard_count: usize,
     ) -> Self {
-        let sinks = Rc::new(RefCell::new(sinks));
+        let sinks = Arc::new(Mutex::new(sinks));
 
         Self {
             nb_nodes,

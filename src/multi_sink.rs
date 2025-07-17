@@ -6,10 +6,10 @@ use bit_set::BitSet;
 use futures::SinkExt;
 use log::debug;
 use serde::Serialize;
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io;
-use std::rc::Rc;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 use tokio_util::bytes::Bytes;
 
 pub struct MultiSink {
@@ -21,7 +21,7 @@ pub struct MultiSink {
 }
 
 pub struct ShardMultiSink {
-    pub multi_sink: Rc<RefCell<MultiSink>>,
+    pub multi_sink: Arc<Mutex<MultiSink>>,
     pub shard_id: usize,
 }
 
@@ -108,8 +108,9 @@ impl ShardMultiSink {
         msg: ConsensusMsg,
         value: Option<CommandBatch>,
     ) -> io::Result<()> {
-        let msg = self.build_msg(msg, value);
-        self.multi_sink.borrow_mut().broadcast(msg).await
+        let mut multi_sink = self.multi_sink.lock().await;
+        let msg = self.build_msg(msg, value, multi_sink.my_pid);
+        multi_sink.broadcast(msg).await
     }
 
     #[inline]
@@ -119,18 +120,16 @@ impl ShardMultiSink {
         value: Option<CommandBatch>,
         pid: usize,
     ) -> io::Result<()> {
-        let msg = self.build_msg(msg, value);
-        self.multi_sink.borrow_mut().send(msg, pid).await
+        let mut multi_sink = self.multi_sink.lock().await;
+        let msg = self.build_msg(msg, value, multi_sink.my_pid);
+        multi_sink.send(msg, pid).await
     }
 
     #[inline]
-    fn build_msg(&self, msg: ConsensusMsg, value: Option<CommandBatch>) -> Message {
+    fn build_msg(&self, msg: ConsensusMsg, value: Option<CommandBatch>, my_pid: usize) -> Message {
         Message::ConsensusM {
             shard: self.shard_id,
-            msg: ConsensusMessage {
-                msg,
-                src: self.multi_sink.borrow().my_pid,
-            },
+            msg: ConsensusMessage { msg, src: my_pid },
             value,
         }
     }

@@ -8,10 +8,10 @@ use crate::consensus::read_tracker::ReadTracker;
 use crate::consensus::{Consensus, ConsensusShard, ConsensusShardTrait};
 use crate::multi_sink::{MultiSink, ShardMultiSink};
 use log::{debug, trace};
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io;
-use std::rc::Rc;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 pub(crate) mod message;
 mod node_state;
@@ -19,7 +19,7 @@ pub mod propagation;
 mod round_state;
 
 pub struct KCensusSettings {
-    propagation_graphs: Rc<PropagationGraphs>,
+    propagation_graphs: Arc<PropagationGraphs>,
 }
 
 pub(crate) type KCensusShard = ConsensusShard<KCensusSettings, usize, KCensusRoundState>;
@@ -30,7 +30,7 @@ impl KCensusShard {
         my_pid: usize,
         sinks: ShardMultiSink,
         leader_priority: Vec<usize>,
-        propagation_graphs: Rc<PropagationGraphs>,
+        propagation_graphs: Arc<PropagationGraphs>,
     ) -> Self {
         assert!(my_pid < nb_nodes);
         Self {
@@ -416,8 +416,8 @@ impl KCensus {
         propagation_graphs: PropagationGraphs,
         shard_count: usize,
     ) -> Self {
-        let sinks = Rc::new(RefCell::new(sinks));
-        let propagation_graphs = Rc::new(propagation_graphs);
+        let sinks = Arc::new(Mutex::new(sinks));
+        let propagation_graphs = Arc::new(propagation_graphs);
         Self {
             nb_nodes,
             shards: (0..shard_count)

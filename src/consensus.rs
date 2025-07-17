@@ -7,12 +7,12 @@ use crate::message::MsgWithSource;
 use crate::multi_sink::{MultiSink, ShardMultiSink};
 use command::Command;
 use log::{debug, info};
-use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::io;
-use std::rc::Rc;
+use std::sync::Arc;
 use tokio::select;
 use tokio::sync::mpsc::{Receiver, Sender};
+use tokio::sync::Mutex;
 
 pub(crate) mod command;
 pub mod kcensus;
@@ -44,7 +44,7 @@ pub(crate) struct ConsensusShard<AlgoSettings, AlgoRound, AlgoRoundState> {
 pub(crate) struct Consensus<AlgoSettings, AlgoRound, AlgoRoundState> {
     nb_nodes: usize,
     shards: Vec<ConsensusShard<AlgoSettings, AlgoRound, AlgoRoundState>>,
-    sinks: Rc<RefCell<MultiSink>>,
+    sinks: Arc<Mutex<MultiSink>>,
 }
 
 pub(crate) trait ConsensusShardTrait {
@@ -106,7 +106,7 @@ where
                         None => {
                             debug_assert!(my_queued_commands.iter().all(|x| x.is_empty()));
                             done = true;
-                            self.sinks.borrow_mut().broadcast(Done).await?;
+                            self.sinks.lock().await.broadcast(Done).await?;
                             count_done += 1;
                             continue 'main_loop;
                         }
@@ -201,14 +201,14 @@ where
             }
         } // 'main_loop: loop
 
+        let sinks = self.sinks.lock().await;
         eval::log(
             "network-done",
             &format!(
                 "Sent {} messages ({} bytes)",
-                self.sinks.borrow().stats.msg_count,
-                self.sinks.borrow().stats.byte_count
+                sinks.stats.msg_count, sinks.stats.byte_count
             ),
-            &self.sinks.borrow().stats,
+            &sinks.stats,
         );
 
         new_client_commands_rx.close();
