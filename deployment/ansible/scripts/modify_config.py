@@ -1,19 +1,15 @@
 #!/usr/bin/env python3
-"""
-modify_config.py <input.toml> <sub_exp_id>
 
-Parses the TOML via tomllib, replaces addresses[sub_exp_id] → ["0.0.0.0", 8000],
-then writes back the full TOML document, preserving everything else.
-"""
+# parse input toml, replace current host ip with 0.0.0.0:8000
 
 import sys
-import tomllib
+import re
 
 def usage():
-    print("Usage: modify_config.py <input.toml> <sub_exp_id>", file=sys.stderr)
+    print("Usage: modify_config.py <input.toml> <sub_exp_id> <current_host_ip>", file=sys.stderr)
     sys.exit(1)
 
-if len(sys.argv) != 3:
+if len(sys.argv) != 4:
     usage()
 
 input_path = sys.argv[1]
@@ -22,36 +18,45 @@ try:
 except ValueError:
     usage()
 
-text = open(input_path, 'rb').read()
-conf = tomllib.loads(text.decode('utf-8'))
-addrs = conf.get('addresses')
-if not isinstance(addrs, list):
-    print("ERROR: no top level 'addresses' list found", file=sys.stderr)
-    sys.exit(1)
-if sub_id < 0 or sub_id >= len(addrs):
-    print(f"ERROR: sub_exp_id {sub_id} is out of range (0..{len(addrs)-1})",
-          file=sys.stderr)
-    sys.exit(1)
+# TODO: remove this since we don't use it anymore
+current_host_ip = sys.argv[3]
 
+with open(input_path, 'r') as f:
+    content = f.read()
 
-conf['addresses'][sub_id] = ["0.0.0.0", 8000]
+lines = content.split('\n')
+output_lines = []
+in_addresses = False
+address_count = 0
+skip_lines = 0
 
-def dump_toml(d):
-    lines = []
-    for key in d:
-        val = d[key]
-        if isinstance(val, list) and key == 'addresses':
-            lines.append(f"{key} = [")
-            for entry in val:
-                ip, port = entry
-                lines.append(f"  [ \"{ip}\", {port}, ],")
-            lines.append("]")
+for line in lines:
+    if skip_lines > 0:
+        skip_lines -= 1
+        continue
+    if line.strip().startswith('addresses = ['):
+        in_addresses = True
+        output_lines.append(line)
+        continue
+    elif in_addresses and line.strip() == ']':
+        in_addresses = False
+        output_lines.append(line)
+        continue
+    elif in_addresses:
+        if line.strip().startswith('['):
+            if address_count == sub_id:
+                output_lines.append('    [')
+                output_lines.append('        "0.0.0.0",')
+                output_lines.append('        8000,')
+                output_lines.append('    ],')
+                skip_lines = 3
+                address_count += 1
+            else:
+                output_lines.append(line)
+                address_count += 1
         else:
-            import json
-            js = json.dumps(val, indent=2)
-            js = js.replace('true', 'true').replace('false', 'false')
-            lines.append(f"{key} = {js}")
-        lines.append("")
-    return "\n".join(lines)
+            output_lines.append(line)
+    else:
+        output_lines.append(line)
 
-print(dump_toml(conf), end="")
+print('\n'.join(output_lines), end='')

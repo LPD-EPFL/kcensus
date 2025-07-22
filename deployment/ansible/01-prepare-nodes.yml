@@ -1,0 +1,8 @@
+---
+- name: Prepare all nodes (Cassandra, Binaries)
+  hosts: kcensus_nodes
+  gather_facts: no
+  strategy: free
+  serial: 0
+  roles:
+    - kcensus_setup

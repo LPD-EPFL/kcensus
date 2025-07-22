@@ -1,19 +1,12 @@
 ---
-- name: Run a graph_bench sub-experiment
+- name: Run graph_bench experiment
   hosts: all
   gather_facts: no
   vars:
-    config_path: "/tmp/config.toml"
     result_path: "./results_default"
     num_faults: 0
 
   tasks:
-    - name: Ensure sub-config is present
-      ansible.builtin.copy:
-        src: "{{ config_path }}"
-        dest: /home/ec2-user/kcensus_app/config.toml
-        mode: '0644'
-
     - name: Run graph_bench on the first node
       run_once: true
       ansible.builtin.shell:

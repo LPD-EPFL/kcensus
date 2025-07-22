@@ -1,0 +1,19 @@
+---
+- name: Run kcensus Experiment and Collect Results
+  hosts: all
+  gather_facts: no
+  strategy: free
+  serial: 0
+  vars:
+    # default values: will always be overriden
+    algo: "k-census"
+    writes: "1" 
+    requests: "100"
+    ingress: "round-robin"
+    throughput: "0"
+    speedup: "1"
+    faults: ""
+    result_path: "./results_default"
+    
+  roles:
+    - kcensus_run

@@ -1,0 +1,42 @@
+---
+- name: Set sub_exp_id for regular inventory (fallback to host index)
+  set_fact:
+    sub_exp_id: "{{ sub_exp_id | default(groups['kcensus_nodes'].index(inventory_hostname) if 'kcensus_nodes' in groups else groups['all'].index(inventory_hostname)) }}"
+    cassandra_port: "{{ cassandra_port | default(9041 + (groups['kcensus_nodes'].index(inventory_hostname) if 'kcensus_nodes' in groups else groups['all'].index(inventory_hostname)) + 1) }}"
+
+- name: Start kcensus process in the background
+  ansible.builtin.shell:
+    cmd: >
+      /usr/bin/time -f "[time] Memory(KB): %M"
+      ./kcensus --config config.toml -p {{ sub_exp_id }}
+      -d 127.0.0.1:{{ cassandra_port }}
+      -a "{{ algo }}"
+      -w "{{ writes }}"
+      -r "{{ requests }}"
+      -i "{{ ingress }}"
+      -t "{{ throughput }}"
+      -s "{{ speedup }}"
+      {{ "-f " + faults if faults else "" }}
+    chdir: /home/ec2-user/kcensus_app
+  async: 7200
+  poll: 0
+  register: kcensus_async_start
+
+- name: Wait for kcensus process to finish
+  ansible.builtin.async_status:
+    jid: "{{ kcensus_async_start.ansible_job_id }}"
+  register: job_result
+  until: job_result.finished
+  retries: 600
+  delay: 12
+
+- name: Save output from each server
+  delegate_to: localhost
+  ansible.builtin.copy:
+    dest: "{{ result_path }}/server_{{ sub_exp_id }}.log"
+    content: |
+      STDOUT:
+      {{ job_result.stdout | default('NO STDOUT CAPTURED') }}
+
+      STDERR:
+      {{ job_result.stderr | default('NO STDERR CAPTURED') }}

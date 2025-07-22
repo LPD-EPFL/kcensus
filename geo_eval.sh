@@ -18,6 +18,12 @@ CONFIGS["aws-world-ring-13"]="deployment/terraform/regions/world-ring-13.tfvars"
 CONFIGS["aws-world-ring-9"]="deployment/terraform/regions/world-ring-9.tfvars"
 CONFIGS["aws-exp-6"]="deployment/terraform/regions/one.tfvars"
 
+function activate_env() {
+  pushd graphs >/dev/null
+  source env.sh >/dev/null 2>&1
+  popd >/dev/null
+}
+
 function digits() {
   echo "$1" | tr -d -c 0-9
 }
@@ -39,10 +45,11 @@ function provision() {
 function deploy() {
   local expId="$1"
   local inventoryFile="inventory-${expId}.ini"
-  echo "--> Deploying code and config using inventory: ${inventoryFile}..."
+  echo "--> Deploying code and preparing nodes using inventory: ${inventoryFile}..."
   (
     cd deployment/ansible
-    ansible-playbook -i "${inventoryFile}" deploy_and_configure.yml
+    ansible-playbook -i "${inventoryFile}" 01-prepare-nodes.yml
+    ansible-playbook -i "${inventoryFile}" 02-generate-configs.yml
   )
   echo "--> Deployment and configuration complete."
 }
@@ -68,7 +75,6 @@ function run() {
   local throughput="$7"
   local faults="${8:-}"
 
-
   local inventoryFile="inventory-${expId}.ini"
   local title="c=${configName}/a=${algo}/w=${writes}/r=${requests}/i=${ingress}/t=${throughput}/s=${SPEEDUP}/f=${faults}"
   local resultPath="${ABSOLUTE_BASE_LOG_DIR}/${title}"
@@ -78,7 +84,7 @@ function run() {
 
   (
     cd deployment/ansible
-    ansible-playbook -i "${inventoryFile}" run_experiment.yml \
+    ansible-playbook -i "${inventoryFile}" 03-run-experiment.yml \
       -e "algo=${algo}" \
       -e "writes=${writes}" \
       -e "requests=${requests}" \
@@ -97,7 +103,7 @@ function cleanup_processes() {
   echo "--> Cleaning up stray processes on all nodes..."
   (
     cd deployment/ansible
-    ansible-playbook -i "${inventoryFile}" kill_processes.yml
+    ansible-playbook -i "${inventoryFile}" 04-kill-processes.yml
   )
   echo "--> Cleanup complete."
 }
@@ -127,6 +133,7 @@ function build_binaries() {
   cargo build --target x86_64-unknown-linux-musl --release
 }
 
+# TODO: put this in a separate file
 get_regions() {
   local type=$1
   local size=$2
@@ -215,7 +222,6 @@ function exp-2() {
   echo "--- Finished Experiment 2 ---"
 }
 
-
 # Faults
 # exp-4 <=> 7.2
 function exp-4() {
@@ -249,24 +255,21 @@ function exp-3-5() {
   local tmpDir="$(pwd)/.tmp_configs_${EXPERIMENT_ID}"
   local masterConfigFile="${tmpDir}/master-config.json"
 
-  pushd graphs >/dev/null
-  source env.sh >/dev/null 2>&1
-  popd >/dev/null
-
   # step 1: provision servers
   provision "$varFile" "$EXPERIMENT_ID"
-
   mkdir -p "$tmpDir"
 
-  # step 2: copy necessary files and generate master config file
+  # step 2: prepare nodes and generate master config file
   echo "--> Preparing nodes and generating master config file"
   (
     cd deployment/ansible
-    ansible-playbook -i "inventory-${EXPERIMENT_ID}.ini" deploy_and_prep_exp3-5.yml \
+    ansible-playbook -i "inventory-${EXPERIMENT_ID}.ini" 01-prepare-nodes.yml
+    ansible-playbook -i "inventory-${EXPERIMENT_ID}.ini" 02-generate-configs.yml \
       -e "master_config_path=${masterConfigFile}"
   )
   echo "--> Master config created at ${masterConfigFile}"
 
+  # step 3: run stuff
   local requests=10
   for configs_type in aws-random aws-from-paris; do
     for num_replicas in $(seq 3 2 31); do
@@ -283,35 +286,34 @@ function exp-3-5() {
         --regions "$target_regions" \
         --out-config "$subConfigFile" \
         --out-inventory "$subInventoryFile"
-      
-      echo "--> Customize and distribute configs for c=${configs_type}/${num_replicas}.toml"
+
+      # step 3.2: customize and distribute config files to each server (once per server set)
+      echo "--> Customizing and distributing config files for ${configName}"
       (
         cd deployment/ansible
-        ansible-playbook -i "${subInventoryFile}" prepare_configs.yml \
-          -e "config_path=${subConfigFile}" \
-          -e "master_config_path=${masterConfigFile}"
+        ansible-playbook -i "${subInventoryFile}" 03-prepare-sub-configs.yml \
+          -e "sub_config_file=${subConfigFile}"
       )
 
-      # step 3.2: run the scalability experiments
+      # step 3.3: run the scalability experiments
       for writes in 1; do
         for algo in "${ALGOS[@]}"; do
             run_title="c=${configs_type}/${num_replicas}.toml/a=${algo}/w=${writes}/r=${requests}/i=round-robin/t=0/s=${SPEEDUP}/f="
             resultPath="${ABSOLUTE_BASE_LOG_DIR}/${run_title}"
+            mkdir -p "$resultPath"
             
             echo "--> RUNNING: ${run_title}"
             (
               cd deployment/ansible
-              ansible-playbook -i "${subInventoryFile}" run_kcensus_sub_exp.yml \
+              ansible-playbook -i "${subInventoryFile}" 03-run-experiment.yml \
                 -e "algo=${algo}" -e "writes=${writes}" -e "requests=${requests}" \
                 -e "ingress=round-robin" -e "throughput=0" -e "speedup=${SPEEDUP}" \
-                -e "config_path=${subConfigFile}" \
-                -e "result_path=${resultPath}" \
-                -e "master_config_path=${masterConfigFile}"
+                -e "result_path=${resultPath}" -e "sub_config_file=${subConfigFile}"
             )
         done
       done
 
-      # step 3.3: run one propagation experiment per config
+      # step 3.4: run one propagation experiment per config
       local graph_bench_title="c=${configs_type}/${num_replicas}.toml"
       local graphResultPath="${ABSOLUTE_BASE_LOG_DIR}/${graph_bench_title}"
       mkdir -p "$graphResultPath"
@@ -319,8 +321,7 @@ function exp-3-5() {
       echo "--> RUNNING Graph Bench: ${graph_bench_title}"
       (
         cd deployment/ansible
-        ansible-playbook -i "${subInventoryFile}" run_graph_bench_sub_exp.yml \
-          -e "config_path=${subConfigFile}" \
+        ansible-playbook -i "${subInventoryFile}" 03-run-graph-bench.yml \
           -e "result_path=${graphResultPath}"
       )
     done
@@ -333,6 +334,8 @@ function exp-3-5() {
 }
 
 function exp-6() {
+  # TODO: fix this experiment (used to work in previous iteration)
+  
   echo "--- Starting Experiment 6: Resources ---"
 
   local configName="aws-exp-6"
@@ -355,12 +358,13 @@ function exp-6() {
   echo "--- Finished Experiment 6 ---"
 }
 
-
 function main() {
   echo "Starting Geo-Replicated Evaluation."
-
   mkdir -p "${BASE_LOG_DIR}"
   ABSOLUTE_BASE_LOG_DIR="$(cd "${BASE_LOG_DIR}" && pwd)"
+  activate_env
+
+
 
 }
 

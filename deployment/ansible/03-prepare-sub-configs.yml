@@ -1,0 +1,26 @@
+---
+- name: Prepare and distribute customized sub-configs
+  hosts: all
+  gather_facts: no
+  strategy: free
+  serial: 0
+  vars:
+    sub_config_file: "/tmp/config-all.toml"
+    
+  tasks:
+    - name: Generate personalized config for current host
+      delegate_to: localhost
+      run_once: false
+      ansible.builtin.shell: |
+        python3 {{ playbook_dir }}/scripts/modify_config.py \
+          {{ sub_config_file }} \
+          {{ sub_exp_id }} \
+          {{ inventory_hostname }}
+      register: personalized_config
+      changed_when: false
+
+    - name: Push personalized config.toml to remote host
+      ansible.builtin.copy:
+        dest: /home/ec2-user/kcensus_app/config.toml
+        mode: '0644'
+        content: "{{ personalized_config.stdout }}"
