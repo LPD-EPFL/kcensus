@@ -105,7 +105,11 @@ impl ConsensusShardTrait for KCensusShard {
 
                 // Can commit ?
                 // TODO: Make can_commit faster when using graph
-                if self.round_state.i_am_proposer() && self.round_state.can_commit() {
+                if self.round_state.i_am_proposer()
+                    && self
+                        .round_state
+                        .can_commit(Some(&self.settings.propagation_graphs))
+                {
                     debug_assert!(!with_value); // can't be my value -> there would be a conflict
                     let v = self.round_state.get_my_v().unwrap();
                     self.sinks.broadcast(Commit { slot, v }, None).await?;
