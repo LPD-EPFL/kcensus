@@ -134,7 +134,7 @@ pub async fn run() -> io::Result<()> {
     ));
 
     let ((client, mut new_client_request_rx), (app, committed_request_tx)) =
-        cassandra::App::new(args.db, args.speedup, my_pid).await;
+        cassandra::App::new(args.db, args.speedup, my_pid, args.keys).await;
 
     let start = Instant::now();
 

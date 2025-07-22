@@ -4,6 +4,7 @@ use crate::eval;
 use crate::message::{Message, MsgWithSource};
 use crate::multi_sink::MultiSink;
 use crate::topology::Topology;
+use futures::future::join_all;
 use futures::StreamExt;
 use log::trace;
 use rand_distr::{Distribution, Exp};
@@ -13,8 +14,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Semaphore};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::{pin, select};
 use tokio_stream::Stream;
@@ -25,12 +27,23 @@ pub enum Request {
     Put {
         key: String,
         value: String,
+        shard: u64,
         request_id: u64,
     },
     Get {
         key: String,
+        shard: u64,
         request_id: u64,
     },
+}
+
+impl Request {
+    pub fn shard(&self) -> u64 {
+        match self {
+            Request::Put { shard, .. } => *shard,
+            Request::Get { shard, .. } => *shard,
+        }
+    }
 }
 
 #[derive(Serialize, Debug)]
@@ -56,6 +69,67 @@ pub struct PreparedHandler {
     session: Session,
     put_ps: PreparedStatement,
     get_ps: PreparedStatement,
+}
+
+// Structure for managing parallel execution with per-shard ordering
+pub struct ParallelCassandraExecutor {
+    // Per-shard channels to maintain ordering within each shard
+    shard_senders: Vec<Sender<(Request, Option<Sender<Response>>)>>,
+    shard_join_handles: Vec<tokio::task::JoinHandle<()>>,
+    global_semaphore: Arc<Semaphore>,
+}
+
+impl ParallelCassandraExecutor {
+    pub fn new(handler: PreparedHandler, shards: usize) -> Self {
+        let global_semaphore = Arc::new(Semaphore::new(256));
+        let mut shard_senders = Vec::with_capacity(shards);
+        let mut shard_join_handles = Vec::with_capacity(shards);
+
+        let handler = Arc::new(handler);
+        
+        // Create per-shard channels and spawn workers
+        for _shard_id in 0..shards {
+            let (tx, mut rx) = mpsc::channel::<(Request, Option<Sender<Response>>)>(32);
+            shard_senders.push(tx);
+            
+            // Clone necessary resources for the worker
+            let handler = handler.clone();
+            let semaphore = global_semaphore.clone();
+            
+            // Spawn per-shard worker to maintain ordering
+            let handle = tokio::spawn(async move {
+                while let Some((request, response_tx)) = rx.recv().await {
+                    // Acquire permit from global semaphore
+                    let _permit = semaphore.acquire().await.expect("Semaphore was closed");
+                    
+                    // Execute the request directly
+                    let response = handler.execute(request).await;
+                    
+                    // Send response back
+                    if let Some(response_tx) = response_tx {
+                        // If a response channel was provided, send the response
+                        response_tx.send(response).await.expect("Server failed to enqueue client Response");
+                    };
+                    // Permit is automatically released when _permit is dropped
+                }
+            });
+            shard_join_handles.push(handle);
+        }
+        
+        Self {
+            shard_senders,
+            global_semaphore,
+            shard_join_handles,
+        }
+    }
+
+    pub async fn execute(&self, request: Request, response_tx: Option<Sender<Response>>) {
+        // Send request to the appropriate shard
+        self.shard_senders[request.shard() as usize]
+            .send((request, response_tx))
+            .await
+            .expect("Failed to send request to shard worker");
+    }
 }
 
 impl Handler {
@@ -95,6 +169,7 @@ impl Handler {
             .prepare("SELECT value FROM kvstore.kv_pairs WHERE key = ?;")
             .await
             .expect("Cassandra failed to prepare get statement");
+        
         PreparedHandler {
             session: self.session,
             put_ps,
@@ -129,6 +204,7 @@ impl PreparedHandler {
                 key,
                 value,
                 request_id,
+                ..
             } => {
                 self.put(&key, &value).await;
                 Response::Put {
@@ -137,7 +213,9 @@ impl PreparedHandler {
                     request_id,
                 }
             }
-            Request::Get { key, request_id } => Response::Get {
+            Request::Get {
+                key, request_id, ..
+            } => Response::Get {
                 value: self.get(&key).await,
                 key,
                 request_id,
@@ -286,6 +364,7 @@ impl Client {
                 &Request::Put {
                     key: format!("key{}", key),
                     value: format!("v{}.{}!", self.my_pid, request_id),
+                    shard: key as u64,
                     request_id,
                 },
             )
@@ -295,6 +374,7 @@ impl Client {
                 key,
                 &Request::Get {
                     key: format!("key{}", key),
+                    shard: key as u64,
                     request_id,
                 },
             )
@@ -469,7 +549,7 @@ struct ExecutedEvent {
 
 pub struct App {
     my_pid: usize,
-    cassandra_handler: Option<PreparedHandler>,
+    parallel_executor: Option<ParallelCassandraExecutor>,
     committed_request_rx: Receiver<Command>,
     client_response_tx: Sender<Response>,
 }
@@ -479,14 +559,17 @@ impl App {
         db: Option<String>,
         speedup: u32,
         my_pid: usize,
+        shards: usize,
     ) -> ((Client, Receiver<Command>), (Self, Sender<Command>)) {
-        let cassandra_handler = if let Some(uri) = db {
+        let parallel_executor = if let Some(uri) = db {
             // docker run --name cassandra -p 9042:9042 -d cassandra
             // -db 127.0.0.1:9042
             // docker stop cassandra && docker rm cassandra
             let cassandra = Handler::new(&uri).await;
             cassandra.reset_database().await;
-            cassandra.prepare().await.into()
+            let handler = cassandra.prepare().await;
+            let executor = ParallelCassandraExecutor::new(handler, shards);
+            Some(executor)
         } else {
             None
         };
@@ -495,7 +578,7 @@ impl App {
         let (committed_request_tx, committed_request_rx) = mpsc::channel::<Command>(1);
         let app = Self {
             my_pid,
-            cassandra_handler,
+            parallel_executor,
             committed_request_rx,
             client_response_tx,
         };
@@ -507,33 +590,46 @@ impl App {
         while let Some(command) = self.committed_request_rx.recv().await {
             let command: CommittedCommand<Request> = command.into();
             trace!("About to execute committed request: {:?}", command);
-            let response = if let Some(cassandra_handler) = self.cassandra_handler.as_ref() {
-                cassandra_handler.execute(command.app_request).await
+            if let Some(parallel_executor) = self.parallel_executor.as_ref() {
+                // Use parallel executor for Cassandra
+                parallel_executor.execute(command.app_request, if command.proposer == self.my_pid {
+                    Some(self.client_response_tx.clone())
+                } else {
+                    None
+                }).await
             } else {
-                // We mock Cassandra
-                match command.app_request {
+                let response = match command.app_request {
                     Request::Put {
                         key,
                         value,
                         request_id,
+                        ..
                     } => Response::Put {
                         key,
                         value,
                         request_id,
                     },
-                    Request::Get { key, request_id } => Response::Get {
+                    Request::Get {
+                        key, request_id, ..
+                    } => Response::Get {
                         key,
                         value: None,
                         request_id,
                     },
+                };
+                if command.proposer == self.my_pid {
+                    self.client_response_tx
+                        .send(response)
+                        .await
+                        .expect("Server failed to enqueue client Response");
                 }
-            };
-            if command.proposer == self.my_pid {
-                self.client_response_tx
-                    .send(response)
-                    .await
-                    .expect("Server failed to enqueue client Response");
             }
+        }
+        if let Some(mut parallel_executor) = self.parallel_executor {
+            // Ensure all pending requests are processed before exiting
+            parallel_executor.shard_senders.clear();
+            join_all(parallel_executor.shard_join_handles).await;
+            parallel_executor.global_semaphore.close();
         }
     }
 }
