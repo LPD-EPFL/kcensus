@@ -334,8 +334,6 @@ function exp-3-5() {
 }
 
 function exp-6() {
-  # TODO: fix this experiment (used to work in previous iteration)
-  
   echo "--- Starting Experiment 6: Resources ---"
 
   local configName="aws-exp-6"
@@ -353,7 +351,11 @@ function exp-6() {
 
   destroy "$varFile" "$EXPERIMENT_ID"
 
-  # TODO: unarchive results and merge them
+  echo "--> Processing and merging experiment results..."
+  local archive="${ABSOLUTE_BASE_LOG_DIR}/exp6_logs.tar.gz"
+  echo "--> Extracting and merging $archive..."
+  tar -xzf "$archive" -C "${ABSOLUTE_BASE_LOG_DIR}" --strip-components=1
+  echo "--> Results successfully merged into ${ABSOLUTE_BASE_LOG_DIR}"
 
   echo "--- Finished Experiment 6 ---"
 }
@@ -364,7 +366,7 @@ function main() {
   ABSOLUTE_BASE_LOG_DIR="$(cd "${BASE_LOG_DIR}" && pwd)"
   activate_env
 
-
+  
 
 }
 

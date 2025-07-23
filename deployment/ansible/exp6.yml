@@ -8,8 +8,8 @@
     local_binary_path: "../../target/x86_64-unknown-linux-musl/release/kcensus"
     local_configs_path: "./configs/"
     local_script_path: "./exp6.sh"
-    local_results_dir: "./experiment_results"
-    remote_work_dir: "/home/ec2-user/kcensus_run_{{ ansible_date_time.iso8601 }}"
+    local_results_dir: "../../logs"
+    remote_work_dir: "/home/ec2-user/kcensus_app"
 
   tasks:
     - name: Fail if required local files are missing
@@ -64,5 +64,5 @@
     - name: Fetch the compressed logs archive to the local machine
       ansible.builtin.fetch:
         src: "{{ remote_work_dir }}/logs.tar.gz"
-        dest: "{{ local_results_dir }}/"
+        dest: "{{ local_results_dir }}/exp6_logs.tar.gz"
         flat: yes
