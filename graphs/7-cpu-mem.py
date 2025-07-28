@@ -54,6 +54,13 @@ for experiment in ALGORITHMS:
         assert (
             len(logs["time"]) == num_replicas
         ), f'Some replicas ({num_replicas - len(logs["time"])} out of {num_replicas}) did not report CPU+mem stats'
+
+        flattened_output = defaultdict(list)
+        for category, pid_data in logs.items():
+            for pid, items in pid_data.items():
+                flattened_output[category].extend(items)
+        logs = flattened_output
+
         cpu = sum(map(lambda log: log["user"] + log["system"], logs["time"]))
         # cpu = compute_average(logs['time'], lambda log: log['user'] + log['system'])
         mem = compute_average(logs["time"], lambda log: log["memory"] * 1024)

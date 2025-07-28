@@ -68,6 +68,13 @@ for p in range(3):
             faults=faults,
             stop_at=stop_at,
         )
+
+        flattened_output = defaultdict(list)
+        for category, pid_data in logs.items():
+            for pid, items in pid_data.items():
+                flattened_output[category].extend(items)
+        logs = flattened_output
+
         average = compute_average(
             logs["executed"], lambda log: duration_to_ms(log["latency"])
         )
@@ -103,6 +110,13 @@ logs_a = parse(
     faults=faults,
     stop_at=stop_at,
 )
+
+flattened_output = defaultdict(list)
+for category, pid_data in logs_a.items():
+    for pid, items in pid_data.items():
+        flattened_output[category].extend(items)
+logs_a = flattened_output
+
 logs_b = parse(
     algo="k-census",
     config=config,
@@ -114,6 +128,13 @@ logs_b = parse(
     faults=faults,
     stop_at=stop_at,
 )
+
+flattened_output = defaultdict(list)
+for category, pid_data in logs_b.items():
+    for pid, items in pid_data.items():
+        flattened_output[category].extend(items)
+logs_b = flattened_output
+
 percentiles_a = compute_percentiles(
     logs_a["executed"], lambda log: duration_to_ms(log["latency"])
 )
