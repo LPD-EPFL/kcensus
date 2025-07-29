@@ -89,6 +89,24 @@ for c in range(3):
             (min_replica_avg, max_replica_avg),
             (percentiles[1], percentiles[5], percentiles[95], percentiles[99])
         )
+        if config == "aws-world-ring-13":
+            regions = ["us-west-2", "ca-west-1", "ca-central-1",
+                    "eu-west-3", "eu-west-2", "eu-west-1", "me-south-1",
+                    "ap-south-2", "ap-south-1", "ap-southeast-1",
+                    "ap-northeast-2", "ap-northeast-1", "ap-east-1"]
+        elif config == "aws-europe-7":
+            regions = ["eu-west-3", "eu-west-1", "eu-south-2", "eu-south-1",
+                    "eu-north-1", "eu-central-2", "eu-central-1"]
+        elif config == "aws-north-america-7":
+            regions = ["us-west-2", "us-west-1", "us-east-2", "us-east-1",
+                    "ca-west-1", "ca-central-1", "mx-central-1"]
+        regions.sort()
+        for pid, region in enumerate(regions):
+            if pid in logs["executed"] and logs["executed"][pid]:
+                region_avg = compute_average(
+                    logs["executed"][pid], lambda log: duration_to_ms(log["latency"])
+                )
+                print(region, region_avg)
         xs.append(i)
         ys.append(average)
         delta_ys_top.append(max_replica_avg - average)
