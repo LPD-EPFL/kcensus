@@ -68,28 +68,37 @@ for c in range(3):
             speedup=speedup,
             faults=faults,
         )
+
+        all_executed = []
+        for pid_data in logs["executed"].values():
+            all_executed.extend(pid_data)
         average = compute_average(
+            all_executed, lambda log: duration_to_ms(log["latency"])
+        )
+        replica_averages = compute_replica_averages(
             logs["executed"], lambda log: duration_to_ms(log["latency"])
         )
+        min_replica_avg = min(replica_averages) if replica_averages else average
+        max_replica_avg = max(replica_averages) if replica_averages else average
         percentiles = compute_percentiles(
-            logs["executed"], lambda log: duration_to_ms(log["latency"])
+            all_executed, lambda log: duration_to_ms(log["latency"])
         )
-        MOUSTACHES = (5, 95)
         print(
             experiment,
             average,
-            (percentiles[MOUSTACHES[0]], percentiles[MOUSTACHES[1]]),
+            (min_replica_avg, max_replica_avg),
+            (percentiles[1], percentiles[5], percentiles[95], percentiles[99])
         )
         xs.append(i)
         ys.append(average)
-        delta_ys_top.append(percentiles[MOUSTACHES[1]] - average)
-        delta_ys_bottom.append(average - percentiles[MOUSTACHES[0]])
+        delta_ys_top.append(max_replica_avg - average)
+        delta_ys_bottom.append(average - min_replica_avg)
 
         labels.append(
             ALGORITHMS[experiment]["label"].replace(" ", "\n").replace("-", "-\n")
         )
         colors.append(lighten_color(ALGORITHMS[experiment]["color"]))
-        text_y = percentiles[MOUSTACHES[1]]  # average / 2
+        text_y = max_replica_avg  # average / 2
         plot.text(
             i,
             text_y,
