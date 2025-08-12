@@ -18,6 +18,23 @@ CONFIGS["aws-world-ring-13"]="deployment/terraform/regions/world-ring-13.tfvars"
 CONFIGS["aws-world-ring-9"]="deployment/terraform/regions/world-ring-9.tfvars"
 CONFIGS["aws-exp-6"]="deployment/terraform/regions/one.tfvars"
 
+function show_help() {
+    cat << EOF
+Usage: $0 [COMMAND]
+
+Available commands:
+  exp-1             Run Experiment 1: Pure Latency
+  exp-2             Run Experiment 2: Latency under load
+  exp-3-5           Run Experiments 3 & 5: Scalability and Propagation
+  exp-4             Run Experiment 4: Faults
+  exp-6             Run Experiment 6: Resources
+  build             Build binaries
+  all               Run all experiments
+  help/-h/--help    Show help
+
+EOF
+}
+
 function activate_env() {
   pushd graphs >/dev/null
   source env.sh >/dev/null 2>&1
@@ -360,14 +377,65 @@ function exp-6() {
   echo "--- Finished Experiment 6 ---"
 }
 
-function main() {
-  echo "Starting Geo-Replicated Evaluation."
+function init_environment() {
+  echo "Initializing environment..."
   mkdir -p "${BASE_LOG_DIR}"
   ABSOLUTE_BASE_LOG_DIR="$(cd "${BASE_LOG_DIR}" && pwd)"
   activate_env
-
-  
-
 }
 
-main
+function run_all_experiments() {
+  echo "Running All Experiments"
+  exp-1
+  exp-2
+  exp-4
+  exp-3-5
+  exp-6
+}
+
+function main() {
+  if [[ $# -eq 0 ]]; then
+    show_help
+    exit 0
+  fi
+
+  init_environment
+
+  local command="$1"
+  shift
+
+  case "$command" in
+    "exp-1")
+      exp-1
+      ;;
+    "exp-2")
+      exp-2
+      ;;
+    "exp-3-5")
+      exp-3-5
+      ;;
+    "exp-4")
+      exp-4
+      ;;
+    "exp-6")
+      exp-6
+      ;;
+    "build")
+      build_binaries
+      ;;
+    "all")
+      run_all_experiments
+      ;;
+    "help"|"-h"|"--help")
+      show_help
+      ;;
+    *)
+      echo "Error: Unknown command '$command'"
+      echo ""
+      show_help
+      exit 1
+      ;;
+  esac
+}
+
+main "$@"
