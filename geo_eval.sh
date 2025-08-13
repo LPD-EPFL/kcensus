@@ -28,9 +28,12 @@ Available commands:
   exp-3-5           Run Experiments 3 & 5: Scalability and Propagation
   exp-4             Run Experiment 4: Faults
   exp-6             Run Experiment 6: Resources
-  build             Build binaries
   all               Run all experiments
+  destroy           Destroy infrastructure for a given experiment
   help/-h/--help    Show help
+
+destroy usage:
+  $0 destroy <terraform-var-file> <experiment-id>
 
 EOF
 }
@@ -400,6 +403,7 @@ function main() {
   fi
 
   init_environment
+  build_binaries
 
   local command="$1"
   shift
@@ -420,11 +424,15 @@ function main() {
     "exp-6")
       exp-6
       ;;
-    "build")
-      build_binaries
-      ;;
     "all")
       run_all_experiments
+      ;;
+    "destroy")
+      if [[ $# -ne 2 ]]; then
+        echo "Usage: $0 destroy <terraform-var-file> <experiment-id>"
+        exit 1
+      fi
+      destroy "$1" "$2"
       ;;
     "help"|"-h"|"--help")
       show_help
