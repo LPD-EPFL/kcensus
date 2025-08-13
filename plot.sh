@@ -76,13 +76,76 @@ function plot-6() {
   )
 }
 
-activate_env
+function show_help() {
+    cat << EOF
+Usage: $0 [COMMAND]
 
+Available commands:
+  plot-1           Plot Experiment 1: Pure Latency
+  plot-2           Plot Experiment 2: Latency under load
+  plot-3           Plot Experiment 3: Scalability
+  plot-4           Plot Experiment 4: Faults
+  plot-5           Plot Experiment 5: Propagation
+  plot-6           Plot Experiment 6: Resources
+  all              Run all plots
+  help/-h/--help   Show help
 
-parse_geo_logs
-plot-1
-plot-2
-plot-3
-plot-4
-plot-5
-plot-6
+EOF
+}
+
+function run_all_plots() {
+  plot-1
+  plot-2
+  plot-3
+  plot-4
+  plot-5
+  plot-6
+}
+
+function main() {
+  if [[ $# -eq 0 ]]; then
+    show_help
+    exit 0
+  fi
+
+  activate_env
+  parse_geo_logs
+
+  local command="$1"
+  shift
+
+  case "$command" in
+    "plot-1")
+      plot-1
+      ;;
+    "plot-2")
+      plot-2
+      ;;
+    "plot-3")
+      plot-3
+      ;;
+    "plot-4")
+      plot-4
+      ;;
+    "plot-5")
+      plot-5
+      ;;
+    "plot-6")
+      plot-6
+      ;;
+    "all")
+      run_all_plots
+      ;;
+    "help"|"-h"|"--help")
+      show_help
+      ;;
+    *)
+      echo "Error: Unknown command '$command'"
+      echo ""
+      show_help
+      exit 1
+      ;;
+  esac
+}
+
+main "$@"
