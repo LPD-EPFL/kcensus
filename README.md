@@ -124,7 +124,7 @@ Each experiment is run using `geo_eval.sh`, which provisions infrastructure, dep
 
 ---
 
-### Figure 7.1: Pure Latency
+### Figure 4:
 
 ```bash
 ./geo_eval.sh exp-1
@@ -134,7 +134,7 @@ Each experiment is run using `geo_eval.sh`, which provisions infrastructure, dep
 
 ---
 
-### Figure 7.3: Latency Under Load
+### Figure 6:
 
 Note that in order to run this experiment, you must run exp-1 first.
 
@@ -146,7 +146,7 @@ Note that in order to run this experiment, you must run exp-1 first.
 
 ---
 
-### Figure 7.2: Fault Tolerance
+### Figure 5:
 
 ```bash
 ./geo_eval.sh exp-4
@@ -156,18 +156,18 @@ Note that in order to run this experiment, you must run exp-1 first.
 
 ---
 
-### Figures 7.4 & 7.6: Scalability and Propagation
+### Figures 7 & 10
 
 ```bash
 ./geo_eval.sh exp-3-5
-./plot.sh plot-3   # Scalability
-./plot.sh plot-5   # Propagation
+./plot.sh plot-3   # fig 7
+./plot.sh plot-5   # fig 10
 ```
 *Outputs: `graphs/plots/3-scalability.txt`, `graphs/plots/5-propagation.txt`*
 
 ---
 
-### Figure 7.5: Resource Usage
+### Figures 8 & 9
 
 ```bash
 ./geo_eval.sh exp-6
