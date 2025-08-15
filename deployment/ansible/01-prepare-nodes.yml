@@ -4,5 +4,42 @@
   gather_facts: no
   strategy: free
   serial: 0
-  roles:
-    - kcensus_setup
+  tasks:
+    - name: Ensure Cassandra container is running
+      community.docker.docker_container:
+        name: "cassandra-{{ groups['kcensus_nodes'].index(inventory_hostname) + 1 }}"
+        image: cassandra:latest
+        state: started
+        detach: yes
+        restart_policy: always
+        env:
+          JVM_OPTS: "-Xms256M -Xmx1024M"
+        ports:
+          - "{{ 9041 + groups['kcensus_nodes'].index(inventory_hostname) + 1 }}:9042"
+
+    - name: Wait for Cassandra to be ready
+      ansible.builtin.shell: >
+        docker exec cassandra-{{ groups['kcensus_nodes'].index(inventory_hostname) + 1 }} cqlsh -e "SELECT now() FROM system.local;"
+      register: cassandra_status
+      until: cassandra_status.rc == 0
+      retries: 50
+      delay: 6
+
+    - name: Create a directory for the application
+      ansible.builtin.file:
+        path: /home/ec2-user/kcensus_app
+        state: directory
+        mode: '0755'
+
+    - name: Copy the kcensus binary
+      ansible.builtin.copy:
+        src: ../../target/x86_64-unknown-linux-musl/release/kcensus
+        dest: /home/ec2-user/kcensus_app/kcensus
+        mode: '0755'
+
+    # TODO: make this only happen for exp-3-5
+    - name: Copy the graph_bench binary
+      ansible.builtin.copy:
+        src: ../../target/x86_64-unknown-linux-musl/release/graph_bench
+        dest: /home/ec2-user/kcensus_app/graph_bench
+        mode: '0755'
