@@ -4,11 +4,9 @@ CASSANDRA_BASE_PORT="9042"
 BASE_LOG_DIR="./logs"
 REPLICATED_ALGOS=(k-census e-paxos multi-paxos paxos weak-replication)
 ALGOS=(no-replication ${REPLICATED_ALGOS[@]})
-CONFIGS=(aws-europe-7-alt.toml aws-north-america-7.toml aws-world-ring-13.toml) # aws-europe-7.toml aws-world-ring-9.toml
-YCSB=(1 0.5 0.05)
-REQUESTS=100
+REQUESTS=50000
 SPEEDUP=1
-KEYS=1
+KEYS=20000
 
 if ! command -v "/usr/bin/time" >/dev/null 2>&1
 then
@@ -87,8 +85,8 @@ function run() {
 function main() {
   for writes in "1"; do
     for config in "localhost-3.toml"; do
-      for algo in "no-replication"; do
-        run "$config" "$algo" "$writes" "$REQUESTS" round-robin 0 "$KEYS"
+      for algo in "k-census"; do
+        run "$config" "$algo" "$writes" "$REQUESTS" exponential 4000 "$KEYS"
       done
     done
   done

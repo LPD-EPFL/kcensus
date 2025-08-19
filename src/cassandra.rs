@@ -15,6 +15,7 @@ use std::collections::HashMap;
 use std::io;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, Semaphore};
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -77,6 +78,8 @@ pub struct ParallelCassandraExecutor {
     shard_senders: Vec<Sender<(Request, Option<Sender<Response>>)>>,
     shard_join_handles: Vec<tokio::task::JoinHandle<()>>,
     global_semaphore: Arc<Semaphore>,
+    total_completed: Arc<AtomicUsize>,
+    first_request_time: Arc<std::sync::Mutex<Option<Instant>>>,
 }
 
 impl ParallelCassandraExecutor {
@@ -87,6 +90,8 @@ impl ParallelCassandraExecutor {
 
         let handler = Arc::new(handler);
         
+        let total_completed = Arc::new(AtomicUsize::new(0));
+        let first_request_time = Arc::new(std::sync::Mutex::new(None));
         // Create per-shard channels and spawn workers
         for _shard_id in 0..shards {
             let (tx, mut rx) = mpsc::channel::<(Request, Option<Sender<Response>>)>(32);
@@ -96,9 +101,17 @@ impl ParallelCassandraExecutor {
             let handler = handler.clone();
             let semaphore = global_semaphore.clone();
             
+            let total_completed = total_completed.clone();
+            let first_request_time = first_request_time.clone();
             // Spawn per-shard worker to maintain ordering
             let handle = tokio::spawn(async move {
                 while let Some((request, response_tx)) = rx.recv().await {
+                    {   // record first request time
+                        let mut first_time = first_request_time.lock().unwrap();
+                        if first_time.is_none() {
+                            *first_time = Some(Instant::now());
+                        }
+                    }
                     // Acquire permit from global semaphore
                     let _permit = semaphore.acquire().await.expect("Semaphore was closed");
                     
@@ -111,6 +124,7 @@ impl ParallelCassandraExecutor {
                         response_tx.send(response).await.expect("Server failed to enqueue client Response");
                     };
                     // Permit is automatically released when _permit is dropped
+                    total_completed.fetch_add(1, Ordering::Relaxed);
                 }
             });
             shard_join_handles.push(handle);
@@ -120,6 +134,8 @@ impl ParallelCassandraExecutor {
             shard_senders,
             global_semaphore,
             shard_join_handles,
+            total_completed,
+            first_request_time,
         }
     }
 
@@ -547,6 +563,13 @@ struct ExecutedEvent {
     processing: Duration,
 }
 
+#[derive(Serialize)]
+struct ThroughputEvent {
+    requests: usize,
+    seconds: Duration,
+    throughput: f64,
+}
+
 pub struct App {
     my_pid: usize,
     parallel_executor: Option<ParallelCassandraExecutor>,
@@ -630,6 +653,27 @@ impl App {
             parallel_executor.shard_senders.clear();
             join_all(parallel_executor.shard_join_handles).await;
             parallel_executor.global_semaphore.close();
+
+            // Log throughput at the end
+            let completed = parallel_executor.total_completed.load(Ordering::Relaxed);
+            let first_time = parallel_executor.first_request_time.lock().unwrap();
+            if let Some(start_time) = *first_time {
+                let elapsed = start_time.elapsed();
+                let elapsed_secs = elapsed.as_secs_f64();
+                let throughput = completed as f64 / elapsed_secs;
+                let readable = format!(
+                    "{} requests in {:.3} seconds ({:.2} req/s)",
+                    completed,
+                    elapsed_secs,
+                    throughput
+                );
+                let event = ThroughputEvent {
+                    requests: completed,
+                    seconds: elapsed,
+                    throughput,
+                };
+                eval::log("throughput", &readable, &event);
+            }
         }
     }
 }
