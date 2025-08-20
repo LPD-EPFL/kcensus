@@ -14,6 +14,17 @@ then
     exit 1
 fi
 
+if [[ "$1" == "y" ]]; then
+  CASSANDRA="true"
+elif [[ "$1" == "n" ]]; then
+  CASSANDRA="false"
+else
+  echo "Usage: $0 [y|n]"
+  echo "  y: run with Cassandra"
+  echo "  n: run without Cassandra"
+  exit 1
+fi
+
 function digits() {
   echo "$1" | tr -d -c 0-9
 }
@@ -77,16 +88,21 @@ function run() {
     fi
     cargo build -r 2>"$LOG_DIR/$pid.stderr"
     local time_format='[log=time] Memory (KB): %M, System (s): %S User (s): %U | {"memory": %M, "system": %S, "user": %U}'
-    (/usr/bin/time -f "$time_format" target/release/kcensus -p "$pid" --config "configs/$CONFIG" $CASSANDRA_ARG -a "$ALGO" -w "$WRITES" -r "$REQUESTS" -i "$INGRESS" -t "$THROUGHPUT" -s "$SPEEDUP" $FAULTS_ARG -k "$KEYS")>"$LOG_DIR/$pid.stdout" 2>>"$LOG_DIR/$pid.stderr" &
+    if [[ "${CASSANDRA,,}" != "false" && "$CASSANDRA" != "0" ]]; then
+      (/usr/bin/time -f "$time_format" target/release/kcensus -p "$pid" --config "configs/$CONFIG" $CASSANDRA_ARG --simulate-delays false -a "$ALGO" -w "$WRITES" -r "$REQUESTS" -i "$INGRESS" -t "$THROUGHPUT" -s "$SPEEDUP" $FAULTS_ARG -k "$KEYS")>"$LOG_DIR/$pid.stdout" 2>>"$LOG_DIR/$pid.stderr" &
+    else
+      (/usr/bin/time -f "$time_format" target/release/kcensus -p "$pid" --config "configs/$CONFIG" --simulate-delays false -a "$ALGO" -w "$WRITES" -r "$REQUESTS" -i "$INGRESS" -t "$THROUGHPUT" -s "$SPEEDUP" $FAULTS_ARG -k "$KEYS")>"$LOG_DIR/$pid.stdout" 2>>"$LOG_DIR/$pid.stderr" &
+    fi
   done
   wait
+  tail -n 5 "$LOG_DIR/0.stdout"
 }
 
 function main() {
   for writes in "1"; do
-    for config in "localhost-3.toml"; do
+    for config in "aws-europe-3.toml"; do
       for algo in "k-census"; do
-        run "$config" "$algo" "$writes" "$REQUESTS" exponential 4000 "$KEYS"
+        run "$config" "$algo" "$writes" "$REQUESTS" exponential 10000 "$KEYS"
       done
     done
   done
