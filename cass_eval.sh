@@ -35,7 +35,27 @@ function start_cassandra() {
     (
       local name="cassandra-$i"
       if [ -z "$(docker ps -a -q --filter="name=$name")" ]; then
-        docker run -e JVM_OPTS="-Xms256M -Xmx1024M" --name "$name" -p $((CASSANDRA_BASE_PORT + i - 1)):9042 -d cassandra
+        docker run \
+          -e JVM_OPTS="-Xms512M -Xmx1G -XX:+UseG1GC -XX:G1HeapRegionSize=16m -XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0" \
+          -e CASSANDRA_MEMTABLE_ALLOCATION_TYPE="heap_buffers" \
+          -e CASSANDRA_MEMTABLE_CLEANUP_THRESHOLD="0.2" \
+          -e CASSANDRA_MEMTABLE_FLUSH_WRITERS="4" \
+          -e CASSANDRA_CONCURRENT_WRITES="64" \
+          -e CASSANDRA_CONCURRENT_READS="64" \
+          -e CASSANDRA_FILE_CACHE_SIZE_IN_MB="0" \
+          -e CASSANDRA_BUFFER_POOL_USE_HEAP_IF_EXHAUSTED="true" \
+          -e CASSANDRA_DISK_OPTIMIZATION_STRATEGY="ssd" \
+          -e CASSANDRA_COMMITLOG_SYNC="batch" \
+          -e CASSANDRA_COMMITLOG_SYNC_BATCH_WINDOW_IN_MS="1" \
+          -e CASSANDRA_COMMITLOG_SEGMENT_SIZE_IN_MB="32" \
+          -e CASSANDRA_AUTO_SNAPSHOT="false" \
+          -e CASSANDRA_SNAPSHOT_BEFORE_COMPACTION="false" \
+          --tmpfs /var/lib/cassandra:noexec,nosuid,size=1500m \
+          --tmpfs /var/log/cassandra:noexec,nosuid,size=100m \
+          --memory=2g \
+          --name "$name" \
+          -p $((CASSANDRA_BASE_PORT + i - 1)):9042 \
+          -d cassandra
       else
         echo "$name already running" >/dev/null
       fi
@@ -95,6 +115,7 @@ function run() {
     fi
   done
   wait
+  head -n 5 "$LOG_DIR/0.stdout"
   tail -n 5 "$LOG_DIR/0.stdout"
 }
 
