@@ -39,7 +39,6 @@ function start_cassandra() {
           -e JVM_OPTS="-Xms512M -Xmx1G -XX:+UseG1GC -XX:G1HeapRegionSize=16m -XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0" \
           -e CASSANDRA_MEMTABLE_ALLOCATION_TYPE="heap_buffers" \
           -e CASSANDRA_MEMTABLE_CLEANUP_THRESHOLD="0.2" \
-          -e CASSANDRA_MEMTABLE_FLUSH_WRITERS="4" \
           -e CASSANDRA_CONCURRENT_WRITES="64" \
           -e CASSANDRA_CONCURRENT_READS="64" \
           -e CASSANDRA_FILE_CACHE_SIZE_IN_MB="0" \
@@ -53,6 +52,7 @@ function start_cassandra() {
           --tmpfs /var/lib/cassandra:noexec,nosuid,size=1500m \
           --tmpfs /var/log/cassandra:noexec,nosuid,size=100m \
           --memory=2g \
+          --cpus="1" \
           --name "$name" \
           -p $((CASSANDRA_BASE_PORT + i - 1)):9042 \
           -d cassandra
