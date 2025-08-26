@@ -31,11 +31,11 @@ All experiments are managed from a single "gateway" machine (your computer), whi
 
 - **AWS Account**: Create an AWS account at [aws.amazon.com](https://aws.amazon.com/).
 - **IAM User**: In the AWS Console (on your browser), create a dedicated IAM user with permissions for EC2, AMI, VPC, and Security Groups.
-- **AWS CLI**: Install the [AWS CLI](https://aws.amazon.com/cli/) on your machine.
+- **AWS CLI**: Install the [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) on your machine.
 
 #### Configure AWS CLI
 
-Run this command and enter your IAM user's credentials:
+In the AWS management console, go to IAM service, navigate to the IAM user you created in the previous step, and create an access key for it and note the ID and secret. Then run this command in your terminal:
 
 ```bash
 aws configure
@@ -66,7 +66,7 @@ Install the following tools:
 Generate a new SSH key pair **without a passphrase**:
 
 ```bash
-ssh-keygen -t rsa -b 4096 -f ~/.ssh/kcensus_key -N ""
+ssh-keygen -t ed25519 -f ~/.ssh/kcensus_key -N ""
 ```
 
 - Private key: `~/.ssh/kcensus_key`
@@ -98,6 +98,7 @@ The custom AMI contains all dependencies for remote machines. You need to run th
 
 ```bash
 cd deployment/packer
+packer init .
 packer build kcensus-ami.pkr.hcl
 cd ../..
 ```
