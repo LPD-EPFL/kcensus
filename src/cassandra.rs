@@ -8,11 +8,12 @@ use futures::future::join_all;
 use futures::StreamExt;
 use log::trace;
 use rand_distr::{Distribution, Exp};
-use scylla::client::{session::Session, session_builder::SessionBuilder};
+use scylla::client::{session::Session, session_builder::SessionBuilder, PoolSize};
 use scylla::statement::prepared::PreparedStatement;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io;
+use std::num::NonZeroUsize;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -150,9 +151,11 @@ impl ParallelCassandraExecutor {
 
 impl Handler {
     pub async fn new(uri: &str) -> Self {
+        let pool_size = PoolSize::PerShard(NonZeroUsize::new(4).unwrap());
         Self {
             session: SessionBuilder::new()
                 .known_node(uri)
+                .pool_size(pool_size)
                 .build()
                 .await
                 .expect("Cassandra failed to create session"),
