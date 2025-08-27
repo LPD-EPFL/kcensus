@@ -92,28 +92,12 @@ If you managed to do all the previous steps successfully, then Terraform, Ansibl
 
 ## 3. Building the Artifacts
 
-### 3.1 Build the Custom AMI (Packer)
-
-The custom AMI contains all dependencies for remote machines. You need to run the following commands:
-
-```bash
-cd deployment/packer
-packer init .
-packer build kcensus-ami.pkr.hcl
-cd ../..
-```
-
-This step builds the AMI in one AWS region and copies it to others. It may take ~30 minutes.
-
-### 3.2 Build the Binaries (Rust)
-
 Compile the `kcensus` and `graph_bench` executables:
 
 ```bash
 rustup target add x86_64-unknown-linux-musl
 cargo build --target x86_64-unknown-linux-musl --release
 ```
-
 
 ## 4. Running Experiments and Generating Plots
 

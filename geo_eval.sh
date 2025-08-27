@@ -403,7 +403,7 @@ function main() {
   fi
 
   init_environment
-  build_binaries
+  # build_binaries
 
   local command="$1"
   shift
