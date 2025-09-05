@@ -48,6 +48,13 @@ for experiment in ALGORITHMS:
         assert (
             len(logs["network-done"]) == num_replicas
         ), f'Some replicas ({num_replicas - len(logs["network-done"])} out of {num_replicas}) did not report networking stats'
+
+        flattened_output = defaultdict(list)
+        for category, pid_data in logs.items():
+            for pid, items in pid_data.items():
+                flattened_output[category].extend(items)
+        logs = flattened_output
+
         total_bytes = sum(log["byte_count"] for log in logs["network-done"])
         total_msgs = sum(log["msg_count"] for log in logs["network-done"])
         xs.append(num_replicas)

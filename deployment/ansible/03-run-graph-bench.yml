@@ -1,0 +1,28 @@
+---
+- name: Run graph_bench experiment
+  hosts: all
+  gather_facts: no
+  vars:
+    result_path: "./results_default"
+    num_faults: 0
+
+  tasks:
+    - name: Run graph_bench on the first node
+      run_once: true
+      ansible.builtin.shell:
+        cmd: >
+          ./graph_bench --config config.toml --fault-count {{ num_faults }}
+        chdir: /home/ec2-user/kcensus_app
+      register: graph_bench_result
+
+    - name: Save graph_bench results locally
+      delegate_to: localhost
+      run_once: true
+      ansible.builtin.copy:
+        dest: "{{ result_path }}/graph_bench.log"
+        content: |
+          STDOUT:
+          {{ graph_bench_result.stdout | default('NO STDOUT CAPTURED') }}
+
+          STDERR:
+          {{ graph_bench_result.stderr | default('NO STDERR CAPTURED') }}

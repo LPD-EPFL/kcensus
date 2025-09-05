@@ -1,2 +1,4 @@
 /target
 /logs
+/configs/tmp.toml
+/.tmp_configs*/

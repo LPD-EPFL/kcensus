@@ -79,9 +79,12 @@ parser.add_argument(
 parser.add_argument(
     "-f", "--faults", type=str, default="", help="Comma-separated list of faults"
 )
+parser.add_argument(
+    "-g", "--geo", type=int, default=0, choices=[0, 1],
+    help="Setting this to 1 takes into account that experiments are done on aws servers."
+)
 args = parser.parse_args()
-serialized_args = f'-c={args.config.replace("/", "-")}-w={args.writes:g}-r={args.requests}-i={args.ingress}-t={args.throughput:g}-s={args.speedup}-f={args.faults}'
-
+serialized_args = f'-c={args.config.replace("/", "-")}-w={args.writes:g}-r={args.requests}-i={args.ingress}-t={args.throughput:g}-s={args.speedup}-f={args.faults}-g={args.geo}'
 
 def k_formatter(x, _):
     if x < 1000:

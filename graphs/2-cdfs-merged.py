@@ -2,14 +2,14 @@
 from matplotlib.lines import Line2D
 from matplotlib.ticker import *
 
-from common import ALGORITHMS
+from common import ALGORITHMS, args
 from logparser import *
 from prelude import plt
 
 # python3 2-cdfs.py -c=aws-world-ring-13.toml -w=1 -r=100 -i=round-robin -t=0
 # python3 2-cdfs.py -c=aws-world-ring-13.toml -w=1 -r=100 -i=exponential -t=0.05
 # python3 2-cdfs.py -c=aws-world-ring-13.toml -w=1 -r=100 -i=exponential -t=0.1
-config = "aws-world-ring-13.toml"
+config = "aws-world-ring-13" if args.geo == 1 else "aws-world-ring-13.toml"
 writes = 1.0
 requests = 100
 stop_at = 60
@@ -25,7 +25,7 @@ fig.subplots_adjust(
 )
 
 for p in range(3):
-    throughput = [0.0, 0.05, 0.1][p]
+    throughput = [0.0, 0.1, 0.2][p] if args.geo == 1 else [0.0, 0.05, 0.1][p]
     ingress = "exponential" if throughput > 0 else "round-robin"
     plot = subplots[p]
 
@@ -47,8 +47,12 @@ for p in range(3):
     plot.tick_params(axis="both", which="minor", pad=0.5)
     plot.yaxis.set_minor_locator(MultipleLocator(25))
     plot.yaxis.set_major_locator(MultipleLocator(50))
-    plot.xaxis.set_minor_locator(MultipleLocator(50))
-    plot.xaxis.set_major_locator(MultipleLocator(200))
+    if args.geo == 1:
+        plot.xaxis.set_minor_locator(MultipleLocator(25))
+        plot.xaxis.set_major_locator(MultipleLocator(100))
+    else:
+        plot.xaxis.set_minor_locator(MultipleLocator(50))
+        plot.xaxis.set_major_locator(MultipleLocator(200))
     plot.set_axisbelow(True)
 
     max_x = 0
@@ -64,6 +68,13 @@ for p in range(3):
             faults=faults,
             stop_at=stop_at,
         )
+
+        flattened_output = defaultdict(list)
+        for category, pid_data in logs.items():
+            for pid, items in pid_data.items():
+                flattened_output[category].extend(items)
+        logs = flattened_output
+
         average = compute_average(
             logs["executed"], lambda log: duration_to_ms(log["latency"])
         )
@@ -82,7 +93,10 @@ for p in range(3):
             max_x = percentiles[-1]
             plot.set_xlim(0, percentiles[-1])
 
-        plot.set_xlim(0, 1000)
+        if args.geo == 1:
+            plot.set_xlim(0, 500)
+        else:
+            plot.sex_xlim(0, 1000)
 
 
 logs_a = parse(
@@ -96,6 +110,13 @@ logs_a = parse(
     faults=faults,
     stop_at=stop_at,
 )
+
+flattened_output = defaultdict(list)
+for category, pid_data in logs_a.items():
+    for pid, items in pid_data.items():
+        flattened_output[category].extend(items)
+logs_a = flattened_output
+
 logs_b = parse(
     algo="k-census",
     config=config,
@@ -107,6 +128,13 @@ logs_b = parse(
     faults=faults,
     stop_at=stop_at,
 )
+
+flattened_output = defaultdict(list)
+for category, pid_data in logs_b.items():
+    for pid, items in pid_data.items():
+        flattened_output[category].extend(items)
+logs_b = flattened_output
+
 percentiles_a = compute_percentiles(
     logs_a["executed"], lambda log: duration_to_ms(log["latency"])
 )

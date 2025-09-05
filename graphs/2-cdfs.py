@@ -41,7 +41,10 @@ legends = [
     for algo in ALGORITHMS.values()
 ]
 
-plot.set_xlim(0, 1000)
+if args.geo == 1:
+    plot.set_xlim(0, 500)
+else:
+    plot.set_xlim(0, 1000)
 
 fig.legend(handles=legends, bbox_to_anchor=(0.1, 1.29, 0.75, 0.01),
            loc='center', edgecolor='black', borderaxespad=0, ncols=3,

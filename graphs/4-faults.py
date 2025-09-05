@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from itertools import combinations
+from collections import defaultdict
 
 import matplotlib as mpl
 from matplotlib import patches
@@ -57,7 +58,7 @@ for num_faults, plot in enumerate(plots):
     colors = []
     hatches = []
     for i, experiment in enumerate(algorithms):
-        executed = []
+        all_executed_by_replica = defaultdict(list)
         num_replicas = int("".join([char for char in args.config if char.isdigit()]))
         all_faults = [
             ",".join(map(str, comb))
@@ -74,22 +75,44 @@ for num_faults, plot in enumerate(plots):
                 speedup=args.speedup,
                 faults=faults,
             )
-            executed += logs["executed"]
-        average = compute_average(executed, lambda log: duration_to_ms(log["latency"]))
-        percentiles = compute_percentiles(
-            executed, lambda log: duration_to_ms(log["latency"])
+            for pid, pid_data in logs["executed"].items():
+                all_executed_by_replica[pid].extend(pid_data)
+        
+        all_executed = []
+        for pid_data in all_executed_by_replica.values():
+            all_executed.extend(pid_data)
+        average = compute_average(
+            all_executed, lambda log: duration_to_ms(log["latency"])
         )
-        MOUSTACHES = (5, 95)
+        replica_averages = compute_replica_averages(
+            all_executed_by_replica, lambda log: duration_to_ms(log["latency"])
+        )
+        min_replica_avg = min(replica_averages) if replica_averages else average
+        max_replica_avg = max(replica_averages) if replica_averages else average
+        percentiles = compute_percentiles(
+            all_executed, lambda log: duration_to_ms(log["latency"])
+        )
         print(
             experiment,
             average,
-            (percentiles[MOUSTACHES[0]], percentiles[MOUSTACHES[1]]),
+            (min_replica_avg, max_replica_avg),
+            (percentiles[1], percentiles[5], percentiles[95], percentiles[99])
         )
+        regions = ["us-west-2", "ca-central-1", "eu-west-3", "eu-west-1",
+                   "me-south-1", "ap-south-2", "ap-southeast-1",
+                   "ap-northeast-1", "ap-east-1"]
+        regions.sort()
+        for pid, region in enumerate(regions):
+            if pid in logs["executed"] and logs["executed"][pid]:
+                region_avg = compute_average(
+                    logs["executed"][pid], lambda log: duration_to_ms(log["latency"])
+                )
+                print(region, region_avg)
         xs.append(i)
         labels.append(i)
         ys.append(average)
-        delta_ys_top.append(percentiles[MOUSTACHES[1]] - average)
-        delta_ys_bottom.append(average - percentiles[MOUSTACHES[0]])
+        delta_ys_top.append(max_replica_avg - average)
+        delta_ys_bottom.append(average - min_replica_avg)
         colors.append(lighten_color(ALGORITHMS[experiment]["color"]))
         hatches.append(HATCHES[experiment])
 

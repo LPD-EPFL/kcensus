@@ -27,7 +27,9 @@ impl Delayer {
         speedup: u32,
         my_pid: usize,
         mut input_stream: impl Stream<Item = io::Result<MsgWithSource>> + Unpin,
+        simulate_delays: bool,
     ) {
+
         let dead = topology.faults.contains(my_pid);
         let delay = Delay::new(Instant::now()).expect("Delayer failed to init delay");
         pin!(delay);
@@ -55,6 +57,7 @@ impl Delayer {
                 break;
             }
             select! {
+
                 opt_res = input_stream.next(), if !stream_ended => {
                     let msg = match opt_res {
                         Some(Ok(msg)) => msg,
@@ -76,12 +79,19 @@ impl Delayer {
                         continue
                     }
 
-                    let deadline = Instant::now() + topology.link_latency(msg.src,my_pid) / speedup;
-
-                    queues[msg.src].push_back(
-                        msg.with_deadline(deadline)
-                    );
+                    if simulate_delays {
+                        let deadline = Instant::now() + topology.link_latency(msg.src,my_pid) / speedup;
+                        queues[msg.src].push_back(
+                            msg.with_deadline(deadline)
+                        );
+                    } else {
+                        let res = self.delayed_msg_tx.send(msg).await;
+                        if res.is_err() {
+                            return;
+                        }
+                    }
                 }
+
                 res = &mut delay, if !is_empty => {
                     res.expect("Delayed message stream ended early");
                     let now = Instant::now();
@@ -100,6 +110,7 @@ impl Delayer {
                     trace!("New queue_size = {}", queues.iter()
                          .map(|q| q.len()).sum::<usize>());
                 }
+
                 () = self.delayed_msg_tx.closed() => {
                     return;
                 }

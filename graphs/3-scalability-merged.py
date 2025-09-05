@@ -62,6 +62,13 @@ for p in range(2):
                 throughput=throughput,
                 speedup=speedup,
             )
+
+            flattened_output = defaultdict(list)
+            for category, pid_data in logs.items():
+                for pid, items in pid_data.items():
+                    flattened_output[category].extend(items)
+            logs = flattened_output
+
             average = compute_average(
                 logs["executed"], lambda log: duration_to_ms(log["latency"])
             )

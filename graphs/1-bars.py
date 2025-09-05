@@ -40,7 +40,7 @@ for i, experiment in enumerate(ALGORITHMS.keys()):
     labels.append(ALGORITHMS[experiment]['label'].replace(' ', '\n').replace('-', '-\n'))
     colors.append(ALGORITHMS[experiment]['color'])
     text_y = percentiles[MOUSTACHES[1]]  # average / 2
-    plot.text(i, text_y, f'{int(average)}\N{thin space}ms', horizontalalignment='center',
+    plot.text(i, text_y, f'{round(average)}\N{thin space}ms', horizontalalignment='center',
               verticalalignment='bottom')
 
 plot.bar(labels, ys, lw=0, color=colors)

@@ -3,6 +3,7 @@ use crate::consensus::command::{Command, CommittedCommand};
 use crate::eval;
 use crate::message::{Message, MsgWithSource};
 use crate::multi_sink::MultiSink;
+use crate::topology::Topology;
 use futures::StreamExt;
 use log::trace;
 use rand_distr::{Distribution, Exp};
@@ -141,12 +142,22 @@ pub struct RoundRobinSynchronizer {
 }
 
 impl RoundRobinSynchronizer {
-    async fn new(my_pid: usize, nb_nodes: usize, max_rtt: Duration) -> Self {
-        let (sinks, streams) = connect_all(my_pid, nb_nodes, 6789, None).await;
+    async fn new(my_pid: usize, topology: &Topology, max_rtt: Duration) -> Self {
+        let (sinks, streams) = connect_all(
+            my_pid,
+            topology.nb_nodes,
+            topology
+                .addresses
+                .iter()
+                .map(|(ip, port)| (ip.clone(), port + 1000))
+                .collect(),
+            None,
+        )
+        .await;
         Self {
             my_pid,
             initiate: my_pid == 0,
-            nb_nodes,
+            nb_nodes: topology.nb_nodes,
             max_rtt,
             sinks,
             streams: Box::pin(streams),
@@ -186,8 +197,8 @@ impl RoundRobinSynchronizer {
 }
 
 impl RequestInterval {
-    pub async fn new_round_robin(my_pid: usize, nb_nodes: usize, max_rtt: Duration) -> Self {
-        let synchronizer = RoundRobinSynchronizer::new(my_pid, nb_nodes, max_rtt).await;
+    pub async fn new_round_robin(my_pid: usize, topology: &Topology, max_rtt: Duration) -> Self {
+        let synchronizer = RoundRobinSynchronizer::new(my_pid, topology, max_rtt).await;
         RequestInterval::RoundRobin { synchronizer }
     }
 
