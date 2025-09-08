@@ -1,5 +1,5 @@
 use crate::consensus::kcensus::node_state::{Knowledge, NodeState};
-use crate::consensus::kcensus::propagation::MessageId;
+use crate::consensus::kcensus::propagation::{MessageId, PropagationGraphs};
 use std::collections::HashSet;
 use std::fmt;
 
@@ -217,13 +217,21 @@ impl KCensusRoundState {
     }
 
     // TODO: Allow can_commit to run for other proposals ?
-    pub fn can_commit(&mut self) -> bool {
+    pub fn can_commit(&mut self, graph: Option<&PropagationGraphs>) -> bool {
         // TODO: Filter on v instead of using my k ? (helps if frozen or to allow commiting other props)
         let k_size = my_state!(self).k.len();
         debug_assert!(k_size <= self.nb_nodes);
         if k_size < self.majority {
             return false;
         }
+
+        // Use graph when possible
+        if self.i_am_proposer() && self.proposers().len() == 1 {
+            if let Some(graph) = graph {
+                return graph.can_commit(self.my_pid, &self.received_msgs);
+            }
+        }
+
         let e_paxos_quorum = (self.nb_nodes * 3) / 4;
         let everyone_knows_me = my_state!(self)
             .k

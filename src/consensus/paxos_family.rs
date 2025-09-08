@@ -5,12 +5,14 @@ use crate::consensus::paxos_family::message::{PaxosMsg, PaxosRound};
 use crate::consensus::paxos_family::round_state::PaxosFamilyRoundState;
 use crate::consensus::paxos_family::Mode::{EPaxos, MultiPaxos, Paxos};
 use crate::consensus::read_tracker::ReadTracker;
-use crate::consensus::{Consensus, ConsensusTrait};
-use crate::multi_sink::MultiSink;
+use crate::consensus::{Consensus, ConsensusShard, ConsensusShardTrait};
+use crate::multi_sink::{MultiSink, ShardMultiSink};
 use log::{debug, info, trace};
 use message::RoundV;
 use std::collections::HashMap;
 use std::io;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 pub(crate) mod message;
 mod round_state;
@@ -21,19 +23,21 @@ pub struct PaxosFamilySettings {
     starting_round: Option<PaxosRound>,
 }
 
-pub type PaxosFamily = Consensus<PaxosFamilySettings, Option<PaxosRound>, PaxosFamilyRoundState>;
+pub type PaxosFamilyShard =
+    ConsensusShard<PaxosFamilySettings, Option<PaxosRound>, PaxosFamilyRoundState>;
 
+#[derive(Copy, Clone)]
 pub enum Mode {
     Paxos,
     MultiPaxos,
     EPaxos,
 }
 
-impl PaxosFamily {
+impl PaxosFamilyShard {
     pub fn new(
         nb_nodes: usize,
         my_pid: usize,
-        sinks: MultiSink,
+        sinks: ShardMultiSink,
         leader_priority: Vec<usize>,
         mode: Mode,
     ) -> Self {
@@ -67,7 +71,7 @@ impl PaxosFamily {
     }
 }
 
-impl ConsensusTrait for PaxosFamily {
+impl ConsensusShardTrait for PaxosFamilyShard {
     async fn process_message(&mut self, msg: ConsensusMessage) -> io::Result<Option<CommandBatch>> {
         let src = msg.src;
         let msg = match msg.msg {
@@ -155,7 +159,7 @@ impl ConsensusTrait for PaxosFamily {
     }
 
     #[inline]
-    fn can_forward_proposals(&mut self) -> bool {
+    fn can_forward_proposals(&self) -> bool {
         matches!(self.settings.mode, MultiPaxos)
     }
 
@@ -216,7 +220,7 @@ impl ConsensusTrait for PaxosFamily {
     }
 }
 
-impl PaxosFamily {
+impl PaxosFamilyShard {
     #[inline]
     fn goto_round(&mut self, round: Option<PaxosRound>) {
         if round.unwrap_or_default()
@@ -243,7 +247,7 @@ impl PaxosFamily {
     }
 
     #[inline]
-    fn value_for_msg(&mut self, msg: &PaxosMsg, with_value: bool) -> Option<CommandBatch> {
+    fn value_for_msg(&self, msg: &PaxosMsg, with_value: bool) -> Option<CommandBatch> {
         if with_value {
             Some(self.queued_commands[&msg.get_v()].clone())
         } else {
@@ -252,12 +256,12 @@ impl PaxosFamily {
     }
 
     #[inline]
-    async fn send(&mut self, msg: PaxosMsg, dest: usize) -> io::Result<()> {
+    async fn send(&self, msg: PaxosMsg, dest: usize) -> io::Result<()> {
         self.sinks.send(PaxosM(msg), None, dest).await
     }
 
     #[inline]
-    async fn broadcast(&mut self, msg: PaxosMsg, with_value: bool) -> io::Result<()> {
+    async fn broadcast(&self, msg: PaxosMsg, with_value: bool) -> io::Result<()> {
         let value = self.value_for_msg(&msg, with_value);
         self.sinks.broadcast(PaxosM(msg), value).await
     }
@@ -299,7 +303,7 @@ impl PaxosFamily {
         self.broadcast(msg, with_value).await
     }
 
-    async fn answer_prepare(&mut self, src: usize) -> io::Result<()> {
+    async fn answer_prepare(&self, src: usize) -> io::Result<()> {
         let msg = Prepare {
             slot: self.slot,
             round: self.round.unwrap(),
@@ -308,7 +312,7 @@ impl PaxosFamily {
         self.send(msg, src).await
     }
 
-    async fn broadcast_accept(&mut self) -> io::Result<()> {
+    async fn broadcast_accept(&self) -> io::Result<()> {
         let msg = Accept {
             slot: self.slot,
             round: self.round.unwrap(),
@@ -317,7 +321,7 @@ impl PaxosFamily {
         self.broadcast(msg, false).await
     }
 
-    async fn answer_accept(&mut self) -> io::Result<()> {
+    async fn answer_accept(&self) -> io::Result<()> {
         let src = self.round.unwrap().proposer;
         let msg = Accept {
             slot: self.slot,
@@ -327,11 +331,46 @@ impl PaxosFamily {
         self.send(msg, src).await
     }
 
-    async fn broadcast_commit(&mut self) -> io::Result<()> {
+    async fn broadcast_commit(&self) -> io::Result<()> {
         let msg = Commit {
             slot: self.slot,
             v: self.round_state.get_v().unwrap(),
         };
         self.sinks.broadcast(msg, None).await
+    }
+}
+
+pub(crate) type PaxosFamily =
+    Consensus<PaxosFamilySettings, Option<PaxosRound>, PaxosFamilyRoundState>;
+
+impl PaxosFamily {
+    pub fn new(
+        nb_nodes: usize,
+        my_pid: usize,
+        sinks: MultiSink,
+        leader_priority: Vec<usize>,
+        mode: Mode,
+        shard_count: usize,
+    ) -> Self {
+        let sinks = Arc::new(Mutex::new(sinks));
+
+        Self {
+            nb_nodes,
+            shards: (0..shard_count)
+                .map(|id| {
+                    PaxosFamilyShard::new(
+                        nb_nodes,
+                        my_pid,
+                        ShardMultiSink {
+                            shard_id: id,
+                            multi_sink: sinks.clone(),
+                        },
+                        leader_priority.clone(),
+                        mode,
+                    )
+                })
+                .collect(),
+            sinks,
+        }
     }
 }

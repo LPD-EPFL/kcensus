@@ -5,11 +5,13 @@ use crate::consensus::kcensus::round_state::KCensusRoundState;
 use crate::consensus::message::ConsensusMsg::{Commit, KCensusM};
 use crate::consensus::message::{CommandBatch, ConsensusMessage};
 use crate::consensus::read_tracker::ReadTracker;
-use crate::consensus::{Consensus, ConsensusTrait};
-use crate::multi_sink::MultiSink;
+use crate::consensus::{Consensus, ConsensusShard, ConsensusShardTrait};
+use crate::multi_sink::{MultiSink, ShardMultiSink};
 use log::{debug, trace};
 use std::collections::HashMap;
 use std::io;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 pub(crate) mod message;
 mod node_state;
@@ -17,25 +19,18 @@ pub mod propagation;
 mod round_state;
 
 pub struct KCensusSettings {
-    propagation_graphs: PropagationGraphs,
+    propagation_graphs: Arc<PropagationGraphs>,
 }
 
-pub(crate) type KCensus = Consensus<KCensusSettings, usize, KCensusRoundState>;
+pub(crate) type KCensusShard = ConsensusShard<KCensusSettings, usize, KCensusRoundState>;
 
-macro_rules! send_msg {
-    ($self:ident, $msg:expr, $dest:expr) => {{
-        let value = $self.value_for_msg(&$msg);
-        $self.sinks.send(KCensusM($msg), value, $dest).await
-    }};
-}
-
-impl KCensus {
+impl KCensusShard {
     pub fn new(
         nb_nodes: usize,
         my_pid: usize,
-        sinks: MultiSink,
+        sinks: ShardMultiSink,
         leader_priority: Vec<usize>,
-        propagation_graphs: PropagationGraphs,
+        propagation_graphs: Arc<PropagationGraphs>,
     ) -> Self {
         assert!(my_pid < nb_nodes);
         Self {
@@ -58,7 +53,7 @@ impl KCensus {
     }
 }
 
-impl ConsensusTrait for KCensus {
+impl ConsensusShardTrait for KCensusShard {
     async fn process_message(&mut self, msg: ConsensusMessage) -> io::Result<Option<CommandBatch>> {
         let msg_v = msg.get_v();
         let src = msg.src;
@@ -110,7 +105,11 @@ impl ConsensusTrait for KCensus {
 
                 // Can commit ?
                 // TODO: Make can_commit faster when using graph
-                if self.round_state.i_am_proposer() && self.round_state.can_commit() {
+                if self.round_state.i_am_proposer()
+                    && self
+                        .round_state
+                        .can_commit(Some(&self.settings.propagation_graphs))
+                {
                     debug_assert!(!with_value); // can't be my value -> there would be a conflict
                     let v = self.round_state.get_my_v().unwrap();
                     self.sinks.broadcast(Commit { slot, v }, None).await?;
@@ -119,9 +118,9 @@ impl ConsensusTrait for KCensus {
                 }
 
                 let msg_frozen = remote_states[src].frozen;
+                let orig_frozen = self.round_state.am_i_frozen();
 
-                if msg_frozen || msg_v != my_v {
-                    let orig_frozen = self.round_state.am_i_frozen();
+                if msg_frozen || msg_v != my_v || orig_frozen {
                     self.round_state.freeze();
 
                     if with_value {
@@ -165,15 +164,17 @@ impl ConsensusTrait for KCensus {
                     return Ok(None);
                 }
 
-                if proposer_count == 1 {
-                    let msg_id = msg_id.expect("Single proposer means messages should have ids");
-                    self.graph_spread(msg_id, new_value).await?;
-                    return Ok(None);
+                if let Some(msg_id) = msg_id {
+                    if proposer_count == 1 {
+                        self.graph_spread(msg_id, new_value).await?;
+                        return Ok(None);
+                    } else if with_value {
+                        self.graph_spread_value_only(msg_id, msg_v).await?;
+                    }
                 }
 
                 // Multiple proposers of the same value
                 debug_assert!(proposer_count > 1);
-                debug_assert!(!with_value);
 
                 if old_proposer_count < 2 {
                     // Transition to multi-proposer strategy
@@ -193,7 +194,7 @@ impl ConsensusTrait for KCensus {
     } // fn process_message
 
     #[inline]
-    fn can_forward_proposals(&mut self) -> bool {
+    fn can_forward_proposals(&self) -> bool {
         true
     }
 
@@ -241,7 +242,7 @@ impl ConsensusTrait for KCensus {
     }
 }
 
-impl KCensus {
+impl KCensusShard {
     #[inline]
     fn goto_round(&mut self, round: usize) {
         if round != 0 {
@@ -270,12 +271,17 @@ impl KCensus {
     }
 
     #[inline]
-    async fn broadcast(&mut self, msg: KCensusMsg) -> io::Result<()> {
+    async fn broadcast(&self, msg: KCensusMsg) -> io::Result<()> {
         let value = self.value_for_msg(&msg);
         self.sinks.broadcast(KCensusM(msg), value).await
     }
 
-    async fn spread_to(&mut self, dest: usize) -> io::Result<()> {
+    async fn send_to(&self, msg: KCensusMsg, dest: usize) -> io::Result<()> {
+        let value = self.value_for_msg(&msg);
+        self.sinks.send(KCensusM(msg), value, dest).await
+    }
+
+    async fn spread_to(&self, dest: usize) -> io::Result<()> {
         if self.my_pid == dest {
             return Ok(());
         }
@@ -287,10 +293,10 @@ impl KCensus {
             with_value: false,
             new_value: false,
         };
-        send_msg!(self, msg, dest)
+        self.send_to(msg, dest).await
     }
 
-    async fn spread_to_all(&mut self) -> io::Result<()> {
+    async fn spread_to_all(&self) -> io::Result<()> {
         let msg = Spread {
             slot: self.slot,
             round: self.round,
@@ -334,8 +340,7 @@ impl KCensus {
                 with_value: new_value,
                 new_value,
             };
-            let dest = msg_id.dest;
-            send_msg!(self, msg, dest)?;
+            self.send_to(msg, msg_id.dest).await?
         }
         Ok(())
     }
@@ -363,16 +368,12 @@ impl KCensus {
                 with_value: new_value && msg_info.get_includes_new_values(),
                 new_value,
             };
-            send_msg!(self, msg, msg_id.dest)?;
+            self.send_to(msg, msg_id.dest).await?;
         }
         Ok(())
     }
 
-    async fn graph_spread_value_only(
-        &mut self,
-        prev_msg_id: MessageId,
-        v: usize,
-    ) -> io::Result<()> {
+    async fn graph_spread_value_only(&self, prev_msg_id: MessageId, v: usize) -> io::Result<()> {
         let prev_msg_info = self.settings.propagation_graphs.get_by_id(&prev_msg_id);
         // Potential follow-up messages:
         for msg_id in prev_msg_info.get_needed_by() {
@@ -388,12 +389,12 @@ impl KCensus {
             debug_assert!(msg_info.get_dependencies().contains(&prev_msg_id));
 
             let msg = SpreadValueOnly { msg_id: *msg_id, v };
-            send_msg!(self, msg, msg_id.dest)?;
+            self.send_to(msg, msg_id.dest).await?;
         }
         Ok(())
     }
 
-    async fn graph_spread_new_value_only(&mut self, v: usize) -> io::Result<()> {
+    async fn graph_spread_new_value_only(&self, v: usize) -> io::Result<()> {
         for msg_id in self.settings.propagation_graphs.get_start(self.my_pid) {
             debug_assert_eq!(msg_id.src, self.my_pid);
             let msg_info = self.settings.propagation_graphs.get_by_id(msg_id);
@@ -402,8 +403,42 @@ impl KCensus {
             debug_assert!(msg_info.get_dependencies().is_empty());
 
             let msg = SpreadValueOnly { msg_id: *msg_id, v };
-            send_msg!(self, msg, msg_id.dest)?;
+            self.send_to(msg, msg_id.dest).await?;
         }
         Ok(())
+    }
+}
+
+pub(crate) type KCensus = Consensus<KCensusSettings, usize, KCensusRoundState>;
+
+impl KCensus {
+    pub fn new(
+        nb_nodes: usize,
+        my_pid: usize,
+        sinks: MultiSink,
+        leader_priority: Vec<usize>,
+        propagation_graphs: PropagationGraphs,
+        shard_count: usize,
+    ) -> Self {
+        let sinks = Arc::new(Mutex::new(sinks));
+        let propagation_graphs = Arc::new(propagation_graphs);
+        Self {
+            nb_nodes,
+            shards: (0..shard_count)
+                .map(|shard_id| {
+                    KCensusShard::new(
+                        nb_nodes,
+                        my_pid,
+                        ShardMultiSink {
+                            shard_id,
+                            multi_sink: sinks.clone(),
+                        },
+                        leader_priority.clone(),
+                        propagation_graphs.clone(),
+                    )
+                })
+                .collect(),
+            sinks,
+        }
     }
 }

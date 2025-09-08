@@ -76,6 +76,7 @@ impl MessageInfo {
 struct PropagationGraph {
     start_messages: Vec<MessageId>,
     graph: HashMap<MessageId, MessageInfo>,
+    end_messages: HashSet<MessageId>,
 }
 
 #[derive(Debug)]
@@ -98,6 +99,10 @@ impl PropagationGraphs {
     #[inline]
     pub fn get_start(&self, proposer: ProcId) -> &[MessageId] {
         &self.graphs[proposer].start_messages
+    }
+
+    pub fn can_commit(&self, proposer: ProcId, received: &HashSet<MessageId>) -> bool {
+        self.graphs[proposer].end_messages.is_subset(&received)
     }
 }
 
@@ -221,6 +226,7 @@ pub fn compute_propagation_graphs(
             propagation_graphs.push(PropagationGraph {
                 start_messages: Vec::new(),
                 graph: HashMap::new(),
+                end_messages: HashSet::new(),
             });
             kcensus_latencies.push(topology::FAULTY_LATENCY);
             continue;
@@ -262,7 +268,7 @@ pub fn compute_propagation_graphs(
         // Simulate gossip until commit
         let mut round_state = KCensusRoundState::new(nb_nodes, proposer);
         let mut count = 0;
-        while !round_state.can_commit() {
+        while !round_state.can_commit(None) {
             let t = &triangular_paths[count];
             round_state.partial_learn(t.second, t.first);
             count += 1;
@@ -304,7 +310,7 @@ pub fn compute_propagation_graphs(
             };
 
             if !value_only_path {
-                if round_state.can_commit() {
+                if round_state.can_commit(None) {
                     j = 0;
                     trace!("Messages in graph (before adding \"value only\" paths): ");
                     let mut messages = message_graph.iter().collect::<Vec<_>>();
@@ -488,9 +494,15 @@ pub fn compute_propagation_graphs(
         debug_assert!(kcensus_latencies.len() == proposer);
         debug_assert!(propagation_graphs.len() == proposer);
         kcensus_latencies.push(max_latency);
+        let end_messages = message_graph
+            .keys()
+            .copied()
+            .filter(|id| id.dest == proposer)
+            .collect();
         propagation_graphs.push(PropagationGraph {
             start_messages,
             graph: message_graph,
+            end_messages,
         });
     }
 

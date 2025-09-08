@@ -4,13 +4,15 @@ use crate::consensus::read_tracker::ReadTracker;
 use crate::eval;
 use crate::message::Message::{ConsensusM, Done};
 use crate::message::MsgWithSource;
-use crate::multi_sink::MultiSink;
+use crate::multi_sink::{MultiSink, ShardMultiSink};
 use command::Command;
 use log::{debug, info};
 use std::collections::{HashMap, VecDeque};
 use std::io;
+use std::sync::Arc;
 use tokio::select;
 use tokio::sync::mpsc::{Receiver, Sender};
+use tokio::sync::Mutex;
 
 pub(crate) mod command;
 pub mod kcensus;
@@ -18,14 +20,14 @@ pub(crate) mod message;
 pub(crate) mod paxos_family;
 mod read_tracker;
 
-pub(crate) struct Consensus<AlgoSettings, AlgoRound, AlgoRoundState> {
+pub(crate) struct ConsensusShard<AlgoSettings, AlgoRound, AlgoRoundState> {
     // Settings
     nb_nodes: usize,
     my_pid: usize,
     leader_priority: Vec<usize>,
 
     // Connections
-    sinks: MultiSink,
+    sinks: ShardMultiSink,
 
     // Overall state
     next_uid: usize,
@@ -39,10 +41,16 @@ pub(crate) struct Consensus<AlgoSettings, AlgoRound, AlgoRoundState> {
     round_state: AlgoRoundState,
 }
 
-pub(crate) trait ConsensusTrait {
+pub(crate) struct Consensus<AlgoSettings, AlgoRound, AlgoRoundState> {
+    nb_nodes: usize,
+    shards: Vec<ConsensusShard<AlgoSettings, AlgoRound, AlgoRoundState>>,
+    sinks: Arc<Mutex<MultiSink>>,
+}
+
+pub(crate) trait ConsensusShardTrait {
     async fn process_message(&mut self, msg: ConsensusMessage) -> io::Result<Option<CommandBatch>>;
 
-    fn can_forward_proposals(&mut self) -> bool;
+    fn can_forward_proposals(&self) -> bool;
 
     async fn propose_start(&mut self, value: CommandBatch, contention: bool) -> io::Result<()>;
 
@@ -57,7 +65,7 @@ pub(crate) trait ConsensusTrait {
 
 impl<AS, AR, ARS> Consensus<AS, AR, ARS>
 where
-    Consensus<AS, AR, ARS>: ConsensusTrait,
+    ConsensusShard<AS, AR, ARS>: ConsensusShardTrait,
 {
     pub async fn run(
         &mut self,
@@ -65,114 +73,154 @@ where
         mut new_client_commands_rx: Receiver<Command>,
         committed_commands_tx: Sender<Command>,
     ) -> io::Result<()> {
-        let mut queued_messages: VecDeque<ConsensusMessage> =
-            VecDeque::with_capacity(self.nb_nodes);
         let mut count_done = 0usize;
         let mut done = false;
-        let mut max_queued_slot = 0;
 
-        'main_loop: loop {
-            // Process queued messages (if possible)
-            let mut i = 0usize;
-            while i < queued_messages.len() {
-                let msg = &queued_messages[i];
-                if self.ready_to_process(msg) {
-                    let msg = queued_messages.remove(i).unwrap();
-                    let batch = self.full_process_message(msg).await?;
-                    if self.commit_commands(&committed_commands_tx, batch).await {
-                        continue 'main_loop; // Restart from the beginning of the queue
-                    }
-                } else {
-                    i += 1;
-                }
-            }
+        let mut queued_messages: Vec<VecDeque<ConsensusMessage>> =
+            vec![VecDeque::with_capacity(self.nb_nodes); self.shards.len()];
+        let likely_queued = (!self.shards[0].can_forward_proposals()) as usize;
+        let mut my_queued_commands: Vec<VecDeque<Command>> =
+            vec![VecDeque::with_capacity(likely_queued); self.shards.len()];
 
-            if count_done == self.nb_nodes {
-                break 'main_loop;
-            }
-
-            let ongoing = self.get_my_v().is_some() || max_queued_slot > self.slot;
-            let should_repropose = !ongoing && self.has_queued_commands();
-            // TODO: (Optim.) peak connection first ?
-            if should_repropose && self.should_lead() {
-                if let Some(batch) = self.get_new_batch_to_propose() {
-                    self.propose_start(batch, false).await?;
-                } else {
-                    let v = self.get_v_to_repropose();
-                    self.repropose_start(v).await?;
-                }
-            }
-
+        'main_loop: while count_done < self.nb_nodes {
             // Read new messages and/or new local command
-            let msg = select! {
-                command = new_client_commands_rx.recv(), if (!ongoing || self.can_forward_proposals()) && !should_repropose && !done => {
+            let shard = select! {
+                command = new_client_commands_rx.recv(), if !done => {
                     match command {
                         Some(command) =>  {
+                            let shard = command.shard;
                             if command.read_only {
-                                self.start_read(command).await?;
+                                self.shards[shard].start_read(command).await?;
                             } else {
-                                self.propose_start(CommandBatch::Single(command), ongoing).await?;
+                                let ongoing = self.shards[shard].get_my_v().is_some()
+                                    || !queued_messages[shard].is_empty();
+                                let contention = ongoing || self.shards[shard].has_queued_commands();
+                                if self.shards[shard].can_forward_proposals() || !contention {
+                                    self.shards[shard].propose_start(CommandBatch::Single(command), contention).await?;
+                                } else {
+                                    my_queued_commands[shard].push_back(command);
+                                }
                             }
+                            shard
                         }
                         None => {
+                            debug_assert!(my_queued_commands.iter().all(|x| x.is_empty()));
                             done = true;
-                            self.sinks.inner_broadcast(Done).await?;
+                            self.sinks.lock().await.broadcast(Done).await?;
                             count_done += 1;
-                            if count_done == self.nb_nodes {
-                                break 'main_loop;
-                            }
+                            continue 'main_loop;
                         }
                     }
-                    msg_rx.recv().await.unwrap()
                 }
-                opt_msg = msg_rx.recv() => opt_msg.unwrap(),
+                opt_msg = msg_rx.recv() => {
+                    let msg = opt_msg.unwrap();
+                    let shard = match msg.msg {
+                        ConsensusM { shard, msg, value } => {
+                            let new_value = value.is_some();
+                            if let Some(value) = value {
+                                debug_assert!(msg.can_include_value());
+                                let v = msg.get_v().expect("A value should travel with its uid");
+                                self.shards[shard].store_remote_command(v, value);
+                            } else {
+                                debug_assert!(!msg.should_include_value());
+                            };
+
+                            if !self.shards[shard].ready_to_process(&msg) {
+                                queued_messages[shard].push_back(msg);
+                                continue 'main_loop;
+                            }
+
+                            let res_command = self.shards[shard].full_process_message(msg).await?;
+                            let commited = self.shards[shard]
+                                .commit_commands(&committed_commands_tx, res_command)
+                                .await;
+
+                            if !commited && !new_value {
+                                continue 'main_loop; // No need to process queue nor repropose.
+                            }
+
+                            shard
+                        }
+                        Done => {
+                            count_done += 1;
+                            continue 'main_loop;
+                        }
+                        _ => panic!("Unexpected message type"),
+                    };
+
+                    // Process queued messages (if ready)
+                    let mut i = 0usize;
+                    while i < queued_messages[shard].len() {
+                        // TODO: (Optim.) check Commit messages first ?
+                        let msg = &queued_messages[shard][i];
+                        if self.shards[shard].ready_to_process(msg) {
+                            let msg = queued_messages[shard].remove(i).unwrap();
+                            let batch = self.shards[shard].full_process_message(msg).await?;
+                            if self.shards[shard]
+                                .commit_commands(&committed_commands_tx, batch)
+                                .await
+                            {
+                                i = 0; // Restart from the beginning of the queue
+                            }
+                        } else {
+                            i += 1;
+                        }
+                    }
+
+                    shard
+                },
             };
 
-            match msg.msg {
-                ConsensusM { msg, value } => {
-                    if let Some(value) = value {
-                        debug_assert!(msg.can_include_value());
-                        let v = msg.get_v().expect("A value should travel with its uid");
-                        self.store_remote_command(v, value);
-                    } else {
-                        debug_assert!(!msg.should_include_value());
-                    }
+            let ongoing =
+                self.shards[shard].get_my_v().is_some() || !queued_messages[shard].is_empty();
+            let should_repropose = !ongoing && self.shards[shard].has_queued_commands();
+            let contention = ongoing || should_repropose;
 
-                    if !self.ready_to_process(&msg) {
-                        max_queued_slot = max_queued_slot.max(msg.get_slot());
-                        queued_messages.push_back(msg);
-                        // TODO: recheck queued messages only if
-                        //   "ready_to_process" might have changed
-                        continue 'main_loop;
-                    }
+            if ongoing && self.shards[shard].get_my_v().is_none() {
+                debug!(
+                    "My_v is none but messages are still queued. my slot: {:?}, queue: {:?}",
+                    self.shards[shard].slot, queued_messages[shard]
+                );
+            }
 
-                    let res_command = self.full_process_message(msg).await?;
-                    if self
-                        .commit_commands(&committed_commands_tx, res_command)
-                        .await
-                    {
-                        continue 'main_loop; // Restart from the beginning of the queue
-                    }
+            // Process queued commands
+            // TODO: (Optim.) peak connection first ?
+            if should_repropose && self.shards[shard].should_lead() {
+                if let Some(batch) = self.shards[shard].get_new_batch_to_propose() {
+                    self.shards[shard].propose_start(batch, false).await?;
+                } else {
+                    let v = self.shards[shard].get_v_to_repropose();
+                    self.shards[shard].repropose_start(v).await?;
                 }
-                Done => count_done += 1,
-                _ => panic!("Unexpected message type"),
+            } else if !contention && !my_queued_commands[shard].is_empty() {
+                let command = my_queued_commands[shard].pop_front().unwrap();
+                assert!(!command.read_only, "read_only command wrongly queued");
+                self.shards[shard]
+                    .propose_start(CommandBatch::Single(command), false)
+                    .await?;
             }
         } // 'main_loop: loop
 
+        let sinks = self.sinks.lock().await;
         eval::log(
             "network-done",
             &format!(
                 "Sent {} messages ({} bytes)",
-                self.sinks.stats.msg_count, self.sinks.stats.byte_count
+                sinks.stats.msg_count, sinks.stats.byte_count
             ),
-            &self.sinks.stats,
+            &sinks.stats,
         );
 
         new_client_commands_rx.close();
         msg_rx.close();
         Ok(())
     } // run
+}
 
+impl<AS, AR, ARS> ConsensusShard<AS, AR, ARS>
+where
+    ConsensusShard<AS, AR, ARS>: ConsensusShardTrait,
+{
     #[inline]
     async fn start_read(&mut self, command: Command) -> io::Result<()> {
         let local_ready = self.get_my_v().is_none();
@@ -182,9 +230,7 @@ where
 
     #[inline]
     fn ready_to_process(&self, msg: &ConsensusMessage) -> bool {
-        if msg.get_slot() > self.slot {
-            false
-        } else {
+        if msg.get_slot() == self.slot {
             match msg.get_v() {
                 None => true,
                 Some(v) => match self.queued_commands.get(&v) {
@@ -195,6 +241,8 @@ where
                     }
                 },
             }
+        } else {
+            msg.get_slot() < self.slot // "Process" messages from lower slots, regardless of value
         }
     }
 
@@ -241,14 +289,14 @@ where
         committed_commands_tx: &Sender<Command>,
         batch: Option<CommandBatch>,
     ) -> bool {
-        let commit = async |command: Command| {
-            committed_commands_tx
-                .send(command)
-                .await
-                .expect("Sending commited value");
-        };
-
         if let Some(batch) = batch {
+            let commit = async |command: Command| {
+                committed_commands_tx
+                    .send(command)
+                    .await
+                    .expect("Sending commited value");
+            };
+
             match batch {
                 CommandBatch::Single(command) => {
                     commit(command).await;

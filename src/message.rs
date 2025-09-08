@@ -8,6 +8,7 @@ pub enum Message {
         pid: usize,
     },
     ConsensusM {
+        shard: usize,
         msg: ConsensusMessage,
         value: Option<CommandBatch>,
     },
