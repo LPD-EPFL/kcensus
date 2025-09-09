@@ -106,7 +106,7 @@ pub async fn run() -> io::Result<()> {
         x => x,
     };
     let faulty = topology.faults.contains(my_pid);
-    debug!("Loaded topology:{}", topology);
+    debug!("Loaded topology:{topology}");
     let start = Instant::now();
     let propagation_graphs = compute_propagation_graphs(
         &topology,

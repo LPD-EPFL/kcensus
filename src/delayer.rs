@@ -29,7 +29,6 @@ impl Delayer {
         mut input_stream: impl Stream<Item = io::Result<MsgWithSource>> + Unpin,
         simulate_delays: bool,
     ) {
-
         let dead = topology.faults.contains(my_pid);
         let delay = Delay::new(Instant::now()).expect("Delayer failed to init delay");
         pin!(delay);

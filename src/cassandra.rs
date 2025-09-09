@@ -15,11 +15,11 @@ use std::collections::HashMap;
 use std::io;
 use std::num::NonZeroUsize;
 use std::pin::Pin;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::{mpsc, Semaphore};
 use tokio::sync::mpsc::{Receiver, Sender};
+use tokio::sync::{mpsc, Semaphore};
 use tokio::{pin, select};
 use tokio_stream::Stream;
 use tokio_timerfd::Delay;
@@ -90,24 +90,25 @@ impl ParallelCassandraExecutor {
         let mut shard_join_handles = Vec::with_capacity(shards);
 
         let handler = Arc::new(handler);
-        
+
         let total_completed = Arc::new(AtomicUsize::new(0));
         let first_request_time = Arc::new(std::sync::Mutex::new(None));
         // Create per-shard channels and spawn workers
         for _shard_id in 0..shards {
             let (tx, mut rx) = mpsc::channel::<(Request, Option<Sender<Response>>)>(32);
             shard_senders.push(tx);
-            
+
             // Clone necessary resources for the worker
             let handler = handler.clone();
             let semaphore = global_semaphore.clone();
-            
+
             let total_completed = total_completed.clone();
             let first_request_time = first_request_time.clone();
             // Spawn per-shard worker to maintain ordering
             let handle = tokio::spawn(async move {
                 while let Some((request, response_tx)) = rx.recv().await {
-                    {   // record first request time
+                    {
+                        // record first request time
                         let mut first_time = first_request_time.lock().unwrap();
                         if first_time.is_none() {
                             *first_time = Some(Instant::now());
@@ -115,14 +116,17 @@ impl ParallelCassandraExecutor {
                     }
                     // Acquire permit from global semaphore
                     let _permit = semaphore.acquire().await.expect("Semaphore was closed");
-                    
+
                     // Execute the request directly
                     let response = handler.execute(request).await;
-                    
+
                     // Send response back
                     if let Some(response_tx) = response_tx {
                         // If a response channel was provided, send the response
-                        response_tx.send(response).await.expect("Server failed to enqueue client Response");
+                        response_tx
+                            .send(response)
+                            .await
+                            .expect("Server failed to enqueue client Response");
                     };
                     // Permit is automatically released when _permit is dropped
                     total_completed.fetch_add(1, Ordering::Relaxed);
@@ -130,7 +134,7 @@ impl ParallelCassandraExecutor {
             });
             shard_join_handles.push(handle);
         }
-        
+
         Self {
             shard_senders,
             global_semaphore,
@@ -188,7 +192,7 @@ impl Handler {
             .prepare("SELECT value FROM kvstore.kv_pairs WHERE key = ?;")
             .await
             .expect("Cassandra failed to prepare get statement");
-        
+
         PreparedHandler {
             session: self.session,
             put_ps,
@@ -381,7 +385,7 @@ impl Client {
                 self.my_pid,
                 key,
                 &Request::Put {
-                    key: format!("key{}", key),
+                    key: format!("key{key}"),
                     value: format!("v{}.{}!", self.my_pid, request_id),
                     shard: key as u64,
                     request_id,
@@ -392,7 +396,7 @@ impl Client {
                 self.my_pid,
                 key,
                 &Request::Get {
-                    key: format!("key{}", key),
+                    key: format!("key{key}"),
                     shard: key as u64,
                     request_id,
                 },
@@ -615,14 +619,19 @@ impl App {
     pub async fn run(mut self) {
         while let Some(command) = self.committed_request_rx.recv().await {
             let command: CommittedCommand<Request> = command.into();
-            trace!("About to execute committed request: {:?}", command);
+            trace!("About to execute committed request: {command:?}");
             if let Some(parallel_executor) = self.parallel_executor.as_ref() {
                 // Use parallel executor for Cassandra
-                parallel_executor.execute(command.app_request, if command.proposer == self.my_pid {
-                    Some(self.client_response_tx.clone())
-                } else {
-                    None
-                }).await
+                parallel_executor
+                    .execute(
+                        command.app_request,
+                        if command.proposer == self.my_pid {
+                            Some(self.client_response_tx.clone())
+                        } else {
+                            None
+                        },
+                    )
+                    .await
             } else {
                 let response = match command.app_request {
                     Request::Put {
@@ -665,10 +674,7 @@ impl App {
                 let elapsed_secs = elapsed.as_secs_f64();
                 let throughput = completed as f64 / elapsed_secs;
                 let readable = format!(
-                    "{} requests in {:.3} seconds ({:.2} req/s)",
-                    completed,
-                    elapsed_secs,
-                    throughput
+                    "{completed} requests in {elapsed_secs:.3} seconds ({throughput:.2} req/s)"
                 );
                 let event = ThroughputEvent {
                     requests: completed,

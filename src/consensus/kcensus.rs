@@ -59,7 +59,7 @@ impl ConsensusShardTrait for KCensusShard {
         let src = msg.src;
         let msg = match msg.msg {
             KCensusM(msg) => msg,
-            x => panic!("Unexpected message type: {:?}", x),
+            x => panic!("Unexpected message type: {x:?}"),
         };
 
         // TODO: Ignore some messages if max_seen_slot > slot ?

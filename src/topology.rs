@@ -45,7 +45,7 @@ impl Topology {
         let mut contents = String::new();
         file.read_to_string(&mut contents)
             .expect("Failed to read toml config");
-        debug!("Loaded config:\n{}", contents);
+        debug!("Loaded config:\n{contents}");
         let config: Config = toml::from_str(&contents).expect("Failed to parse toml config");
         Self::from_config(config, faults)
     }

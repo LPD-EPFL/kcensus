@@ -47,7 +47,7 @@ impl Connector {
 
     pub async fn accept_connection(&self) -> io::Result<(SerStream, WrappedSink)> {
         let (socket, address) = self.listener.accept().await?;
-        debug!("Connection received from: {:?}", address);
+        debug!("Connection received from: {address:?}");
         socket.set_nodelay(true)?;
         Ok(wrap_stream(socket))
     }
@@ -70,7 +70,6 @@ pub async fn connect_all(
     MultiSink,
     impl Stream<Item = Result<MsgWithSource, io::Error>>,
 ) {
-    let nb_nodes = nb_nodes;
     let mut sinks = MultiSink::new_with_faults(my_pid, nb_nodes, faults.iter().flatten());
     let mut streams = Vec::with_capacity(nb_nodes);
 

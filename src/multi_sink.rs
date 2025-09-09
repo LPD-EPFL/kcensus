@@ -68,7 +68,7 @@ impl MultiSink {
 
     #[inline]
     pub async fn broadcast(&mut self, msg: Message) -> io::Result<()> {
-        debug!("Broadcasting {:?}", msg);
+        debug!("Broadcasting {msg:?}");
         let bytes = encode(&msg);
         for (dest, sink) in self.sinks.iter_mut() {
             if msg.is_consensus_msg() {
@@ -86,7 +86,7 @@ impl MultiSink {
 
     #[inline]
     pub async fn send(&mut self, msg: Message, pid: usize) -> io::Result<()> {
-        debug!("Sending to {pid}: {:?}", msg);
+        debug!("Sending to {pid}: {msg:?}");
         debug_assert!(pid != self.my_pid);
         if msg.is_consensus_msg() && self.faults.contains(pid) {
             return Ok(());

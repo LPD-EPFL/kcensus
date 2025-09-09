@@ -256,7 +256,7 @@ where
                 return Ok(None);
             }
             debug_assert_eq!(slot, self.slot);
-            info!("Commit msg: v={}", v);
+            info!("Commit msg: v={v}");
             return Ok(Some(self.commit_slot(v, true)));
         };
         if let ReadRequest { uid } = msg.msg {
@@ -279,7 +279,7 @@ where
                 .receive_ready(uid)
                 .map(CommandBatch::Single));
         }
-        debug!("Processing message: {:?}", msg);
+        debug!("Processing message: {msg:?}");
         self.process_message(msg).await
     }
 

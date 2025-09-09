@@ -76,7 +76,7 @@ impl ConsensusShardTrait for PaxosFamilyShard {
         let src = msg.src;
         let msg = match msg.msg {
             PaxosM(msg) => msg,
-            x => panic!("Unexpected message type: {:?}", x),
+            x => panic!("Unexpected message type: {x:?}"),
         };
 
         match msg {
@@ -115,7 +115,7 @@ impl ConsensusShardTrait for PaxosFamilyShard {
                         self.round_state.epaxos_answered(src, proposer, v);
                         if self.round_state.epaxos_can_commit() {
                             self.broadcast_commit().await?;
-                            info!("Fast-commited: v={}", v);
+                            info!("Fast-commited: v={v}");
                             let value = self.commit_slot(v, true);
                             return Ok(Some(value));
                         }
@@ -147,7 +147,7 @@ impl ConsensusShardTrait for PaxosFamilyShard {
 
                 if self.round_state.paxos_can_commit() {
                     self.broadcast_commit().await?;
-                    info!("Commited: v={}", v);
+                    info!("Commited: v={v}");
                     let value = self.commit_slot(v, true);
                     return Ok(Some(value));
                 }

@@ -102,7 +102,7 @@ impl PropagationGraphs {
     }
 
     pub fn can_commit(&self, proposer: ProcId, received: &HashSet<MessageId>) -> bool {
-        self.graphs[proposer].end_messages.is_subset(&received)
+        self.graphs[proposer].end_messages.is_subset(received)
     }
 }
 
@@ -206,7 +206,7 @@ pub fn compute_propagation_graphs(
     let mut multi_paxos_latencies = Vec::with_capacity(nb_nodes);
 
     for proposer in 0..nb_nodes {
-        trace!("proposer: {}", proposer);
+        trace!("proposer: {proposer}");
 
         let mut proposer_round_trips = rtts[proposer].clone();
         proposer_round_trips.sort();
