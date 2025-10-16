@@ -22,15 +22,15 @@ ALGORITHMS = {
         "marker": "",
         "markersize": 2.5,
     },
-    "k-census": {
-        "label": "K-Census",
+    "kcensus": {
+        "label": "KCensus",
         "color": green,
         "lw": 0.7,
         "linestyle": "-",
         "marker": "d",
         "markersize": 2.4,
     },
-    "e-paxos": {
+    "epaxos": {
         "label": "EPaxos",
         "color": yellow,
         "lw": 0.7,

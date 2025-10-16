@@ -1,10 +1,10 @@
-# K-Census
+# KCensus
 
 Fast Consensus Through Knowledge Gossiping
 
 # Running Experiments & Reproducing Results
 
-This guide provides instructions to reproduce the plots from the K-Census paper. It covers:
+This guide provides instructions to reproduce the plots from the KCensus paper. It covers:
 
 *   Configuring your local environment and AWS account
 *   Building required artifacts (binaries and custom machine image)
@@ -15,11 +15,11 @@ The workflow is automated using Packer, Terraform, Ansible, and shell scripts.
 
 ## 1. Clone the Repository
 
-First, clone the K-Census repository to your local machine:
+First, clone the KCensus repository to your local machine:
 
 ```bash
-git clone https://github.com/lPD-EPFL/k-census/
-cd k-census
+git clone https://github.com/lPD-EPFL/kcensus/
+cd kcensus
 ```
 
 
@@ -101,7 +101,7 @@ cargo build --target x86_64-unknown-linux-musl --release
 
 ## 4. Running Experiments and Generating Plots
 
-All commands below assume you are in the root `k-census` directory.
+All commands below assume you are in the root `kcensus` directory.
 
 Each experiment is run using `geo_eval.sh`, which provisions infrastructure, deploys code, runs the experiment, and collects logs. The `plot.sh` script processes logs to generate plot data.
 
@@ -170,7 +170,8 @@ The `geo_eval.sh` script automatically destroys resources after each experiment.
 
 ### Manual Cleanup
 
-To manually clean up resources, use the `destroy` function in `geo_eval.sh`. Provide the Terraform variable file and the experiment ID used during provisioning.
+To manually clean up resources, use the `destroy` function in `geo_eval.sh`. Provide the Terraform variable file and the
+experiment ID used during provisioning.
 
 Example 1: If `exp-1` was interrupted on `aws-europe-7`:
 

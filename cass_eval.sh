@@ -2,7 +2,7 @@
 
 CASSANDRA_BASE_PORT="9042"
 BASE_LOG_DIR="./logs"
-REPLICATED_ALGOS=(k-census e-paxos multi-paxos paxos weak-replication)
+REPLICATED_ALGOS=(kcensus epaxos multi-paxos paxos weak-replication)
 ALGOS=(no-replication ${REPLICATED_ALGOS[@]})
 REQUESTS=50000
 SPEEDUP=1
@@ -122,7 +122,7 @@ function run() {
 function main() {
   for writes in "1"; do
     for config in "aws-europe-3.toml"; do
-      for algo in "k-census"; do
+      for algo in "kcensus"; do
         run "$config" "$algo" "$writes" "$REQUESTS" exponential 10000 "$KEYS"
       done
     done

@@ -8,7 +8,7 @@ LOG_DIR = "../logs"
 def parse(
     pids=None,
     config="aws-europe-7.toml",
-    algo="k-census",
+    algo="kcensus",
     writes=0.5,
     requests=100,
     ingress="round-robin",

@@ -53,11 +53,17 @@ struct Args {
 
 #[derive(clap::ValueEnum, Clone, Debug)]
 enum Algo {
+    #[value(name = "kcensus", alias = "KCensus")]
     KCensus,
+    #[value(name = "paxos", alias = "Paxos")]
     Paxos,
+    #[value(name = "epaxos", alias = "EPaxos")]
     EPaxos,
+    #[value(name = "multi-paxos", alias = "Multi-Paxos")]
     MultiPaxos,
+    #[value(name = "no-replication", alias = "NoReplication")]
     NoReplication,
+    #[value(name = "weak-replication", alias = "WeakReplication")]
     WeakReplication,
 }
 

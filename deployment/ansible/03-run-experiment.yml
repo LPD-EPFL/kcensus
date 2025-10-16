@@ -4,15 +4,15 @@
   gather_facts: no
   vars:
     # default values: will always be overriden
-    algo: "k-census"
-    writes: "1" 
+    algo: "kcensus"
+    writes: "1"
     requests: "100"
     ingress: "round-robin"
     throughput: "0"
     speedup: "1"
     faults: ""
     result_path: "./results_default"
-    
+
   tasks:
     - name: Set sub_exp_id for regular inventory (fallback to host index)
       set_fact:

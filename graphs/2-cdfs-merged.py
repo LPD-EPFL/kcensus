@@ -118,7 +118,7 @@ for category, pid_data in logs_a.items():
 logs_a = flattened_output
 
 logs_b = parse(
-    algo="k-census",
+    algo="kcensus",
     config=config,
     writes=writes,
     requests=requests,

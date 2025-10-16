@@ -3,7 +3,7 @@
 set -e
 
 BASE_LOG_DIR="./logs"
-REPLICATED_ALGOS=(k-census e-paxos multi-paxos paxos weak-replication)
+REPLICATED_ALGOS=(kcensus epaxos multi-paxos paxos weak-replication)
 ALGOS=(no-replication "${REPLICATED_ALGOS[@]}")
 YCSB=(1 0.5 0.05)
 REQUESTS=100

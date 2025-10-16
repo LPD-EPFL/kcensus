@@ -289,7 +289,7 @@ pub fn compute_propagation_graphs(
 
         // TODO: Some triangles might still not be needed to commit.
         //   Try to check if they are needed for can_commit? (can be merged with bellow logic?)
-        //   (Easy case: detect if e-paxos quorum)
+        //   (Easy case: detect if epaxos quorum)
 
         round_state.clear();
         let mut message_times: Vec<Vec<BTreeSet<Duration>>> =
