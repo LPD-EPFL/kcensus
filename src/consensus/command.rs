@@ -2,7 +2,7 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Command {
-    pub proposer: usize,
+    pub requester: usize,
     pub shard: usize,
     pub command: Vec<u8>,
     pub read_only: bool,
@@ -11,31 +11,31 @@ pub struct Command {
 impl Command {
     #[inline]
     pub fn new_read_only<ApplicationRequest: Serialize>(
-        proposer: usize,
+        requester: usize,
         shard: usize,
         app_request: &ApplicationRequest,
     ) -> Self {
-        Self::new(proposer, shard, app_request, true)
+        Self::new(requester, shard, app_request, true)
     }
 
     #[inline]
     pub fn new_write<ApplicationRequest: Serialize>(
-        proposer: usize,
+        requester: usize,
         shard: usize,
         app_request: &ApplicationRequest,
     ) -> Self {
-        Self::new(proposer, shard, app_request, false)
+        Self::new(requester, shard, app_request, false)
     }
 
     #[inline]
     fn new<ApplicationRequest: Serialize>(
-        proposer: usize,
+        requester: usize,
         shard: usize,
         app_request: &ApplicationRequest,
         read_only: bool,
     ) -> Self {
         Self {
-            proposer,
+            requester,
             shard,
             command: bincode::serialize(app_request)
                 .expect("Failed to serialize application request"),
@@ -46,7 +46,7 @@ impl Command {
 
 #[derive(Debug)]
 pub struct CommittedCommand<ApplicationRequest> {
-    pub proposer: usize,
+    pub requester: usize,
     pub app_request: ApplicationRequest,
 }
 
@@ -54,7 +54,7 @@ impl<ApplicationRequest: DeserializeOwned> From<Command> for CommittedCommand<Ap
     #[inline]
     fn from(command: Command) -> Self {
         Self {
-            proposer: command.proposer,
+            requester: command.requester,
             app_request: bincode::deserialize::<ApplicationRequest>(&command.command)
                 .expect("Failed to deserialize committed request"),
         }

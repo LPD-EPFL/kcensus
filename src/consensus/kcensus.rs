@@ -85,11 +85,11 @@ impl ConsensusShardTrait for KCensusShard {
                 }
                 debug_assert_eq!(slot, self.slot);
                 debug_assert_eq!(round, self.round);
-                let old_proposer_count = self.round_state.proposers().len();
+                let old_leader_count = self.round_state.leaders().len();
 
                 let no_v_before = self.round_state.get_my_v().is_none();
                 if no_v_before {
-                    debug_assert!(old_proposer_count == 0);
+                    debug_assert!(old_leader_count == 0);
                     debug_assert!(!self.round_state.am_i_frozen());
                     // TODO: pick most popular v instead ?
                     self.round_state.set_my_v(msg_v);
@@ -97,7 +97,7 @@ impl ConsensusShardTrait for KCensusShard {
                 let my_v = self.round_state.get_my_v().unwrap();
 
                 let learned = self.round_state.learn_from(&remote_states);
-                let proposer_count = self.round_state.proposers().len();
+                let leader_count = self.round_state.leaders().len();
 
                 if let Some(msg_id) = msg_id {
                     self.round_state.receive_msg(msg_id);
@@ -105,7 +105,7 @@ impl ConsensusShardTrait for KCensusShard {
 
                 // Can commit ?
                 // TODO: Make can_commit faster when using graph
-                if self.round_state.i_am_proposer()
+                if self.round_state.i_am_leader()
                     && self
                         .round_state
                         .can_commit(Some(&self.settings.propagation_graphs))
@@ -129,13 +129,13 @@ impl ConsensusShardTrait for KCensusShard {
                         self.graph_spread_value_only(msg_id, msg_v).await?;
                     }
 
-                    if self.round_state.i_am_proposer() {
-                        let min_proposer = *self
+                    if self.round_state.i_am_leader() {
+                        let min_leader = *self
                             .leader_priority
                             .iter()
-                            .find(|leader| self.round_state.proposers().contains(leader))
+                            .find(|leader| self.round_state.leaders().contains(leader))
                             .unwrap();
-                        if min_proposer == self.my_pid {
+                        if min_leader == self.my_pid {
                             if let Some(adopted_v) = self.round_state.try_adopt() {
                                 // Conflict resolved. Adopting...
                                 self.goto_round(self.round + 1);
@@ -147,25 +147,25 @@ impl ConsensusShardTrait for KCensusShard {
 
                     if !orig_frozen {
                         if msg_frozen {
-                            // Existing conflict. Spreading to proposers.
-                            for i in 0..proposer_count {
-                                self.spread_to(self.round_state.proposers()[i]).await?;
+                            // Existing conflict. Spreading to leaders.
+                            for i in 0..leader_count {
+                                self.spread_to(self.round_state.leaders()[i]).await?;
                             }
                         } else {
                             // New conflict. Freezing others...
                             self.spread_to_all().await?;
                         }
                     } else {
-                        // Spread to new proposers only
-                        for i in old_proposer_count..proposer_count {
-                            self.spread_to(self.round_state.proposers()[i]).await?;
+                        // Spread to new leaders only
+                        for i in old_leader_count..leader_count {
+                            self.spread_to(self.round_state.leaders()[i]).await?;
                         }
                     }
                     return Ok(None);
                 }
 
                 if let Some(msg_id) = msg_id {
-                    if proposer_count == 1 {
+                    if leader_count == 1 {
                         self.graph_spread(msg_id, new_value).await?;
                         return Ok(None);
                     } else if with_value {
@@ -173,18 +173,18 @@ impl ConsensusShardTrait for KCensusShard {
                     }
                 }
 
-                // Multiple proposers of the same value
-                debug_assert!(proposer_count > 1);
+                // Multiple leaders of the same value
+                debug_assert!(leader_count > 1);
 
-                if old_proposer_count < 2 {
-                    // Transition to multi-proposer strategy
+                if old_leader_count < 2 {
+                    // Transition to multi-leader strategy
                     self.spread_to_all().await?;
-                } else if learned || old_proposer_count < proposer_count {
-                    let start_from = if learned { 0 } else { old_proposer_count };
-                    // Share knowledge with proposers
-                    for i in start_from..proposer_count {
-                        let proposer = self.round_state.proposers()[i];
-                        self.spread_to(proposer).await?;
+                } else if learned || old_leader_count < leader_count {
+                    let start_from = if learned { 0 } else { old_leader_count };
+                    // Share knowledge with leaders
+                    for i in start_from..leader_count {
+                        let leader = self.round_state.leaders()[i];
+                        self.spread_to(leader).await?;
                     }
                 }
             }
@@ -310,7 +310,7 @@ impl KCensusShard {
 
     async fn propose_and_spread(&mut self, v: usize, new_value: bool) -> io::Result<()> {
         self.round_state.set_my_v(v);
-        self.round_state.become_proposer();
+        self.round_state.become_leader();
 
         for msg_id in self
             .settings

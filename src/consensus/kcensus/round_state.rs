@@ -16,7 +16,7 @@ pub struct KCensusRoundState {
 
     node_states: Vec<NodeState>,
 
-    proposers: Vec<usize>,
+    leaders: Vec<usize>,
     received_msgs: HashSet<MessageId>,
 
     // can_commit optimizations / scratchpads
@@ -40,7 +40,7 @@ impl KCensusRoundState {
 
             node_states,
 
-            proposers: Vec::with_capacity(nb_nodes),
+            leaders: Vec::with_capacity(nb_nodes),
             received_msgs: HashSet::with_capacity(nb_nodes),
 
             my_quorum: Vec::with_capacity(nb_nodes),
@@ -61,7 +61,7 @@ impl KCensusRoundState {
         let inserted = my_state!(self).k.insert(self.my_pid);
         debug_assert!(inserted);
 
-        self.proposers.clear();
+        self.leaders.clear();
         self.received_msgs.clear();
 
         self.my_quorum.clear();
@@ -96,25 +96,25 @@ impl KCensusRoundState {
     }
 
     #[inline]
-    pub fn become_proposer(&mut self) {
-        debug_assert!(self.proposers.is_empty());
-        my_state!(self).proposer = true;
-        self.proposers.push(self.my_pid);
+    pub fn become_leader(&mut self) {
+        debug_assert!(self.leaders.is_empty());
+        my_state!(self).leader = true;
+        self.leaders.push(self.my_pid);
     }
 
     #[inline]
-    pub fn proposers(&self) -> &[usize] {
-        &self.proposers
+    pub fn leaders(&self) -> &[usize] {
+        &self.leaders
     }
 
     #[inline]
-    pub fn i_am_proposer(&self) -> bool {
+    pub fn i_am_leader(&self) -> bool {
         // Note: Can only propose if I didn't see other proposals
         debug_assert_eq!(
-            !self.proposers.is_empty() && self.proposers[0] == self.my_pid,
-            my_state!(self).proposer
+            !self.leaders.is_empty() && self.leaders[0] == self.my_pid,
+            my_state!(self).leader
         );
-        my_state!(self).proposer
+        my_state!(self).leader
     }
 
     #[inline]
@@ -135,16 +135,16 @@ impl KCensusRoundState {
             let local_node_state = &mut self.node_states[pid];
             local_node_state.k.union_with(&remote_node_state.k);
             if let Some(node_v) = remote_node_state.v {
-                if remote_node_state.proposer && !local_node_state.proposer {
+                if remote_node_state.leader && !local_node_state.leader {
                     debug_assert_ne!(pid, self.my_pid);
                     debug_assert!(local_node_state.v.is_none());
-                    self.proposers.push(pid);
-                    local_node_state.proposer = true;
+                    self.leaders.push(pid);
+                    local_node_state.leader = true;
                 }
                 debug_assert_eq!(local_node_state.v.unwrap_or(node_v), node_v);
                 local_node_state.v = Some(node_v);
             } else {
-                debug_assert!(!remote_node_state.proposer);
+                debug_assert!(!remote_node_state.leader);
             }
             local_node_state.frozen |= remote_node_state.frozen;
             if !self.am_i_frozen() && self.get_my_v() == remote_node_state.v {
@@ -226,7 +226,7 @@ impl KCensusRoundState {
         }
 
         // Use graph when possible
-        if self.i_am_proposer() && self.proposers().len() == 1 {
+        if self.i_am_leader() && self.leaders().len() == 1 {
             if let Some(graph) = graph {
                 return graph.can_commit(self.my_pid, &self.received_msgs);
             }

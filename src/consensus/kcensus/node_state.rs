@@ -8,7 +8,7 @@ pub struct NodeState {
     pub v: Option<usize>,
     pub k: Knowledge,
     pub frozen: bool,
-    pub proposer: bool,
+    pub leader: bool,
 }
 
 impl NodeState {
@@ -17,7 +17,7 @@ impl NodeState {
         self.v = None;
         self.k.clear();
         self.frozen = false;
-        self.proposer = false;
+        self.leader = false;
     }
 
     #[inline]
@@ -26,7 +26,7 @@ impl NodeState {
             v: None,
             k: BitSet::with_capacity(nb_nodes),
             frozen: false,
-            proposer: false,
+            leader: false,
         }
     }
 }

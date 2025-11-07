@@ -625,7 +625,7 @@ impl App {
                 parallel_executor
                     .execute(
                         command.app_request,
-                        if command.proposer == self.my_pid {
+                        if command.requester == self.my_pid {
                             Some(self.client_response_tx.clone())
                         } else {
                             None
@@ -652,7 +652,7 @@ impl App {
                         request_id,
                     },
                 };
-                if command.proposer == self.my_pid {
+                if command.requester == self.my_pid {
                     self.client_response_tx
                         .send(response)
                         .await

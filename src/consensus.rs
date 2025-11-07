@@ -345,7 +345,7 @@ where
     }
 
     fn get_new_batch_to_propose(&self) -> Option<CommandBatch> {
-        if self.queued_commands.is_empty() {
+        if self.queued_commands.len() <= 1 {
             return None;
         }
         let mut vs: Vec<_> = self.queued_commands.keys().copied().collect();
@@ -365,6 +365,19 @@ where
             CommandBatch::Batch(vs) => !vs.contains(&v),
         });
         out.expect("Removing command that does not exist")
+    }
+
+    #[inline]
+    fn get_requester(&self, v: usize) -> Option<usize> {
+        let cmd = self
+            .queued_commands
+            .get(&v)
+            .expect("Queued command not found");
+        if let CommandBatch::Single(cmd) = cmd {
+            Some(cmd.requester)
+        } else {
+            None
+        }
     }
 
     fn get_next_uid(&mut self) -> usize {

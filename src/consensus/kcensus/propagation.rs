@@ -17,7 +17,7 @@ type NetworkGraph = DiMatrix<(), f64, Option<f64>, usize>;
 
 #[derive(Ord, PartialOrd, Eq, PartialEq, Hash, Debug, Copy, Clone, Serialize, Deserialize)]
 pub struct MessageId {
-    pub proposer: ProcId,
+    pub leader: ProcId,
     pub src: ProcId,
     pub dest: ProcId,
     time: Duration,
@@ -28,7 +28,7 @@ impl Display for MessageId {
         write!(
             f,
             "(p{} at {:?}: {} -> {})",
-            self.proposer, self.time, self.src, self.dest
+            self.leader, self.time, self.src, self.dest
         )
     }
 }
@@ -88,21 +88,22 @@ pub struct PropagationGraphs {
     pub paxos_latencies: Vec<Duration>,
     pub epaxos_latencies: Vec<Duration>,
     pub multi_paxos_latencies: Vec<Vec<Duration>>,
+    pub multi_paxos_3p_latencies: Vec<Vec<Duration>>,
 }
 
 impl PropagationGraphs {
     #[inline]
     pub fn get_by_id(&self, msg_id: &MessageId) -> &MessageInfo {
-        &self.graphs[msg_id.proposer].graph[msg_id]
+        &self.graphs[msg_id.leader].graph[msg_id]
     }
 
     #[inline]
-    pub fn get_start(&self, proposer: ProcId) -> &[MessageId] {
-        &self.graphs[proposer].start_messages
+    pub fn get_start(&self, leader: ProcId) -> &[MessageId] {
+        &self.graphs[leader].start_messages
     }
 
-    pub fn can_commit(&self, proposer: ProcId, received: &HashSet<MessageId>) -> bool {
-        self.graphs[proposer].end_messages.is_subset(received)
+    pub fn can_commit(&self, leader: ProcId, received: &HashSet<MessageId>) -> bool {
+        self.graphs[leader].end_messages.is_subset(received)
     }
 }
 
@@ -131,7 +132,7 @@ pub fn compute_propagation_graphs(
     topology: &Topology,
     kcensus_graph: bool,
     shortest_paths: bool,
-    single_proposer: Option<usize>,
+    single_leader: Option<usize>,
 ) -> PropagationGraphs {
     let nb_nodes = topology.nb_nodes;
     let mut path_latencies = vec![vec![Duration::default(); nb_nodes]; nb_nodes];
@@ -204,24 +205,39 @@ pub fn compute_propagation_graphs(
     let mut paxos_latencies = Vec::with_capacity(nb_nodes);
     let mut epaxos_latencies = Vec::with_capacity(nb_nodes);
     let mut multi_paxos_latencies = Vec::with_capacity(nb_nodes);
+    let mut multi_paxos_3p_latencies = Vec::with_capacity(nb_nodes);
 
-    for proposer in 0..nb_nodes {
-        trace!("proposer: {proposer}");
+    for leader in 0..nb_nodes {
+        trace!("leader: {leader}");
 
-        let mut proposer_round_trips = rtts[proposer].clone();
-        proposer_round_trips.sort();
+        let mut leader_round_trips = rtts[leader].clone();
+        leader_round_trips.sort();
         let majority = 1 + nb_nodes / 2;
-        paxos_latencies.push(proposer_round_trips[majority - 1] * 2);
+        paxos_latencies.push(leader_round_trips[majority - 1] * 2);
         let e_paxos_quorum = ((nb_nodes * 3) / 4).max(majority);
-        epaxos_latencies.push(proposer_round_trips[e_paxos_quorum - 1]);
+        epaxos_latencies.push(leader_round_trips[e_paxos_quorum - 1]);
         let multi_paxos_latency = (0..nb_nodes)
-            .map(|requester| rtts[requester][proposer] + proposer_round_trips[majority - 1])
+            .map(|requester| rtts[requester][leader] + leader_round_trips[majority - 1])
             .collect();
         multi_paxos_latencies.push(multi_paxos_latency);
 
+        let multi_paxos_3p_latency: Vec<_> = (0..nb_nodes)
+            .map(|requester| {
+                let mut quorum_3p_round_trips: Vec<_> = (0..nb_nodes)
+                    .map(|acceptor| {
+                        topology.link_latency(leader, acceptor)
+                            + topology.link_latency(acceptor, requester)
+                    })
+                    .collect();
+                quorum_3p_round_trips.sort();
+                topology.link_latency(requester, leader) + quorum_3p_round_trips[majority - 1]
+            })
+            .collect();
+        multi_paxos_3p_latencies.push(multi_paxos_3p_latency);
+
         if !kcensus_graph
-            || topology.faults.contains(proposer)
-            || single_proposer.is_some_and(|p| p != proposer)
+            || topology.faults.contains(leader)
+            || single_leader.is_some_and(|p| p != leader)
         {
             propagation_graphs.push(PropagationGraph {
                 start_messages: Vec::new(),
@@ -234,11 +250,11 @@ pub fn compute_propagation_graphs(
 
         let mut triangular_paths: Vec<TriangularPath> = Vec::with_capacity(nb_nodes * nb_nodes);
         for first in 0..nb_nodes {
-            let latency_to_first = path_latencies[proposer][first];
+            let latency_to_first = path_latencies[leader][first];
             for second in 0..nb_nodes {
                 let total_latency = latency_to_first
                     + path_latencies[first][second]
-                    + path_latencies[second][proposer];
+                    + path_latencies[second][leader];
                 triangular_paths.push(TriangularPath {
                     first,
                     second,
@@ -256,17 +272,17 @@ pub fn compute_propagation_graphs(
         // Used to ensure the value is sent to everyone (not for knowledge spreading)
         let mut value_only_paths: Vec<TriangularPath> = Vec::with_capacity(nb_nodes);
         for node in 0..nb_nodes {
-            let total_latency = path_latencies[proposer][node] + path_latencies[node][proposer];
+            let total_latency = path_latencies[leader][node] + path_latencies[node][leader];
             value_only_paths.push(TriangularPath {
                 first: node,
-                second: proposer,
+                second: leader,
                 total_latency,
             })
         }
         value_only_paths.sort_by_key(triangle_latency);
 
         // Simulate gossip until commit
-        let mut round_state = KCensusRoundState::new(nb_nodes, proposer);
+        let mut round_state = KCensusRoundState::new(nb_nodes, leader);
         let mut count = 0;
         while !round_state.can_commit(None) {
             let t = &triangular_paths[count];
@@ -281,7 +297,7 @@ pub fn compute_propagation_graphs(
             "Left after truncate: {} real triangles, {} total",
             triangular_paths
                 .iter()
-                .filter(|x| x.first != proposer && x.second != proposer && x.first != x.second)
+                .filter(|x| x.first != leader && x.second != leader && x.first != x.second)
                 .count(),
             triangular_paths.len()
         );
@@ -334,28 +350,28 @@ pub fn compute_propagation_graphs(
             let mut current_time = Duration::default();
 
             let mut k: Knowledge = BitSet::with_capacity(nb_nodes);
-            k.insert(proposer);
+            k.insert(leader);
 
-            let mut current = proposer;
+            let mut current = leader;
             let mut prev_msg_id = None;
-            let mut shortest_path_from_proposer = true;
-            let mut shortest_path_to_proposer = false;
+            let mut shortest_path_from_leader = true;
+            let mut shortest_path_to_leader = false;
 
             let checkpoints = if value_only_path {
                 [t.first, t.first, t.first]
             } else {
-                [t.first, t.second, proposer]
+                [t.first, t.second, leader]
             };
             for (step, target) in checkpoints.into_iter().enumerate() {
-                if step > 0 && target == proposer {
-                    shortest_path_from_proposer = false;
-                    shortest_path_to_proposer = true;
+                if step > 0 && target == leader {
+                    shortest_path_from_leader = false;
+                    shortest_path_to_leader = true;
                 }
 
                 while current != target {
                     let src = current;
                     current = next_src[current][target];
-                    if t.total_latency > max_latency && value_only_path && target == proposer {
+                    if t.total_latency > max_latency && value_only_path && target == leader {
                         // Go back directly to limit message count
                         current = target;
                     }
@@ -366,11 +382,11 @@ pub fn compute_propagation_graphs(
                     }
 
                     if step > 0 {
-                        shortest_path_from_proposer &= prev_dest[proposer][current] == src;
+                        shortest_path_from_leader &= prev_dest[leader][current] == src;
 
-                        let left = path_latencies[src][target] + path_latencies[target][proposer];
-                        let to_prop = path_latencies[src][proposer];
-                        shortest_path_to_proposer |= left == to_prop;
+                        let left = path_latencies[src][target] + path_latencies[target][leader];
+                        let to_prop = path_latencies[src][leader];
+                        shortest_path_to_leader |= left == to_prop;
                     }
 
                     let deadline = current_time + max_slack;
@@ -381,7 +397,7 @@ pub fn compute_propagation_graphs(
                         // Reusing a message that is compatible with the time window!
                         // Reconstruct id:
                         let msg_id = MessageId {
-                            proposer,
+                            leader,
                             src,
                             dest: current,
                             time: *time,
@@ -401,7 +417,7 @@ pub fn compute_propagation_graphs(
                     } else {
                         // New message!
 
-                        let time = if shortest_path_from_proposer || !shortest_path_to_proposer {
+                        let time = if shortest_path_from_leader || !shortest_path_to_leader {
                             current_time
                         } else {
                             // Delay when it might make it more likely to be reused!
@@ -410,15 +426,15 @@ pub fn compute_propagation_graphs(
 
                         // Construct id
                         let msg_id = MessageId {
-                            proposer,
+                            leader,
                             src,
                             dest: current,
                             time,
                         };
 
                         if time == Duration::default() {
-                            debug_assert!(src == proposer);
-                            debug_assert!(shortest_path_from_proposer);
+                            debug_assert!(src == leader);
+                            debug_assert!(shortest_path_from_leader);
                             start_messages.push(msg_id);
                         }
 
@@ -437,7 +453,7 @@ pub fn compute_propagation_graphs(
                             }
                         };
                         debug_assert_eq!(dependencies.is_empty(), time == Duration::default());
-                        debug_assert!(!dependencies.is_empty() || src == proposer);
+                        debug_assert!(!dependencies.is_empty() || src == leader);
 
                         // Insert new message
                         let inserted = message_graph
@@ -465,7 +481,7 @@ pub fn compute_propagation_graphs(
 
         // TODO: This is only an assertion check
         for dest in 0..nb_nodes {
-            if dest == proposer {
+            if dest == leader {
                 continue;
             }
             let mut first_msg_time = None;
@@ -483,7 +499,7 @@ pub fn compute_propagation_graphs(
                 }
             }
             let first_msg_id = MessageId {
-                proposer,
+                leader,
                 src: first_src.unwrap(),
                 dest,
                 time: first_msg_time.unwrap(),
@@ -491,13 +507,13 @@ pub fn compute_propagation_graphs(
             assert!(message_graph[&first_msg_id].includes_new_values);
         }
 
-        debug_assert!(kcensus_latencies.len() == proposer);
-        debug_assert!(propagation_graphs.len() == proposer);
+        debug_assert!(kcensus_latencies.len() == leader);
+        debug_assert!(propagation_graphs.len() == leader);
         kcensus_latencies.push(max_latency);
         let end_messages = message_graph
             .keys()
             .copied()
-            .filter(|id| id.dest == proposer)
+            .filter(|id| id.dest == leader)
             .collect();
         propagation_graphs.push(PropagationGraph {
             start_messages,
@@ -514,5 +530,6 @@ pub fn compute_propagation_graphs(
         paxos_latencies,
         epaxos_latencies,
         multi_paxos_latencies,
+        multi_paxos_3p_latencies,
     }
 }

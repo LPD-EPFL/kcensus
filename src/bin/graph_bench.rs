@@ -36,11 +36,11 @@ fn main() {
                 topology.faults.clear();
                 topology.faults.extend(faults.iter().copied());
                 // println!("faults: {:?}", topology.faults);
-                for proposer in 0..nb_nodes {
-                    if topology.faults.contains(proposer) {
+                for leader in 0..nb_nodes {
+                    if topology.faults.contains(leader) {
                         continue;
                     }
-                    let _ = compute_propagation_graphs(&topology, true, true, Some(proposer));
+                    let _ = compute_propagation_graphs(&topology, true, true, Some(leader));
                     count += 1;
                 }
                 if !next_combination(&mut faults, nb_nodes) {

@@ -31,7 +31,7 @@ impl KCensusMsg {
             } => {
                 let v = remote_states[src].v;
                 if let Some(msg_id) = msg_id {
-                    debug_assert_eq!(remote_states[src].v, remote_states[msg_id.proposer].v)
+                    debug_assert_eq!(remote_states[src].v, remote_states[msg_id.leader].v)
                 }
                 v.expect("v of src should not be None")
             }

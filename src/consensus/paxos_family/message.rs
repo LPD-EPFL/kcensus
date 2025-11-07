@@ -6,13 +6,13 @@ use std::fmt::{Display, Formatter};
 #[derive(Serialize, Deserialize, Debug, Default, Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
 pub struct PaxosRound {
     pub round_group: usize,
-    pub proposer: usize,
+    pub leader: usize,
 }
 
 #[derive(Copy, Clone, Debug, Serialize, Deserialize)]
 pub enum RoundV {
     EPaxosV {
-        proposer: usize,
+        leader: usize,
         v: usize,
     },
     PaxosV {
@@ -41,15 +41,15 @@ pub enum PaxosMsg {
 
 impl PaxosRound {
     #[inline]
-    pub(crate) fn next_proposer_round(&self, my_pid: usize) -> PaxosRound {
-        let round_group = if my_pid >= self.proposer {
+    pub(crate) fn next_leader_round(&self, my_pid: usize) -> PaxosRound {
+        let round_group = if my_pid >= self.leader {
             self.round_group
         } else {
             self.round_group + 1
         };
         PaxosRound {
             round_group,
-            proposer: my_pid,
+            leader: my_pid,
         }
     }
 }
@@ -61,8 +61,8 @@ impl RoundV {
     }
 
     #[inline]
-    pub fn new_epaxos_v(proposer: usize, v: usize) -> Self {
-        EPaxosV { proposer, v }
+    pub fn new_epaxos_v(leader: usize, v: usize) -> Self {
+        EPaxosV { leader, v }
     }
 
     pub fn get_v(&self) -> usize {
@@ -102,8 +102,8 @@ impl PaxosMsg {
     #[inline]
     pub fn can_include_value(&self, src: usize) -> bool {
         match self {
-            Prepare { round, .. } => round.proposer == src,
-            Accept { round, .. } => round.proposer == src && *round == PaxosRound::default(),
+            Prepare { round, .. } => round.leader == src,
+            Accept { round, .. } => round.leader == src && *round == PaxosRound::default(),
             ForwardRequest { .. } => true,
         }
     }
@@ -116,6 +116,6 @@ impl PaxosMsg {
 
 impl Display for PaxosRound {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}.{}", self.round_group, self.proposer)
+        write!(f, "{}.{}", self.round_group, self.leader)
     }
 }

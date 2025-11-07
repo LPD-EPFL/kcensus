@@ -19,8 +19,8 @@ pub struct PaxosFamilyRoundState {
     // EPaxos state
     epaxos_answers: usize,
     epaxos_preaccepted: usize,
-    epaxos_proposer_to_v: HashMap<usize, usize>,
-    epaxos_proposer_scores: Vec<usize>,
+    epaxos_leader_to_v: HashMap<usize, usize>,
+    epaxos_leader_scores: Vec<usize>,
 
     // Only used for safety checks
     epaxos_answer_set: BitSet,
@@ -45,8 +45,8 @@ impl PaxosFamilyRoundState {
 
             epaxos_answers: 0,
             epaxos_preaccepted: 0,
-            epaxos_proposer_to_v: HashMap::with_capacity(nb_nodes),
-            epaxos_proposer_scores: vec![2; nb_nodes],
+            epaxos_leader_to_v: HashMap::with_capacity(nb_nodes),
+            epaxos_leader_scores: vec![2; nb_nodes],
 
             epaxos_answer_set: BitSet::with_capacity(nb_nodes),
         }
@@ -67,8 +67,8 @@ impl PaxosFamilyRoundState {
 
         self.epaxos_answers = 0;
         self.epaxos_preaccepted = 0;
-        self.epaxos_proposer_to_v.clear();
-        self.epaxos_proposer_scores.fill(2);
+        self.epaxos_leader_to_v.clear();
+        self.epaxos_leader_scores.fill(2);
         self.epaxos_answer_set.clear();
     }
 
@@ -122,14 +122,15 @@ impl PaxosFamilyRoundState {
     pub fn accept_v(&mut self, src: usize, round: PaxosRound, v: usize) {
         debug_assert!(self.get_last_accepted_round() < Some(round));
         self.max_rv = Some(RoundV::new_paxos_v(Some(round), v));
+        self.receive_accepted(self.my_pid);
         self.receive_accepted(src);
     }
 
     #[inline]
     pub fn receive_accepted(&mut self, src: usize) {
-        let inserted = self.accepted_set.insert(src);
-        debug_assert!(inserted);
-        self.accepted += 1;
+        if self.accepted_set.insert(src) {
+            self.accepted += 1;
+        }
     }
 
     #[inline]
@@ -144,8 +145,8 @@ impl PaxosFamilyRoundState {
 
     #[inline]
     pub fn epaxos_propose_v(&mut self, v: usize) {
-        debug_assert!(self.epaxos_proposer_to_v.is_empty());
-        debug_assert_eq!(self.epaxos_proposer_scores[self.my_pid], 2);
+        debug_assert!(self.epaxos_leader_to_v.is_empty());
+        debug_assert_eq!(self.epaxos_leader_scores[self.my_pid], 2);
         debug_assert!(self.epaxos_answer_set.is_empty());
         debug_assert_eq!(self.epaxos_answers, 0);
         debug_assert_eq!(self.epaxos_preaccepted, 0);
@@ -153,16 +154,16 @@ impl PaxosFamilyRoundState {
     }
 
     #[inline]
-    pub fn epaxos_answered(&mut self, src: usize, proposer: usize, v: usize) {
-        self.epaxos_proposer_to_v.insert(proposer, v);
-        if src != proposer {
-            self.epaxos_proposer_scores[proposer] += 1;
+    pub fn epaxos_answered(&mut self, src: usize, leader: usize, v: usize) {
+        self.epaxos_leader_to_v.insert(leader, v);
+        if src != leader {
+            self.epaxos_leader_scores[leader] += 1;
         } else {
-            // proposer was counted as deduced (+2) before
-            self.epaxos_proposer_scores[proposer] -= 1;
+            // leader was counted as deduced (+2) before
+            self.epaxos_leader_scores[leader] -= 1;
         }
 
-        if proposer == self.my_pid {
+        if leader == self.my_pid {
             self.epaxos_preaccepted += 1;
         }
         self.epaxos_answers += 1;
@@ -172,24 +173,24 @@ impl PaxosFamilyRoundState {
 
     #[inline]
     pub fn epaxos_can_commit(&self) -> bool {
-        debug_assert!(self.epaxos_proposer_to_v.contains_key(&self.my_pid));
-        self.epaxos_proposer_to_v.len() == 1 && self.epaxos_preaccepted >= self.e_paxos_quorum
+        debug_assert!(self.epaxos_leader_to_v.contains_key(&self.my_pid));
+        self.epaxos_leader_to_v.len() == 1 && self.epaxos_preaccepted >= self.e_paxos_quorum
     }
 
-    // Note: If I receive an answer from a proposer, he will not commit (guaranteed)
+    // Note: If I receive an answer from a leader, he will not commit (guaranteed)
     pub fn epaxos_try_adopt(&self) -> Option<usize> {
-        debug_assert!(self.epaxos_proposer_to_v.contains_key(&self.my_pid));
+        debug_assert!(self.epaxos_leader_to_v.contains_key(&self.my_pid));
         if self.epaxos_answers < self.majority {
             None
-        } else if self.epaxos_proposer_to_v.len() < 2 {
+        } else if self.epaxos_leader_to_v.len() < 2 {
             // Don't adopt unless there's more than 1 proposal (for now)
             // TODO: have some form of timeout in case too many died ?
             None
         } else {
             let mut best_score = 0;
             let mut best_v = None;
-            for (proposer, v) in self.epaxos_proposer_to_v.iter() {
-                let score = self.epaxos_proposer_scores[*proposer];
+            for (leader, v) in self.epaxos_leader_to_v.iter() {
+                let score = self.epaxos_leader_scores[*leader];
                 if score > best_score {
                     best_v = Some(*v);
                     best_score = score;

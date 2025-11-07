@@ -61,6 +61,8 @@ enum Algo {
     EPaxos,
     #[value(name = "multi-paxos", alias = "Multi-Paxos")]
     MultiPaxos,
+    #[value(name = "multi-paxos-3p", alias = "Multi-Paxos-3P")]
+    MultiPaxos3P,
     #[value(name = "no-replication", alias = "NoReplication")]
     NoReplication,
     #[value(name = "weak-replication", alias = "WeakReplication")]
@@ -241,25 +243,31 @@ pub async fn run() -> io::Result<()> {
                 consensus_obj.run(delayed_msg_rx, new_client_request_rx, committed_request_tx);
             let _ = tokio::join!(app.run(), consensus);
         }
-        Algo::MultiPaxos => {
+        Algo::MultiPaxos | Algo::MultiPaxos3P => {
+            let is_3p = matches!(algo, Algo::MultiPaxos3P);
+            let multi_paxos_latencies = if is_3p {
+                &propagation_graphs.multi_paxos_3p_latencies
+            } else {
+                &propagation_graphs.multi_paxos_latencies
+            };
             let mut leader_prio: Vec<_> = (0..nb_nodes).collect();
-            leader_prio.sort_by_cached_key(|pid| {
-                propagation_graphs.multi_paxos_latencies[*pid]
-                    .iter()
-                    .sum::<Duration>()
-            });
+            leader_prio
+                .sort_by_cached_key(|pid| multi_paxos_latencies[*pid].iter().sum::<Duration>());
             let leader = leader_prio[0];
             println!(
-                // TODO: Provide expected local latency
                 "Expected local latency with leader {} (no-contention): {:?}",
-                leader, propagation_graphs.multi_paxos_latencies[leader][my_pid]
+                leader, multi_paxos_latencies[leader][my_pid]
             );
             let mut consensus_obj = PaxosFamily::new(
                 nb_nodes,
                 my_pid,
                 consensus_msg_sinks,
                 leader_prio,
-                Mode::MultiPaxos,
+                if is_3p {
+                    Mode::MultiPaxos3P
+                } else {
+                    Mode::MultiPaxos
+                },
                 args.keys,
             );
             let consensus =

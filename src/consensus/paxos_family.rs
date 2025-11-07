@@ -3,7 +3,7 @@ use crate::consensus::message::{CommandBatch, ConsensusMessage};
 use crate::consensus::paxos_family::message::PaxosMsg::{Accept, ForwardRequest, Prepare};
 use crate::consensus::paxos_family::message::{PaxosMsg, PaxosRound};
 use crate::consensus::paxos_family::round_state::PaxosFamilyRoundState;
-use crate::consensus::paxos_family::Mode::{EPaxos, MultiPaxos, Paxos};
+use crate::consensus::paxos_family::Mode::{EPaxos, MultiPaxos, MultiPaxos3P, Paxos};
 use crate::consensus::read_tracker::ReadTracker;
 use crate::consensus::{Consensus, ConsensusShard, ConsensusShardTrait};
 use crate::multi_sink::{MultiSink, ShardMultiSink};
@@ -26,10 +26,11 @@ pub struct PaxosFamilySettings {
 pub type PaxosFamilyShard =
     ConsensusShard<PaxosFamilySettings, Option<PaxosRound>, PaxosFamilyRoundState>;
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, PartialEq, Debug)]
 pub enum Mode {
     Paxos,
     MultiPaxos,
+    MultiPaxos3P,
     EPaxos,
 }
 
@@ -44,7 +45,9 @@ impl PaxosFamilyShard {
         assert!(my_pid < nb_nodes);
         let starting_round = match mode {
             Paxos => None,
-            MultiPaxos => Some(PaxosRound::default().next_proposer_round(leader_priority[0])),
+            MultiPaxos | MultiPaxos3P => {
+                Some(PaxosRound::default().next_leader_round(leader_priority[0]))
+            }
             EPaxos => None,
         };
         Self {
@@ -84,7 +87,7 @@ impl ConsensusShardTrait for PaxosFamilyShard {
                 if slot < self.slot || Some(round) < self.round {
                     return Ok(None);
                 } else if Some(round) > self.round {
-                    debug_assert_ne!(round.proposer, self.my_pid);
+                    debug_assert_ne!(round.leader, self.my_pid);
                     self.goto_round(Some(round));
                 }
                 debug_assert_eq!(slot, self.slot);
@@ -95,7 +98,7 @@ impl ConsensusShardTrait for PaxosFamilyShard {
 
         match msg {
             Prepare { round, rv, .. } => {
-                if round.proposer != self.my_pid {
+                if round.leader != self.my_pid {
                     if self.get_my_v().is_none() {
                         debug_assert!(rv.get_accept_round().is_none());
                         self.round_state.paxos_propose_v(rv)
@@ -104,15 +107,15 @@ impl ConsensusShardTrait for PaxosFamilyShard {
                     return Ok(None);
                 }
 
-                debug_assert!(round.proposer == self.my_pid);
+                debug_assert!(round.leader == self.my_pid);
                 let was_paxos_prepared = self.round_state.is_prepared();
                 self.round_state.receive_promise(src, rv);
 
-                if matches!(self.settings.mode, EPaxos)
+                if self.settings.mode == EPaxos
                     && self.round_state.get_last_accepted_round().is_none()
                 {
-                    if let RoundV::EPaxosV { proposer, v } = rv {
-                        self.round_state.epaxos_answered(src, proposer, v);
+                    if let RoundV::EPaxosV { leader, v } = rv {
+                        self.round_state.epaxos_answered(src, leader, v);
                         if self.round_state.epaxos_can_commit() {
                             self.broadcast_commit().await?;
                             info!("Fast-commited: v={v}");
@@ -136,17 +139,27 @@ impl ConsensusShardTrait for PaxosFamilyShard {
                 }
             }
             Accept { round, v, .. } => {
-                if round.proposer != self.my_pid {
+                if round.leader != self.my_pid {
                     self.round_state.accept_v(src, round, v);
-                    self.answer_accept().await?;
-                    return Ok(None);
+                    if src == round.leader {
+                        self.answer_accept().await?;
+                        if self.get_requester(v) != Some(self.my_pid) {
+                            return Ok(None);
+                        } else {
+                            debug_assert_eq!(self.settings.mode, MultiPaxos3P);
+                        }
+                    } else {
+                        debug_assert_eq!(self.get_requester(v), Some(self.my_pid));
+                        debug_assert_eq!(self.settings.mode, MultiPaxos3P);
+                    }
+                } else {
+                    self.round_state.receive_accepted(src);
                 }
 
-                debug_assert!(round.proposer == self.my_pid);
-                self.round_state.receive_accepted(src);
-
                 if self.round_state.paxos_can_commit() {
-                    self.broadcast_commit().await?;
+                    if round.leader == self.my_pid {
+                        self.broadcast_commit().await?;
+                    }
                     info!("Commited: v={v}");
                     let value = self.commit_slot(v, true);
                     return Ok(Some(value));
@@ -160,13 +173,13 @@ impl ConsensusShardTrait for PaxosFamilyShard {
 
     #[inline]
     fn can_forward_proposals(&self) -> bool {
-        matches!(self.settings.mode, MultiPaxos)
+        self.is_multi_paxos()
     }
 
     async fn propose_start(&mut self, value: CommandBatch, contention: bool) -> io::Result<()> {
         let v = self.store_new_command(value);
 
-        if contention || (matches!(self.settings.mode, MultiPaxos) && !self.should_lead()) {
+        if contention || (self.is_multi_paxos() && !self.should_lead()) {
             self.broadcast(ForwardRequest { v }, true).await
         } else {
             self.propose(v, true).await
@@ -203,13 +216,13 @@ impl ConsensusShardTrait for PaxosFamilyShard {
 
     #[inline]
     fn should_lead(&self) -> bool {
-        if let MultiPaxos = self.settings.mode {
+        if matches!(self.settings.mode, MultiPaxos | MultiPaxos3P) {
             self.my_pid == self.leader_priority[0]
         } else {
             let leader = self.leader_priority.iter().copied().find(|leader| {
                 self.queued_commands.values().any(|value| {
                     if let CommandBatch::Single(cmd) = value {
-                        cmd.proposer == *leader
+                        cmd.requester == *leader
                     } else {
                         false
                     }
@@ -228,7 +241,7 @@ impl PaxosFamilyShard {
                 .settings
                 .starting_round
                 .unwrap_or_default()
-                .next_proposer_round(self.my_pid)
+                .next_leader_round(self.my_pid)
         {
             debug!(
                 // "<#FF4F4F>Can not commit in round {} from state:</> <#EFBFBF>{}</>"
@@ -272,10 +285,22 @@ impl PaxosFamilyShard {
         let round = self
             .round
             .unwrap_or_default()
-            .next_proposer_round(self.my_pid);
+            .next_leader_round(self.my_pid);
         self.goto_round(Some(round));
-        let msg = if Some(round) != self.settings.starting_round {
-            debug_assert!(!matches!(self.settings.mode, MultiPaxos));
+        debug_assert_eq!(
+            self.is_multi_paxos(),
+            Some(round) == self.settings.starting_round
+        );
+        let msg = if self.is_multi_paxos() {
+            let rv = RoundV::new_paxos_v(None, v);
+            self.round_state.paxos_propose_v(rv);
+            self.round_state.self_accept_v(round);
+            Accept {
+                slot: self.slot,
+                round,
+                v: rv.get_v(),
+            }
+        } else {
             let rv = match self.settings.mode {
                 EPaxos => {
                     self.round_state.epaxos_propose_v(v);
@@ -289,17 +314,8 @@ impl PaxosFamilyShard {
                 round,
                 rv,
             }
-        } else {
-            debug_assert!(matches!(self.settings.mode, MultiPaxos));
-            let rv = RoundV::new_paxos_v(None, v);
-            self.round_state.paxos_propose_v(rv);
-            self.round_state.self_accept_v(round);
-            Accept {
-                slot: self.slot,
-                round,
-                v: rv.get_v(),
-            }
         };
+        // TODO: Only send to fastest majority/quorum ?
         self.broadcast(msg, with_value).await
     }
 
@@ -313,6 +329,7 @@ impl PaxosFamilyShard {
     }
 
     async fn broadcast_accept(&self) -> io::Result<()> {
+        // TODO: Only send to fastest majority/quorum ?
         let msg = Accept {
             slot: self.slot,
             round: self.round.unwrap(),
@@ -322,12 +339,28 @@ impl PaxosFamilyShard {
     }
 
     async fn answer_accept(&self) -> io::Result<()> {
-        let src = self.round.unwrap().proposer;
+        let src = self.round.unwrap().leader;
+        let v = self.round_state.get_v().unwrap();
         let msg = Accept {
             slot: self.slot,
             round: self.round.unwrap(),
-            v: self.round_state.get_v().unwrap(),
+            v,
         };
+        debug!(
+            "Mode: {:?}, Round: {:?}, Init: {:?}",
+            self.settings.mode,
+            self.round,
+            self.get_requester(v)
+        );
+        if self.settings.mode == MultiPaxos3P && self.round == self.settings.starting_round {
+            if let Some(requester) = self.get_requester(v) {
+                if requester != src && requester != self.my_pid {
+                    // TODO: Only send if self is in the fastest majority (from leader to initiator) ?
+                    self.send(msg.clone(), requester).await?;
+                }
+            }
+        }
+        // TODO: Only send if self is in the fastest majority (in leader RTT) ?
         self.send(msg, src).await
     }
 
@@ -337,6 +370,10 @@ impl PaxosFamilyShard {
             v: self.round_state.get_v().unwrap(),
         };
         self.sinks.broadcast(msg, None).await
+    }
+
+    fn is_multi_paxos(&self) -> bool {
+        matches!(self.settings.mode, MultiPaxos | MultiPaxos3P)
     }
 }
 
