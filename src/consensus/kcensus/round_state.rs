@@ -155,22 +155,6 @@ impl KCensusRoundState {
         orig_kl < my_state!(self).k.len()
     }
 
-    #[inline]
-    pub fn partial_learn(&mut self, learner: usize, about: usize) {
-        self.node_states[learner].k.insert(about);
-        my_state!(self).k.insert(about);
-    }
-
-    #[inline]
-    pub fn learn(&mut self, learner: usize, about: &Knowledge) {
-        self.node_states[learner].k.union_with(about);
-    }
-
-    #[inline]
-    pub fn knows(&self, learner: usize, about: usize) -> bool {
-        self.node_states[learner].k.contains(about)
-    }
-
     pub fn try_adopt(&mut self) -> Option<usize> {
         let frozen_count = self.node_states.iter().filter(|x| x.frozen).count();
         if frozen_count < self.majority {

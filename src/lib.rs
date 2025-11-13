@@ -120,7 +120,6 @@ pub async fn run() -> io::Result<()> {
         &topology,
         matches!(algo, Algo::KCensus),
         matches!(algo, Algo::KCensus | Algo::WeakReplication),
-        None,
     );
     println!("Computed propagation graphs in {:?}", start.elapsed());
     let nb_nodes = topology.regions.len();
