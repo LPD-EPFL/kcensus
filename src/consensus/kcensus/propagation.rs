@@ -5,7 +5,8 @@ use log::trace;
 use petgraph::algo::bellman_ford;
 use petgraph::matrix_graph::DiMatrix;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::cmp::max;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt::{Display, Formatter};
 use std::time::Duration;
 
@@ -31,50 +32,19 @@ impl Display for MessageId {
     }
 }
 
-#[derive(Debug)]
-pub struct MessageInfo {
+#[derive(Debug, Clone)]
+pub struct KnowledgeState {
+    knowledge: Vec<Knowledge>,
+    remote_states: Vec<Duration>,
     dependencies: HashSet<MessageId>,
     needed_by: Vec<MessageId>,
-    includes_new_values: bool,
-}
-
-impl Display for MessageInfo {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{{val={},deps=[", self.includes_new_values)?;
-        for (i, x) in self.dependencies.iter().enumerate() {
-            write!(f, "{}{}", if i == 0 { "" } else { ", " }, x)?;
-        }
-        write!(f, "],needed_by=[")?;
-        for (i, x) in self.needed_by.iter().enumerate() {
-            write!(f, "{}{}", if i == 0 { "" } else { ", " }, x)?;
-        }
-        write!(f, "]}}")?;
-        Ok(())
-    }
-}
-
-impl MessageInfo {
-    #[inline]
-    pub fn get_dependencies(&self) -> &HashSet<MessageId> {
-        &self.dependencies
-    }
-
-    #[inline]
-    pub fn get_needed_by(&self) -> &[MessageId] {
-        &self.needed_by
-    }
-
-    #[inline]
-    pub fn get_includes_new_values(&self) -> bool {
-        self.includes_new_values
-    }
+    frozen: BitSet,
 }
 
 #[derive(Debug)]
 struct PropagationGraph {
-    start_messages: Vec<MessageId>,
-    graph: HashMap<MessageId, MessageInfo>,
-    end_messages: HashSet<MessageId>,
+    should_include_value: HashSet<MessageId>,
+    states: Vec<BTreeMap<Duration, KnowledgeState>>,
 }
 
 #[derive(Debug)]
@@ -91,17 +61,27 @@ pub struct PropagationGraphs {
 
 impl PropagationGraphs {
     #[inline]
-    pub fn get_by_id(&self, msg_id: &MessageId) -> &MessageInfo {
-        &self.graphs[msg_id.leader].graph[msg_id]
+    pub fn should_include_value(&self, msg_id: &MessageId) -> bool {
+        self.graphs[msg_id.leader]
+            .should_include_value
+            .contains(msg_id)
     }
 
     #[inline]
-    pub fn get_start(&self, leader: ProcId) -> &[MessageId] {
-        &self.graphs[leader].start_messages
+    pub fn get_start(&self, leader: ProcId) -> &KnowledgeState {
+        &self.graphs[leader].states[leader]
+            .first_key_value()
+            .expect("should have at least one state")
+            .1
     }
 
     pub fn can_commit(&self, leader: ProcId, received: &HashSet<MessageId>) -> bool {
-        self.graphs[leader].end_messages.is_subset(received)
+        for state in self.graphs[leader].states[leader].iter().rev() {
+            if !state.1.dependencies.is_subset(received) {
+                return false;
+            }
+        }
+        true
     }
 }
 
@@ -274,10 +254,10 @@ pub fn compute_propagation_graphs(
         let mut value_only_paths: Vec<Vec<TriangularPath>> =
             vec![Vec::with_capacity(alive.len()); nb_nodes];
 
-        for leader in 0..nb_nodes {
+        'leader_loop: for leader in 0..nb_nodes {
             if topology.faults.contains(leader) {
-                knowledge_levels[leader].push((Duration::default(), Vec::new(), 0));
-                continue;
+                knowledge_levels[leader].push((Duration::ZERO, Vec::new(), 0));
+                continue 'leader_loop;
             }
 
             // Compute triangles
@@ -318,18 +298,18 @@ pub fn compute_propagation_graphs(
 
             // Simulate propagation of knowledge (from best to worst possible strategy)
             let mut knowledges: Vec<Knowledge> = vec![BitSet::with_capacity(nb_nodes); nb_nodes];
-            for ti in 0..triangular_paths[leader].len() {
+            'triangle_loop: for ti in 0..triangular_paths[leader].len() {
                 let t = &triangular_paths[leader][ti];
                 if t.total_latency > max_lat {
-                    break;
+                    break 'triangle_loop;
                 }
                 knowledges[t.second].insert(t.first);
                 if t.total_latency < min_lat {
-                    continue;
+                    continue 'triangle_loop;
                 }
                 let next_t = triangular_paths[leader].get(ti + 1);
                 if next_t.is_some_and(|nt| nt.total_latency == t.total_latency) {
-                    continue;
+                    continue 'triangle_loop;
                 }
                 knowledge_levels[leader].push((t.total_latency, knowledges.clone(), ti + 1));
             }
@@ -376,6 +356,13 @@ pub fn compute_propagation_graphs(
             }
         }
 
+        // Initialize best to a trivial valid solution
+        let mut best_levels = max_levels.clone();
+        let mut best_total_time = Duration::ZERO;
+        for leader in 0..nb_nodes {
+            best_total_time += knowledge_levels[leader][max_levels[leader]].0;
+        }
+
         // Implements recursive search of the optimal solution
         fn best_avg_search(
             best_levels: &mut Vec<usize>,
@@ -390,7 +377,7 @@ pub fn compute_propagation_graphs(
         ) {
             let pid_a = pids_done;
             let pids_done = pids_done + 1;
-            for level_a in prev_levels[pid_a]..=max_levels[pid_a] {
+            'level_loop: for level_a in prev_levels[pid_a]..=max_levels[pid_a] {
                 let mut new_levels = prev_levels.clone();
                 new_levels[pid_a] = level_a;
                 let new_partial_total_time =
@@ -408,11 +395,11 @@ pub fn compute_propagation_graphs(
 
                 if *best_total_time <= new_min_total_time {
                     // We can not find a better solution with higher level_a
-                    break;
+                    break 'level_loop;
                 }
                 if *best_total_time <= new_curr_total_time {
                     // We can not find a better solution with current level_a
-                    continue;
+                    continue 'level_loop;
                 }
 
                 assert!(new_partial_total_time < *best_total_time);
@@ -437,41 +424,33 @@ pub fn compute_propagation_graphs(
             }
         }
 
-        // Initialize best to a trivial valid solution
-        let mut best_levels = max_levels.clone();
-        let mut best_total_time = Duration::default();
-        for leader in 0..nb_nodes {
-            best_total_time += knowledge_levels[leader][max_levels[leader]].0;
-        }
-
         // Use recursive search to compute the best solution
         best_avg_search(
             &mut best_levels,
             &mut best_total_time,
             0,
             &vec![0usize; nb_nodes],
-            Duration::default(),
+            Duration::ZERO,
             nb_nodes,
             &max_levels,
             &knowledge_levels,
             &compatible_levels,
         );
 
-        // Build the graph from the solutions
-        for leader in 0..nb_nodes {
+        // Build the graph from the solutions for each proposer
+        'leader_loop: for leader in 0..nb_nodes {
+            // Skip faulty proposers
             if topology.faults.contains(leader) {
                 propagation_graphs.push(PropagationGraph {
-                    start_messages: Vec::new(),
-                    graph: HashMap::new(),
-                    end_messages: HashSet::new(),
+                    should_include_value: HashSet::new(),
+                    states: Vec::new(),
                 });
                 kcensus_latencies.push(FAULTY_LATENCY);
-                continue;
+                continue 'leader_loop;
             }
 
-            // Truncate at commit time
-            let max_latency = knowledge_levels[leader][best_levels[leader]].0;
-            let triangle_count = knowledge_levels[leader][best_levels[leader]].2;
+            // Truncate triangles at commit time
+            let (max_latency, _, triangle_count) = knowledge_levels[leader][best_levels[leader]];
             triangular_paths[leader].truncate(triangle_count);
             assert_eq!(
                 triangular_paths[leader][triangle_count - 1].total_latency,
@@ -490,20 +469,39 @@ pub fn compute_propagation_graphs(
                 triangular_paths[leader][triangle_count - 1]
             );
 
-            // TODO: Some triangles might still not be needed to commit.
-            //   Try to check if they are needed for are_compatible? (can be merged with bellow logic?)
+            // TODO: Some knowledge might still not be needed to commit. (but the cost is probably negligible)
+            //   Try to check if they are needed for are_compatible?
 
-            let mut simulated_knowledges: Vec<Knowledge> =
-                vec![BitSet::with_capacity(nb_nodes); nb_nodes];
-
+            // Initialize graph
             let mut message_times: Vec<Vec<BTreeSet<Duration>>> =
                 vec![vec![BTreeSet::new(); nb_nodes]; nb_nodes];
-            let mut message_graph: HashMap<MessageId, MessageInfo> = HashMap::new();
-            let mut start_messages: Vec<MessageId> = Vec::new();
-            // Remove extra triangles
+            let mut should_include_value: HashSet<MessageId> = HashSet::new();
+            let mut states: Vec<BTreeMap<Duration, KnowledgeState>> =
+                vec![BTreeMap::new(); nb_nodes];
+
+            // Prepare initial states
+            for i in 0..nb_nodes {
+                let mut knowledge = vec![BitSet::new(); nb_nodes];
+                if i == leader {
+                    knowledge[leader].insert(leader);
+                }
+                states[i].insert(
+                    Duration::ZERO,
+                    KnowledgeState {
+                        knowledge,
+                        remote_states: vec![Duration::ZERO; nb_nodes],
+                        dependencies: HashSet::new(),
+                        needed_by: vec![],
+                        frozen: BitSet::new(),
+                    },
+                );
+            }
+
+            // Loop over triangles
             let mut i = value_only_paths[leader].len(); // first: send values (desc order, but does not matter)
             let mut j = triangle_count; // second: triangles to commit, from longest to shortest (desc)
-            while 0 < j {
+            'triangle_loop: while 0 < j {
+                // Pick the next triangle
                 let value_only_path = 0 < i;
                 let t = if value_only_path {
                     i -= 1;
@@ -513,26 +511,34 @@ pub fn compute_propagation_graphs(
                     &triangular_paths[leader][j]
                 };
 
-                if !value_only_path && simulated_knowledges[t.second].contains(t.first) {
-                    continue;
+                // Skip triangles that would not bring new knowledge
+                if !value_only_path {
+                    let leaders_final_knowledge = &states[leader]
+                        .range(..=max_latency)
+                        .last()
+                        .expect("leader should have a last state")
+                        .1
+                        .knowledge;
+                    if leaders_final_knowledge[t.second].contains(t.first) {
+                        continue 'triangle_loop;
+                    }
                 }
 
-                // How much delay we can add (Note: "value only" paths can be longer than max)
-                let mut max_slack = if t.total_latency < max_latency {
+                // Compute slack (how much delay can add when we reuse messages)
+                let mut max_slack = if t.total_latency <= max_latency {
                     max_latency - t.total_latency
                 } else {
-                    Duration::default()
+                    assert!(value_only_path);
+                    Duration::ZERO
                 };
-                let mut current_time = Duration::default();
 
-                let mut k: Knowledge = BitSet::with_capacity(nb_nodes);
-                k.insert(leader);
-
+                // Initialize variables to track time/position/progress along the path
+                let mut current_time = Duration::ZERO;
                 let mut current = leader;
-                let mut prev_msg_id = None;
                 let mut shortest_path_from_leader = true;
                 let mut shortest_path_to_leader = false;
 
+                // Loop over the three (/one) checkpoints of the triangle (/value_only_patH)
                 let checkpoints = if value_only_path {
                     [t.first, t.first, t.first]
                 } else {
@@ -544,159 +550,191 @@ pub fn compute_propagation_graphs(
                         shortest_path_to_leader = true;
                     }
 
+                    // For every step towards the checkpoints
                     while current != target {
+                        // TODO: if step == 2 (return path) and there's already msgs
+                        //   going back to the leader, then avoid creating new ones.
+                        //   (Chose one of the existing paths or forward knowledge recursively)
+
+                        // Move towards checkpoint
                         let src = current;
                         current = next_src[current][target];
-                        if t.total_latency > max_latency && value_only_path && target == leader {
-                            // Go back directly to limit message count
-                            current = target;
-                        }
-                        debug_assert!(src != current);
-                        if !value_only_path {
-                            k.insert(current);
-                            simulated_knowledges[current].union_with(&k);
-                        }
+                        assert_ne!(src, current);
 
+                        // Check if shortest path from/to leader
                         if step > 0 {
                             shortest_path_from_leader &= prev_dest[leader][current] == src;
-
                             let left = path_latencies[src][target] + path_latencies[target][leader];
-                            let to_prop = path_latencies[src][leader];
-                            shortest_path_to_leader |= left == to_prop;
+                            let to_leader = path_latencies[src][leader];
+                            shortest_path_to_leader |= left == to_leader;
                         }
 
+                        // Find existing compatible message or create new one (and add to source state)
                         let deadline = current_time + max_slack;
-                        let msg_id = if let Some(time) = message_times[src][current]
+                        let next_compatible_msg_time = message_times[src][current]
                             .range(current_time..=deadline)
-                            .next()
-                        {
-                            // Reusing a message that is compatible with the time window!
-                            // Reconstruct id:
+                            .next();
+                        let new_msg = next_compatible_msg_time.is_none();
+                        let msg_id = if let Some(compatible_time) = next_compatible_msg_time {
+                            assert!(!new_msg);
+                            // Reuse existing message
                             let msg_id = MessageId {
                                 leader,
                                 src,
                                 dest: current,
-                                time: *time,
+                                time: *compatible_time,
                             };
-                            // Potentially add dependency links:
-                            if let Some(prev_msg_id) = prev_msg_id {
-                                let msg_info = message_graph.get_mut(&msg_id).unwrap();
-                                if msg_info.dependencies.insert(prev_msg_id) {
-                                    debug_assert!(
-                                        !message_graph[&prev_msg_id].needed_by.contains(&msg_id)
-                                    );
-                                    let prev_msg_info =
-                                        message_graph.get_mut(&prev_msg_id).unwrap();
-                                    prev_msg_info.needed_by.push(msg_id);
-                                }
-                            }
+                            debug_assert!(
+                                states[src]
+                                    .get_mut(&current_time)
+                                    .expect("should have state at src")
+                                    .needed_by
+                                    .contains(&msg_id)
+                            );
                             msg_id
                         } else {
                             // New message!
+                            assert!(new_msg);
+                            // TODO: explore if it can be useful to delay messages ? (for negligible gain)
 
-                            let time = if shortest_path_from_leader || !shortest_path_to_leader {
-                                current_time
-                            } else {
-                                // Delay when it might make it more likely to be reused!
-                                deadline
-                            };
+                            // Add to message_times...
+                            let inserted = message_times[src][current].insert(current_time);
+                            assert!(inserted);
 
-                            // Construct id
                             let msg_id = MessageId {
                                 leader,
                                 src,
                                 dest: current,
-                                time,
+                                time: current_time,
                             };
 
-                            if time == Duration::default() {
-                                debug_assert!(src == leader);
-                                debug_assert!(shortest_path_from_leader);
-                                start_messages.push(msg_id);
+                            // Add msg as derived from the source's state
+                            states[src]
+                                .get_mut(&current_time)
+                                .expect("should have state at src")
+                                .needed_by
+                                .push(msg_id);
+
+                            // Mark as including a value if needed
+                            if value_only_path {
+                                should_include_value.insert(msg_id);
                             }
+                            assert_eq!(
+                                value_only_path, shortest_path_from_leader,
+                                "new message should imply value_only_path == shortest_path_from_leader"
+                            );
 
-                            // Potentially add dependency links:
-                            let dependencies = match prev_msg_id {
-                                None => HashSet::new(),
-                                Some(prev_msg_id) => {
-                                    debug_assert!(
-                                        !message_graph[&prev_msg_id].needed_by.contains(&msg_id)
-                                    );
-                                    let prev_msg_info =
-                                        message_graph.get_mut(&prev_msg_id).unwrap();
-                                    prev_msg_info.needed_by.push(msg_id);
-                                    let mut dep = HashSet::with_capacity(1);
-                                    dep.insert(prev_msg_id);
-                                    dep
-                                }
-                            };
-                            debug_assert_eq!(dependencies.is_empty(), time == Duration::default());
-                            debug_assert!(!dependencies.is_empty() || src == leader);
-
-                            // Insert new message
-                            let inserted = message_graph
-                                .insert(
-                                    msg_id,
-                                    MessageInfo {
-                                        dependencies,
-                                        needed_by: vec![],
-                                        includes_new_values: value_only_path,
-                                    },
-                                )
-                                .is_none();
-                            debug_assert!(inserted);
-                            let inserted = message_times[src][current].insert(time);
-                            debug_assert!(inserted);
                             msg_id
                         };
 
-                        max_slack = deadline - msg_id.time;
-                        current_time = msg_id.time + topology.link_latency(src, current);
-                        prev_msg_id = Some(msg_id);
-                    }
-                }
-            }
+                        // Update time and compute remaining slack
+                        let src_time = msg_id.time;
+                        current_time = src_time + topology.link_latency(src, current);
+                        max_slack = deadline - src_time;
 
-            // TODO: This is only an assertion check
-            for dest in 0..nb_nodes {
-                if dest == leader {
-                    continue;
-                }
-                let mut first_msg_time = None;
-                let mut first_receive_time = None;
-                let mut first_src = None;
-                for (src, src_message_times) in message_times.iter().enumerate() {
-                    let msg_time = src_message_times[dest].first().copied();
-                    if let Some(msg_time) = msg_time {
-                        let receive_time = msg_time + topology.link_latency(src, dest);
-                        if first_receive_time.is_none() || Some(receive_time) < first_receive_time {
-                            first_msg_time = Some(msg_time);
-                            first_receive_time = Some(receive_time);
-                            first_src = Some(src);
+                        // if needed, create destination state (with all the previous knowledge)
+                        if !states[current].contains_key(&current_time) {
+                            assert!(new_msg);
+                            let prev_state = states[current]
+                                .range(..current_time)
+                                .last()
+                                .expect("should find a previous state");
+                            let mut knowledge = prev_state.1.knowledge.clone();
+                            knowledge[current].insert(current);
+                            let mut remote_states = prev_state.1.remote_states.clone();
+                            remote_states[current] = current_time;
+                            let state = KnowledgeState {
+                                knowledge,     // fully filled bellow
+                                remote_states, // same
+                                dependencies: HashSet::with_capacity(1),
+                                needed_by: vec![],
+                                frozen: BitSet::new(),
+                            };
+                            let inserted = !states[current].insert(current_time, state).is_none();
+                            assert!(inserted);
+                        }
+
+                        // Update dest state's knowledge
+                        let [cur_state, src_state] = states
+                            .get_disjoint_mut([src, current])
+                            .expect("src should != current");
+                        let state = cur_state
+                            .get_mut(&current_time)
+                            .expect("should have a destination state now");
+                        let src_state = src_state.get(&src_time).expect("should have source state");
+                        state.dependencies.insert(msg_id); // Note: could be already present
+                        state.knowledge[current].union_with(&src_state.knowledge[src]);
+                        for i in 0..nb_nodes {
+                            // Check source knowledge
+                            debug_assert!(
+                                src_state.knowledge[i].is_subset(&src_state.knowledge[src])
+                            );
+                            debug_assert!(
+                                state.knowledge[i].is_superset(&src_state.knowledge[i])
+                                    || state.knowledge[i].is_subset(&src_state.knowledge[i])
+                            );
+
+                            // Merge knowledge
+                            state.knowledge[i].union_with(&src_state.knowledge[i]);
+                            state.remote_states[i] =
+                                max(state.remote_states[i], src_state.remote_states[i]);
+
+                            // Check obtained knowledge
+                            debug_assert_eq!(
+                                state.knowledge[i] == src_state.knowledge[i],
+                                state.remote_states[i] == src_state.remote_states[i]
+                            );
+                            debug_assert!(state.knowledge[i].is_subset(&state.knowledge[current]));
+                        }
+
+                        let ks = state.clone();
+
+                        // Update knowledge of future states at current location.
+                        for (time, state) in states[current].range_mut(current_time..).skip(1) {
+                            assert!(*time > current_time);
+                            for i in 0..nb_nodes {
+                                state.knowledge[i].union_with(&ks.knowledge[i]);
+                                state.remote_states[i] =
+                                    max(state.remote_states[i], ks.remote_states[i]);
+                            }
+                            // TODO: recursively follow existing paths to propagate knowledge further
+                            //   and add checks to continue to next triangle early when possible
                         }
                     }
                 }
-                let first_msg_id = MessageId {
-                    leader,
-                    src: first_src.unwrap(),
-                    dest,
-                    time: first_msg_time.unwrap(),
-                };
-                assert!(message_graph[&first_msg_id].includes_new_values);
+            }
+            // Finished adding messages.
+
+            // Set frozen tags
+            for node in 0..nb_nodes {
+                let final_node_state = states[node].iter_mut().last().expect("should have state");
+                let final_node_time = *final_node_state.0;
+                for other_node in 0..nb_nodes {
+                    for (_, state) in states[other_node].iter_mut() {
+                        if state.remote_states[node] == final_node_time {
+                            state.frozen.insert(node);
+                        }
+                    }
+                }
             }
 
-            debug_assert!(kcensus_latencies.len() == leader);
-            debug_assert!(propagation_graphs.len() == leader);
+            // Sanity checks:
+            assert_eq!(should_include_value.len(), nb_nodes);
+            debug_assert!({
+                let final_leader_state =
+                    states[leader].last_key_value().expect("should have state");
+                final_leader_state.0 == &max_latency
+                    && final_leader_state.1.knowledge
+                        == knowledge_levels[leader][best_levels[leader]].1
+            });
+
+            // Add to list of graphs/latencies
+            assert_eq!(kcensus_latencies.len(), leader);
+            assert_eq!(propagation_graphs.len(), leader);
             kcensus_latencies.push(max_latency);
-            let end_messages = message_graph
-                .keys()
-                .copied()
-                .filter(|id| id.dest == leader)
-                .collect();
             propagation_graphs.push(PropagationGraph {
-                start_messages,
-                graph: message_graph,
-                end_messages,
+                should_include_value,
+                states,
             });
         }
     }
