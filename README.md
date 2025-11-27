@@ -1,10 +1,10 @@
-# K-Census
+# KCensus
 
-Fast Consensus Through Knowledge Gossiping
+KCensus is a faster alternative to Paxos-like consensus protocols.
 
 # Running Experiments & Reproducing Results
 
-This guide provides instructions to reproduce the plots from the K-Census paper. It covers:
+This guide provides instructions to reproduce the plots from the KCensus paper. It covers:
 
 *   Configuring your local environment and AWS account
 *   Building required artifacts (binaries and custom machine image)
@@ -15,23 +15,23 @@ The workflow is automated using Packer, Terraform, Ansible, and shell scripts.
 
 ## 1. Clone the Repository
 
-First, clone the K-Census repository to your local machine:
+First, clone the KCensus repository to your local machine:
 
 ```bash
-git clone https://github.com/lPD-EPFL/k-census/
-cd k-census
+git clone git@github.com:LPD-EPFL/kcensus.git
+cd kcensus
 ```
 
 
 ## 2. Environment Configuration
 
-All experiments are managed from a single "gateway" machine (your computer), which orchestrates cloud resources on AWS. This guide assumes you are using a linux machine.
+All experiments run on AWS, but they are orchestrated from your local machine. This README assumes that your machine is running Linux.
 
 ### 2.1 Cloud Prerequisites
 
-- **AWS Account**: Create an AWS account at [aws.amazon.com](https://aws.amazon.com/).
-- **IAM User**: In the AWS Console (on your browser), create a dedicated IAM user with permissions for EC2, AMI, VPC, and Security Groups.
-- **AWS CLI**: Install the [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) on your machine.
+- **AWS Account**: Create an AWS account at [aws.amazon.com](https://aws.amazon.com/) and [enable all AWS regions](https://us-east-1.console.aws.amazon.com/billing/home?region=us-east-1#/account).
+- **IAM User**: In the AWS Console (on your browser), create a dedicated IAM user with permissions for EC2 (policy `AmazonEC2FullAccess`) (and AMI if you plan to rebuild the image (policy `AWSImageBuilderFullAccess`)).
+- **AWS CLI**: Install the [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) on your machine (`aws-cli-v2` on arch).
 
 #### Configure AWS CLI
 
@@ -48,9 +48,9 @@ This will set up your credentials in `~/.aws/credentials`.
 Install the following tools:
 
 * **Infrastructure & Automation**:
-    * [Terraform](https://learn.hashicorp.com/tutorials/terraform/install-cli)
-    * [Packer](https://learn.hashicorp.com/tutorials/packer/get-started-install-cli)
-    * [Ansible](https://docs.ansible.com/ansible/latest/installation_guide/intro_installation.html)
+    * [Terraform](https://learn.hashicorp.com/tutorials/terraform/install-cli) (`terraform` on arch)
+    * [Ansible](https://docs.ansible.com/ansible/latest/installation_guide/intro_installation.html) (`ansible` on arch)
+    * [Packer](https://learn.hashicorp.com/tutorials/packer/get-started-install-cli) (`packer` on arch) (if you plan to rebuild the image)
 * **Runtimes & Build Tools**:
     * [Python 3](https://www.python.org/downloads/)
     * [Rust Toolchain](https://www.rust-lang.org/tools/install) (`rustup`, `cargo`)
@@ -92,6 +92,8 @@ If you managed to do all the previous steps successfully, then Terraform, Ansibl
 
 ## 3. Building the Artifacts
 
+### 3.1 Building the Binaries (Rust)
+
 Compile the `kcensus` and `graph_bench` executables:
 
 ```bash
@@ -99,9 +101,26 @@ rustup target add x86_64-unknown-linux-musl
 cargo build --target x86_64-unknown-linux-musl --release
 ```
 
+### 3.2 Building the Custom AMI (Packer)
+
+We use a custom image that contains all dependencies required by remote machines.
+This image does **not** include the binaries, which are uploaded during the evaluation; as a result, there is no need to rebuild the image when binaries change.
+We provide pre-built AMIs, available in all AWS regions.
+In case you need to build a new image, run the following commands:
+
+```bash
+cd deployment/packer
+packer init .
+packer build kcensus-ami.pkr.hcl
+cd ../..
+```
+
+This step builds the AMI in one AWS region and copies it to others. It may take ~30 minutes.
+Then, update AMIs in `deployment/terraform/modules/server/main.tf`.
+
 ## 4. Running Experiments and Generating Plots
 
-All commands below assume you are in the root `k-census` directory.
+All commands below assume you are in the root `kcensus` directory.
 
 Each experiment is run using `geo_eval.sh`, which provisions infrastructure, deploys code, runs the experiment, and collects logs. The `plot.sh` script processes logs to generate plot data.
 
