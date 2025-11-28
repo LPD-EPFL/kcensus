@@ -74,7 +74,7 @@ build {
       "sudo systemctl enable docker",
       "sudo systemctl start docker",
       "sudo usermod -a -G docker ec2-user",
-      "sudo docker pull cassandra:latest"
+      "sudo docker pull shotover/cassandra-test:5.0-rc1-r3"
     ]
   }
 }

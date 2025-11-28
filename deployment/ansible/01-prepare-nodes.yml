@@ -15,7 +15,7 @@
     - name: Start a Cassandra container
       community.docker.docker_container:
         name: "cassandra-{{ groups['kcensus_nodes'].index(inventory_hostname) + 1 }}"
-        image: cassandra:latest
+        image: shotover/cassandra-test:5.0-rc1-r3
         state: started
         detach: yes
         restart_policy: always
