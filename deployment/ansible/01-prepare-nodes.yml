@@ -36,9 +36,4 @@
         dest: /home/ec2-user/kcensus_app/kcensus
         mode: '0755'
 
-    # TODO: make this only happen for exp-3-5
-    - name: Copy the graph_bench binary
-      ansible.builtin.copy:
-        src: ../../target/x86_64-unknown-linux-musl/release/graph_bench
-        dest: /home/ec2-user/kcensus_app/graph_bench
-        mode: '0755'
+    # Note: graph_bench is copied in its specific experiment

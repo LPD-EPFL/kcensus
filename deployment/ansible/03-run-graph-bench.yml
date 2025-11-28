@@ -7,6 +7,13 @@
     num_faults: 0
 
   tasks:
+    - name: Copy the graph_bench binary
+      run_once: true
+      ansible.builtin.copy:
+        src: ../../target/x86_64-unknown-linux-musl/release/graph_bench
+        dest: /home/ec2-user/kcensus_app/graph_bench
+        mode: '0755'
+
     - name: Run graph_bench on the first node
       run_once: true
       ansible.builtin.shell:
