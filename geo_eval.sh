@@ -55,8 +55,8 @@ function provision() {
   (
     cd deployment/terraform
     terraform init -upgrade
-    terraform plan -var-file="../../${varFile}" -var="experiment_id=${expId}"
-    terraform apply -var-file="../../${varFile}" -var="experiment_id=${expId}" -auto-approve
+    # terraform plan -var-file="../../${varFile}" -var="experiment_id=${expId}"
+    terraform apply -parallelism=50 -var-file="../../${varFile}" -var="experiment_id=${expId}" -auto-approve
   )
   echo "--> Infrastructure is UP for Exp ID ${expId}. Waiting for instances to be fully ready... (60s)"
   sleep 60
@@ -80,7 +80,7 @@ function destroy() {
   echo "--> Destroying infrastructure defined in ${varFile}..."
   (
     cd deployment/terraform
-    terraform destroy -var-file="../../${varFile}" -var="experiment_id=${expId}" -auto-approve
+    terraform destroy -parallelism=50 -var-file="../../${varFile}" -var="experiment_id=${expId}" -auto-approve
   )
   echo "--> Infrastructure is DOWN."
 }
