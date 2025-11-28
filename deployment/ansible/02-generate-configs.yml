@@ -11,18 +11,28 @@
       set_fact:
         dynamic_regions: "{{ groups['kcensus_nodes'] | map('extract', hostvars, 'aws_region') | list }}"
 
-    - name: Measure pairwise one-way latencies using ping
-      ansible.builtin.shell: >-
-        ping -c 100 -i 0.2 {{ item }} |
+    - name: Start measuring all one-way latencies with ping
+      ansible.builtin.shell: >
+        sudo ping -c 500 -i 0.005 {{ item }} |
         grep 'icmp_seq' |
         grep -oP 'time=\K[0-9.]+' |
         sort -n |
-        head -n -5 |
-        tail -n +6 |
+        head -n -50 |
+        tail -n +51 |
         awk '{ total += $1; count++ } END { if (count > 0) print total/count/2; else print "9999" }'
+      async: 600
+      poll: 0
       loop: "{{ groups['kcensus_nodes'] }}"
+      register: async_jobs
+
+    - name: Wait for all pings to be done
+      ansible.builtin.async_status:
+        jid: "{{ item.ansible_job_id }}"
+      loop: "{{ async_jobs.results }}"
       register: all_ping_results
-      ignore_errors: true
+      until: all_ping_results.finished
+      retries: 600
+      delay: 1
 
     - name: Assemble master configuration on the control node
       run_once: true
