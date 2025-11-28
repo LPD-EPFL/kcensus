@@ -28,6 +28,7 @@
       delay: 1
       changed_when: false
 
+    - name: Run kcensus
       ansible.builtin.shell:
         cmd: >
           /usr/bin/time -f "[time] Memory(KB): %M"
