@@ -58,8 +58,7 @@ function provision() {
     # terraform plan -var-file="../../${varFile}" -var="experiment_id=${expId}"
     terraform apply -parallelism=50 -var-file="../../${varFile}" -var="experiment_id=${expId}" -auto-approve
   )
-  echo "--> Infrastructure is UP for Exp ID ${expId}. Waiting for instances to be fully ready... (60s)"
-  sleep 60
+  echo "--> Infrastructure is UP for Exp ID ${expId}; VMs might still be booting."
 }
 
 function deploy() {
