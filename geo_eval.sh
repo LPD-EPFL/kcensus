@@ -361,7 +361,6 @@ function exp-6() {
   local inventoryFile="inventory-${EXPERIMENT_ID}.ini"
 
   provision "$varFile" "$EXPERIMENT_ID"
-  sleep 60 # sleep 1 more minute
 
   (
     cd deployment/ansible/

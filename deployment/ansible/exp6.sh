@@ -5,10 +5,9 @@ CASSANDRA_BASE_PORT="9042"
 BASE_LOG_DIR="./logs"
 REPLICATED_ALGOS=(k-census e-paxos multi-paxos paxos weak-replication)
 ALGOS=(no-replication ${REPLICATED_ALGOS[@]})
-CONFIGS=(aws-europe-7-alt.toml aws-north-america-7.toml aws-world-ring-13.toml)
-YCSB=(1 0.5 0.05)
+WRITES=(1)
 REQUESTS=100
-SPEEDUP=1
+SPEEDUP=10000000 # latency precision does not matter
 
 if ! command -v "/usr/bin/time" >/dev/null 2>&1
 then
@@ -26,7 +25,7 @@ function start_cassandra() {
     (
       local name="cassandra-$i"
       if [ -z "$(docker ps -a -q --filter="name=$name")" ]; then
-        docker run -e JVM_OPTS="-Xms256M -Xmx1024M" --name "$name" -p $((CASSANDRA_BASE_PORT + i - 1)):9042 -d cassandra
+        docker run -e JVM_OPTS="-Xms256M -Xmx1024M" --name "$name" -p $((CASSANDRA_BASE_PORT + i - 1)):9042 -d shotover/cassandra-test:5.0-rc1-r3
       else
         echo "$name already running" >/dev/null
       fi
@@ -73,17 +72,16 @@ function run() {
        FAULTS_ARG="-f $FAULTS"
     fi
     local time_format='[log=time] Memory (KB): %M, System (s): %S User (s): %U | {"memory": %M, "system": %S, "user": %U}'
-    (/usr/bin/time -f "$time_format" ./kcensus --simulate-delays -p "$pid" --config "configs/$CONFIG" $CASSANDRA_ARG -a "$ALGO" -w "$WRITES" -r "$REQUESTS" -i "$INGRESS" -t "$THROUGHPUT" -s "$SPEEDUP" $FAULTS_ARG)>"$LOG_DIR/$pid.stdout" 2>>"$LOG_DIR/$pid.stderr" &
+    (/usr/bin/time -f "$time_format" ./kcensus --simulate-delays true -p "$pid" --config "configs/$CONFIG" $CASSANDRA_ARG -a "$ALGO" -w "$WRITES" -r "$REQUESTS" -i "$INGRESS" -t "$THROUGHPUT" -s "$SPEEDUP" $FAULTS_ARG)>"$LOG_DIR/$pid.stdout" 2>>"$LOG_DIR/$pid.stderr" &
   done
   wait
 }
 
 # Resources
 function exp-6() {
-  SPEEDUP=10000000 # latency precision does not matter
   local requests=1000
-  for configs in aws-random aws-from-paris; do
-    for writes in "${YCSB[@]}"; do
+  for configs in aws-random; do
+    for writes in "${WRITES[@]}"; do
       for num_replicas in $(seq 3 2 31); do
         for algo in "${ALGOS[@]}"; do
           run "${configs}/${num_replicas}.toml" "$algo" "$writes" "$((requests / num_replicas))" round-robin 0
