@@ -37,3 +37,12 @@
         mode: '0755'
 
     # Note: graph_bench is copied in its specific experiment
+
+    - name: Wait for Cassandra to be ready
+      ansible.builtin.shell: >
+        docker exec cassandra-{{ groups['kcensus_nodes'].index(inventory_hostname) + 1 }} cqlsh -e "SELECT now() FROM system.local;"
+      register: cassandra_status
+      until: cassandra_status.rc == 0
+      retries: 100
+      delay: 1
+      changed_when: false
