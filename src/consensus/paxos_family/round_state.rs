@@ -7,6 +7,8 @@ pub struct PaxosFamilyRoundState {
     majority: usize,
     e_paxos_quorum: usize,
 
+    pub round: Option<PaxosRound>,
+
     // Paxos / MultiPaxos state
     prepared: usize,
     accepted: usize,
@@ -27,7 +29,7 @@ pub struct PaxosFamilyRoundState {
 }
 
 impl PaxosFamilyRoundState {
-    pub fn new(nb_nodes: usize, my_pid: usize) -> Self {
+    pub fn new(nb_nodes: usize, my_pid: usize, starting_round: Option<PaxosRound>) -> Self {
         let majority = (nb_nodes / 2) + 1;
         let e_paxos_quorum = ((nb_nodes * 3) / 4).max(majority);
 
@@ -35,6 +37,8 @@ impl PaxosFamilyRoundState {
             my_pid,
             majority,
             e_paxos_quorum,
+
+            round: starting_round,
 
             prepared: 0,
             accepted: 0,

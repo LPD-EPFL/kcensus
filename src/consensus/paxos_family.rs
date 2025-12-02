@@ -23,8 +23,7 @@ pub struct PaxosFamilySettings {
     starting_round: Option<PaxosRound>,
 }
 
-pub type PaxosFamilyShard =
-    ConsensusShard<PaxosFamilySettings, Option<PaxosRound>, PaxosFamilyRoundState>;
+pub type PaxosFamilyShard = ConsensusShard<PaxosFamilySettings, PaxosFamilyRoundState>;
 
 #[derive(Copy, Clone, PartialEq, Debug)]
 pub enum Mode {
@@ -68,8 +67,7 @@ impl PaxosFamilyShard {
                 starting_round,
             },
 
-            round: starting_round,
-            round_state: PaxosFamilyRoundState::new(nb_nodes, my_pid),
+            round_state: PaxosFamilyRoundState::new(nb_nodes, my_pid, starting_round),
         }
     }
 }
@@ -84,14 +82,14 @@ impl ConsensusShardTrait for PaxosFamilyShard {
 
         match msg {
             Prepare { slot, round, .. } | Accept { slot, round, .. } => {
-                if slot < self.slot || Some(round) < self.round {
+                if slot < self.slot || Some(round) < self.round_state.round {
                     return Ok(None);
-                } else if Some(round) > self.round {
+                } else if Some(round) > self.round_state.round {
                     debug_assert_ne!(round.leader, self.my_pid);
                     self.goto_round(Some(round));
                 }
                 debug_assert_eq!(slot, self.slot);
-                debug_assert_eq!(Some(round), self.round);
+                debug_assert_eq!(Some(round), self.round_state.round);
             }
             _ => (),
         }
@@ -200,7 +198,7 @@ impl ConsensusShardTrait for PaxosFamilyShard {
             // "<#2FB82F>Commited \"{}\" in slot {} (round {}) from state:</> <#B8E8B8>{}</>"
             trace!(
                 "Commited \"{:?}\" in slot {} (round {:?})",
-                value, self.slot, self.round
+                value, self.slot, self.round_state.round
             );
         }
         self.slot += 1;
@@ -212,6 +210,10 @@ impl ConsensusShardTrait for PaxosFamilyShard {
     #[inline]
     fn get_my_v(&self) -> Option<usize> {
         self.round_state.get_v()
+    }
+
+    fn ongoing(&self) -> bool {
+        self.get_my_v().is_some()
     }
 
     #[inline]
@@ -246,16 +248,16 @@ impl PaxosFamilyShard {
             debug!(
                 // "<#FF4F4F>Can not commit in round {} from state:</> <#EFBFBF>{}</>"
                 "Can not commit in round {:?}",
-                self.round,
+                self.round_state.round,
             );
             if round.unwrap_or_default().round_group
-                > self.round.unwrap_or_default().round_group + 1
+                > self.round_state.round.unwrap_or_default().round_group + 1
             {
                 // "<yellow>######## Skipping round !!!!</>"
                 debug!("######## Skipping round !!!!");
             }
         }
-        self.round = round;
+        self.round_state.round = round;
         self.round_state.next_round();
     }
 
@@ -280,9 +282,10 @@ impl PaxosFamilyShard {
     }
 
     async fn propose(&mut self, v: usize, with_value: bool) -> io::Result<()> {
-        debug_assert!(self.round == self.settings.starting_round);
+        debug_assert!(self.round_state.round == self.settings.starting_round);
         debug_assert!(self.round_state.get_v().is_none());
         let round = self
+            .round_state
             .round
             .unwrap_or_default()
             .next_leader_round(self.my_pid);
@@ -322,7 +325,7 @@ impl PaxosFamilyShard {
     async fn answer_prepare(&self, src: usize) -> io::Result<()> {
         let msg = Prepare {
             slot: self.slot,
-            round: self.round.unwrap(),
+            round: self.round_state.round.unwrap(),
             rv: self.round_state.get_rv().unwrap(),
         };
         self.send(msg, src).await
@@ -332,27 +335,29 @@ impl PaxosFamilyShard {
         // TODO: Only send to fastest majority/quorum ?
         let msg = Accept {
             slot: self.slot,
-            round: self.round.unwrap(),
+            round: self.round_state.round.unwrap(),
             v: self.round_state.get_v().unwrap(),
         };
         self.broadcast(msg, false).await
     }
 
     async fn answer_accept(&self) -> io::Result<()> {
-        let src = self.round.unwrap().leader;
+        let src = self.round_state.round.unwrap().leader;
         let v = self.round_state.get_v().unwrap();
         let msg = Accept {
             slot: self.slot,
-            round: self.round.unwrap(),
+            round: self.round_state.round.unwrap(),
             v,
         };
         debug!(
             "Mode: {:?}, Round: {:?}, Init: {:?}",
             self.settings.mode,
-            self.round,
+            self.round_state.round,
             self.get_requester(v)
         );
-        if self.settings.mode == MultiPaxos3P && self.round == self.settings.starting_round {
+        if self.settings.mode == MultiPaxos3P
+            && self.round_state.round == self.settings.starting_round
+        {
             if let Some(requester) = self.get_requester(v) {
                 if requester != src && requester != self.my_pid {
                     // TODO: Only send if self is in the fastest majority (from leader to initiator) ?
@@ -377,8 +382,7 @@ impl PaxosFamilyShard {
     }
 }
 
-pub(crate) type PaxosFamily =
-    Consensus<PaxosFamilySettings, Option<PaxosRound>, PaxosFamilyRoundState>;
+pub(crate) type PaxosFamily = Consensus<PaxosFamilySettings, PaxosFamilyRoundState>;
 
 impl PaxosFamily {
     pub fn new(

@@ -1,4 +1,4 @@
-use crate::consensus::kcensus::message::KCensusMsg::{Spread, SpreadValueOnly};
+use crate::consensus::kcensus::message::KCensusMsg::{PaxosAccept, Spread, SpreadValueOnly};
 use crate::consensus::kcensus::node_state::NodeState;
 use crate::consensus::kcensus::propagation::MessageId;
 use serde::{Deserialize, Serialize};
@@ -8,34 +8,31 @@ pub enum KCensusMsg {
     // Used to propose & forward, but also to freeze and respond to a freeze
     Spread {
         slot: usize,
-        round: usize,
-        msg_id: Option<MessageId>,
-        remote_states: Vec<NodeState>,
+        v: usize,
+        msg_id: MessageId,
+        remote_states: Option<Vec<NodeState>>,
         with_value: bool,
         new_value: bool,
     },
     SpreadValueOnly {
-        msg_id: MessageId,
         v: usize,
+        msg_id: MessageId,
+    },
+    PaxosAccept {
+        slot: usize,
+        leader: usize,
+        v: usize,
+        new_value: bool,
     },
 }
 
 impl KCensusMsg {
     #[inline]
-    pub fn get_v(&self, src: usize) -> usize {
+    pub fn get_v(&self) -> usize {
         match self {
-            Spread {
-                msg_id,
-                remote_states,
-                ..
-            } => {
-                let v = remote_states[src].v;
-                if let Some(msg_id) = msg_id {
-                    debug_assert_eq!(remote_states[src].v, remote_states[msg_id.leader].v)
-                }
-                v.expect("v of src should not be None")
-            }
+            Spread { v, .. } => *v,
             SpreadValueOnly { v, .. } => *v,
+            PaxosAccept { v, .. } => *v,
         }
     }
 
@@ -44,6 +41,7 @@ impl KCensusMsg {
         match self {
             Spread { slot, .. } => *slot,
             SpreadValueOnly { .. } => 0,
+            PaxosAccept { slot, .. } => *slot,
         }
     }
 
@@ -52,6 +50,7 @@ impl KCensusMsg {
         match self {
             Spread { with_value, .. } => *with_value,
             SpreadValueOnly { .. } => true,
+            PaxosAccept { new_value, .. } => *new_value,
         }
     }
 }

@@ -20,7 +20,7 @@ pub(crate) mod message;
 pub(crate) mod paxos_family;
 mod read_tracker;
 
-pub(crate) struct ConsensusShard<AlgoSettings, AlgoRound, AlgoRoundState> {
+pub(crate) struct ConsensusShard<AlgoSettings, AlgoRoundState> {
     // Settings
     nb_nodes: usize,
     my_pid: usize,
@@ -37,13 +37,12 @@ pub(crate) struct ConsensusShard<AlgoSettings, AlgoRound, AlgoRoundState> {
     read_tracker: ReadTracker,
 
     settings: AlgoSettings,
-    round: AlgoRound,
     round_state: AlgoRoundState,
 }
 
-pub(crate) struct Consensus<AlgoSettings, AlgoRound, AlgoRoundState> {
+pub(crate) struct Consensus<AlgoSettings, AlgoRoundState> {
     nb_nodes: usize,
-    shards: Vec<ConsensusShard<AlgoSettings, AlgoRound, AlgoRoundState>>,
+    shards: Vec<ConsensusShard<AlgoSettings, AlgoRoundState>>,
     sinks: Arc<Mutex<MultiSink>>,
 }
 
@@ -60,12 +59,14 @@ pub(crate) trait ConsensusShardTrait {
 
     fn get_my_v(&self) -> Option<usize>;
 
+    fn ongoing(&self) -> bool;
+
     fn should_lead(&self) -> bool;
 }
 
-impl<AS, AR, ARS> Consensus<AS, AR, ARS>
+impl<AS, ARS> Consensus<AS, ARS>
 where
-    ConsensusShard<AS, AR, ARS>: ConsensusShardTrait,
+    ConsensusShard<AS, ARS>: ConsensusShardTrait,
 {
     pub async fn run(
         &mut self,
@@ -92,7 +93,7 @@ where
                             if command.read_only {
                                 self.shards[shard].start_read(command).await?;
                             } else {
-                                let ongoing = self.shards[shard].get_my_v().is_some()
+                                let ongoing = self.shards[shard].ongoing()
                                     || !queued_messages[shard].is_empty();
                                 let contention = ongoing || self.shards[shard].has_queued_commands();
                                 if self.shards[shard].can_forward_proposals() || !contention {
@@ -171,14 +172,13 @@ where
                 },
             };
 
-            let ongoing =
-                self.shards[shard].get_my_v().is_some() || !queued_messages[shard].is_empty();
+            let ongoing = self.shards[shard].ongoing() || !queued_messages[shard].is_empty();
             let should_repropose = !ongoing && self.shards[shard].has_queued_commands();
             let contention = ongoing || should_repropose;
 
-            if ongoing && self.shards[shard].get_my_v().is_none() {
+            if ongoing && !self.shards[shard].ongoing() {
                 debug!(
-                    "My_v is none but messages are still queued. my slot: {:?}, queue: {:?}",
+                    "Consensus is not running but messages are still queued. my slot: {:?}, queue: {:?}",
                     self.shards[shard].slot, queued_messages[shard]
                 );
             }
@@ -217,9 +217,9 @@ where
     } // run
 }
 
-impl<AS, AR, ARS> ConsensusShard<AS, AR, ARS>
+impl<AS, ARS> ConsensusShard<AS, ARS>
 where
-    ConsensusShard<AS, AR, ARS>: ConsensusShardTrait,
+    ConsensusShard<AS, ARS>: ConsensusShardTrait,
 {
     #[inline]
     async fn start_read(&mut self, command: Command) -> io::Result<()> {

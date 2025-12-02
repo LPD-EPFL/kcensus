@@ -1,5 +1,6 @@
 use crate::consensus::kcensus::message::KCensusMsg;
-use crate::consensus::kcensus::message::KCensusMsg::{Spread, SpreadValueOnly};
+use crate::consensus::kcensus::message::KCensusMsg::{PaxosAccept, Spread, SpreadValueOnly};
+use crate::consensus::kcensus::node_state::NodeState;
 use crate::consensus::kcensus::propagation::{MessageId, PropagationGraphs};
 use crate::consensus::kcensus::round_state::KCensusRoundState;
 use crate::consensus::message::ConsensusMsg::{Commit, KCensusM};
@@ -7,10 +8,11 @@ use crate::consensus::message::{CommandBatch, ConsensusMessage};
 use crate::consensus::read_tracker::ReadTracker;
 use crate::consensus::{Consensus, ConsensusShard, ConsensusShardTrait};
 use crate::multi_sink::{MultiSink, ShardMultiSink};
-use log::{debug, trace};
+use log::trace;
 use std::collections::HashMap;
 use std::io;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::Mutex;
 
 pub(crate) mod message;
@@ -19,10 +21,10 @@ pub mod propagation;
 mod round_state;
 
 pub struct KCensusSettings {
-    propagation_graphs: Arc<PropagationGraphs>,
+    graphs: Arc<PropagationGraphs>,
 }
 
-pub(crate) type KCensusShard = ConsensusShard<KCensusSettings, usize, KCensusRoundState>;
+pub(crate) type KCensusShard = ConsensusShard<KCensusSettings, KCensusRoundState>;
 
 impl KCensusShard {
     pub fn new(
@@ -46,8 +48,9 @@ impl KCensusShard {
 
             read_tracker: ReadTracker::new(1 + nb_nodes / 2),
 
-            settings: KCensusSettings { propagation_graphs },
-            round: 0,
+            settings: KCensusSettings {
+                graphs: propagation_graphs,
+            },
             round_state: KCensusRoundState::new(nb_nodes, my_pid),
         }
     }
@@ -55,7 +58,6 @@ impl KCensusShard {
 
 impl ConsensusShardTrait for KCensusShard {
     async fn process_message(&mut self, msg: ConsensusMessage) -> io::Result<Option<CommandBatch>> {
-        let msg_v = msg.get_v();
         let src = msg.src;
         let msg = match msg.msg {
             KCensusM(msg) => msg,
@@ -67,128 +69,143 @@ impl ConsensusShardTrait for KCensusShard {
         match msg {
             Spread {
                 slot,
-                round,
+                v,
                 msg_id,
                 remote_states,
                 with_value,
                 new_value,
             } => {
-                let msg_v = msg_v.expect("Spread messages should have a value uid");
-                if slot < self.slot || round < self.round {
+                if slot < self.slot {
+                    // TODO: maybe also enter here if paxos-accept ? (only if higher-prio leader ?)
                     if with_value {
-                        let msg_id = msg_id.expect("Can't spread value without msg_id");
-                        self.graph_spread_value_only(msg_id, msg_v).await?;
+                        assert!(new_value);
+                        self.graph_spread_value_only(msg_id, v).await?;
                     }
                     return Ok(None);
-                } else if round > self.round {
-                    self.goto_round(round);
                 }
+
                 debug_assert_eq!(slot, self.slot);
-                debug_assert_eq!(round, self.round);
                 let old_leader_count = self.round_state.leaders().len();
-
                 let no_v_before = self.round_state.get_my_v().is_none();
-                if no_v_before {
-                    debug_assert!(old_leader_count == 0);
-                    debug_assert!(!self.round_state.am_i_frozen());
-                    // TODO: pick most popular v instead ?
-                    self.round_state.set_my_v(msg_v);
+                // let had_conflict = self.round_state.has_conflict();
+                let proposer = msg_id.proposer;
+                let leader = self.settings.graphs.get_leader(proposer);
+                let explicit_remote_states = remote_states.is_some();
+                let remote_states = match remote_states {
+                    Some(x) => x,
+                    None => {
+                        let remote_state_ids = self.settings.graphs.get_remote_states(msg_id);
+                        let mut remote_states: Vec<_> =
+                            (0..self.nb_nodes).map(NodeState::new).collect();
+                        for i in 0..self.nb_nodes {
+                            if i == msg_id.proposer || remote_state_ids[i] != Duration::ZERO {
+                                remote_states[i].accept_with_state(
+                                    v,
+                                    msg_id.proposer,
+                                    remote_state_ids[i],
+                                    &self.settings.graphs,
+                                )
+                            }
+                        }
+                        remote_states
+                    }
+                };
+                assert_eq!(remote_states[proposer].get_v(), Some(v));
+                let _remote_change = self
+                    .round_state
+                    .store_remote_states(&remote_states, &self.settings.graphs);
+                let conflict = self.round_state.has_conflict();
+                assert!(!explicit_remote_states || conflict);
+
+                if no_v_before && !conflict {
+                    assert_eq!(old_leader_count, 0);
+                    assert!(!self.round_state.am_i_frozen());
+                    self.round_state.accept_with_state(
+                        v,
+                        proposer,
+                        Duration::ZERO,
+                        &self.settings.graphs,
+                    );
                 }
-                let my_v = self.round_state.get_my_v().unwrap();
+                let my_v = self.round_state.get_my_v();
 
-                let learned = self.round_state.learn_from(&remote_states);
-                let leader_count = self.round_state.leaders().len();
-
-                if let Some(msg_id) = msg_id {
-                    self.round_state.receive_msg(msg_id);
+                assert!(!self.round_state.am_i_frozen() || conflict);
+                if conflict {
+                    self.round_state.freeze_and_prepare_leaders();
                 }
 
-                // Can commit ?
-                // TODO: Make can_commit faster when using graph
-                if self.round_state.i_am_leader()
-                    && self
-                        .round_state
-                        .can_commit(Some(&self.settings.propagation_graphs))
-                {
-                    debug_assert!(!with_value); // can't be my value -> there would be a conflict
-                    let v = self.round_state.get_my_v().unwrap();
+                // Update propagation state (/v state) and continue propagation
+                self.round_state.receive_msg(msg_id);
+                let final_state = loop {
+                    if let Some((next_state, dependencies)) = self.settings.graphs.next_state(
+                        proposer,
+                        self.my_pid,
+                        self.round_state.get_propagation_state(proposer),
+                    ) {
+                        if !self.round_state.has_received(dependencies) {
+                            break false;
+                        }
+                        self.round_state.set_propagation_state(proposer, next_state);
+                        if !conflict {
+                            self.round_state
+                                .update_v_state(next_state, &self.settings.graphs)
+                        }
+                        self.spread(v, proposer, next_state, new_value).await?;
+                    } else {
+                        break true;
+                    }
+                };
+
+                if final_state && leader == self.my_pid && !conflict {
+                    assert!(self.round_state.can_commit(&self.settings.graphs));
+                    let v = my_v.unwrap();
                     self.sinks.broadcast(Commit { slot, v }, None).await?;
-                    let value = self.commit_slot(my_v, false);
+                    let value = self.commit_slot(v, false);
                     return Ok(Some(value));
                 }
 
-                let msg_frozen = remote_states[src].frozen;
-                let orig_frozen = self.round_state.am_i_frozen();
-
-                if msg_frozen || msg_v != my_v || orig_frozen {
-                    self.round_state.freeze();
-
-                    if with_value {
-                        debug_assert!(!msg_frozen); // Can't spread value in frozen messages.
-                        let msg_id = msg_id.expect("Can't spread value without msg_id");
-                        self.graph_spread_value_only(msg_id, msg_v).await?;
-                    }
-
-                    if self.round_state.i_am_leader() {
-                        let min_leader = *self
-                            .leader_priority
-                            .iter()
-                            .find(|leader| self.round_state.leaders().contains(leader))
-                            .unwrap();
-                        if min_leader == self.my_pid {
-                            if let Some(adopted_v) = self.round_state.try_adopt() {
-                                // Conflict resolved. Adopting...
-                                self.goto_round(self.round + 1);
-                                self.repropose_start(adopted_v).await?;
-                                return Ok(None);
-                            }
-                        }
-                    }
-
-                    if !orig_frozen {
-                        if msg_frozen {
-                            // Existing conflict. Spreading to leaders.
-                            for i in 0..leader_count {
-                                self.spread_to(self.round_state.leaders()[i]).await?;
-                            }
-                        } else {
-                            // New conflict. Freezing others...
-                            self.spread_to_all().await?;
-                        }
-                    } else {
-                        // Spread to new leaders only
-                        for i in old_leader_count..leader_count {
-                            self.spread_to(self.round_state.leaders()[i]).await?;
-                        }
-                    }
-                    return Ok(None);
-                }
-
-                if let Some(msg_id) = msg_id {
-                    if leader_count == 1 {
-                        self.graph_spread(msg_id, new_value).await?;
-                        return Ok(None);
-                    } else if with_value {
-                        self.graph_spread_value_only(msg_id, msg_v).await?;
-                    }
-                }
-
-                // Multiple leaders of the same value
-                debug_assert!(leader_count > 1);
-
-                if old_leader_count < 2 {
-                    // Transition to multi-leader strategy
-                    self.spread_to_all().await?;
-                } else if learned || old_leader_count < leader_count {
-                    let start_from = if learned { 0 } else { old_leader_count };
-                    // Share knowledge with leaders
-                    for i in start_from..leader_count {
-                        let leader = self.round_state.leaders()[i];
-                        self.spread_to(leader).await?;
+                if self.round_state.prepared_for() == Some(self.my_pid) {
+                    assert!(conflict);
+                    if self.round_state.can_start_paxos_accept() {
+                        let adopted_v = self.round_state.adopt(&self.settings.graphs);
+                        let (new_value, adopted_v) = match adopted_v {
+                            Some(adopted_v) => (false, adopted_v),
+                            None => match self.get_new_batch_to_propose() {
+                                Some(batch) => (true, self.store_new_command(batch)),
+                                None => (false, v),
+                            },
+                        };
+                        self.broadcast_paxos_accept(adopted_v, new_value).await?;
+                        self.round_state.paxos_accept(self.my_pid, adopted_v);
                     }
                 }
             }
             SpreadValueOnly { msg_id, v } => self.graph_spread_value_only(msg_id, v).await?,
+            PaxosAccept {
+                slot, leader, v, ..
+            } => {
+                if slot < self.slot {
+                    return Ok(None);
+                }
+
+                self.round_state.freeze_and_prepare(leader);
+                if self.round_state.prepared_for() != Some(leader) {
+                    return Ok(None);
+                }
+
+                if leader != self.my_pid {
+                    assert_eq!(leader, src);
+                    self.round_state.paxos_accept(leader, v);
+                } else {
+                    assert_eq!(v, self.get_my_v().unwrap());
+                    self.round_state.recv_paxos_accept(src, v);
+                    if self.round_state.can_paxos_commit() {
+                        self.sinks.broadcast(Commit { slot, v }, None).await?;
+                        let value = self.commit_slot(v, false);
+                        return Ok(Some(value));
+                    }
+                }
+            }
         } // match command
         Ok(None)
     } // fn process_message
@@ -222,18 +239,25 @@ impl ConsensusShardTrait for KCensusShard {
         } else {
             // "<#2FB82F>Commited \"{}\" in slot {} (round {}) from state:</> <#B8E8B8>{}</>"
             trace!(
-                "Commited \"{:?}\" in slot {} (round {}) from state: {}",
-                value, self.slot, self.round, self.round_state,
+                "Commited \"{:?}\" in slot {} (round {:?}) from state: {}",
+                value,
+                self.slot,
+                self.round_state.get_round(),
+                self.round_state,
             );
         }
         self.slot += 1;
-        self.goto_round(0);
+        self.round_state.clear();
         value
     }
 
     #[inline]
     fn get_my_v(&self) -> Option<usize> {
         self.round_state.get_my_v()
+    }
+
+    fn ongoing(&self) -> bool {
+        !self.round_state.proposers().is_empty()
     }
 
     #[inline]
@@ -244,26 +268,9 @@ impl ConsensusShardTrait for KCensusShard {
 
 impl KCensusShard {
     #[inline]
-    fn goto_round(&mut self, round: usize) {
-        if round != 0 {
-            debug!(
-                // "<#FF4F4F>Can not commit in round {} from state:</> <#EFBFBF>{}</>"
-                "Can not commit in round {} from state: {}",
-                self.round, self.round_state,
-            );
-            if round > self.round + 1 {
-                // "<yellow>######## Skipping round !!!!</>"
-                debug!("######## Skipping round !!!!");
-            }
-        }
-        self.round = round;
-        self.round_state.clear();
-    }
-
-    #[inline]
     fn value_for_msg(&self, msg: &KCensusMsg) -> Option<CommandBatch> {
         if msg.includes_value() {
-            let v = msg.get_v(self.my_pid);
+            let v = msg.get_v();
             Some(self.queued_commands[&v].clone())
         } else {
             None
@@ -276,140 +283,104 @@ impl KCensusShard {
         self.sinks.broadcast(KCensusM(msg), value).await
     }
 
+    async fn broadcast_paxos_accept(&self, v: usize, new_value: bool) -> io::Result<()> {
+        // TODO: if not a new value, broadcast to closest majority only ? (small optim.)
+        self.broadcast(PaxosAccept {
+            slot: self.slot,
+            leader: self.my_pid,
+            v,
+            new_value,
+        })
+        .await
+    }
+
     async fn send_to(&self, msg: KCensusMsg, dest: usize) -> io::Result<()> {
         let value = self.value_for_msg(&msg);
         self.sinks.send(KCensusM(msg), value, dest).await
     }
 
-    async fn spread_to(&self, dest: usize) -> io::Result<()> {
-        if self.my_pid == dest {
-            return Ok(());
+    async fn inner_spread(
+        &self,
+        v: usize,
+        proposer: usize,
+        state_id: Duration,
+        new_value: bool,
+        value_only: bool,
+    ) -> io::Result<()> {
+        for msg_id in self
+            .settings
+            .graphs
+            .get_new_messages_to_spread(proposer, self.my_pid, state_id)
+            .iter()
+            .copied()
+        {
+            assert!(!value_only || new_value);
+            let with_value = new_value && self.settings.graphs.should_include_value(&msg_id);
+            if value_only && !with_value {
+                continue;
+            }
+            assert_eq!(msg_id.src, self.my_pid);
+            assert_eq!(msg_id.proposer, proposer);
+            let dest = msg_id.dest;
+
+            if !value_only {
+                let remote_states = if self.round_state.has_conflict() {
+                    Some(self.round_state.clone_node_states())
+                } else {
+                    None
+                };
+
+                let msg = Spread {
+                    slot: self.slot,
+                    v,
+                    msg_id,
+                    remote_states,
+                    with_value,
+                    new_value,
+                };
+                self.send_to(msg, dest).await?;
+            } else {
+                let msg = SpreadValueOnly { v, msg_id };
+                self.send_to(msg, dest).await?;
+            }
         }
-        let msg = Spread {
-            slot: self.slot,
-            round: self.round,
-            msg_id: None,
-            remote_states: self.round_state.clone_node_states(),
-            with_value: false,
-            new_value: false,
-        };
-        self.send_to(msg, dest).await
+        Ok(())
     }
 
-    async fn spread_to_all(&self) -> io::Result<()> {
-        let msg = Spread {
-            slot: self.slot,
-            round: self.round,
-            msg_id: None,
-            remote_states: self.round_state.clone_node_states(),
-            with_value: false,
-            new_value: false,
-        };
-        self.broadcast(msg).await
+    async fn spread(
+        &self,
+        v: usize,
+        proposer: usize,
+        state_id: Duration,
+        new_value: bool,
+    ) -> io::Result<()> {
+        self.inner_spread(v, proposer, state_id, new_value, false)
+            .await
     }
 
     async fn propose_and_spread(&mut self, v: usize, new_value: bool) -> io::Result<()> {
-        self.round_state.set_my_v(v);
-        self.round_state.become_leader();
+        let me = self.my_pid;
+        let state_id = Duration::ZERO;
+        self.round_state
+            .accept_with_state(v, me, state_id, &self.settings.graphs);
 
-        for msg_id in self
-            .settings
-            .propagation_graphs
-            .get_start(self.my_pid)
-            .iter()
-        {
-            debug_assert!(
-                self.settings
-                    .propagation_graphs
-                    .get_by_id(msg_id)
-                    .get_includes_new_values()
-            );
-            debug_assert!(
-                self.settings
-                    .propagation_graphs
-                    .get_by_id(msg_id)
-                    .get_dependencies()
-                    .is_empty()
-            );
-
-            let msg = Spread {
-                slot: self.slot,
-                round: self.round,
-                msg_id: Some(*msg_id),
-                remote_states: self.round_state.clone_node_states(),
-                with_value: new_value,
-                new_value,
-            };
-            self.send_to(msg, msg_id.dest).await?
-        }
-        Ok(())
-    }
-
-    async fn graph_spread(&mut self, prev_msg_id: MessageId, new_value: bool) -> io::Result<()> {
-        let prev_msg_info = self.settings.propagation_graphs.get_by_id(&prev_msg_id);
-        // Potential follow-up messages:
-        for msg_id in prev_msg_info.get_needed_by().iter() {
-            if msg_id.src != self.my_pid {
-                continue;
-            }
-            let msg_info = self.settings.propagation_graphs.get_by_id(msg_id);
-
-            if !self.round_state.can_send(msg_info.get_dependencies()) {
-                continue;
-            }
-
-            self.round_state.receive_msg(*msg_id);
-
-            let msg = Spread {
-                slot: self.slot,
-                round: self.round,
-                msg_id: Some(*msg_id),
-                remote_states: self.round_state.clone_node_states(),
-                with_value: new_value && msg_info.get_includes_new_values(),
-                new_value,
-            };
-            self.send_to(msg, msg_id.dest).await?;
-        }
-        Ok(())
+        self.spread(v, me, state_id, new_value).await
     }
 
     async fn graph_spread_value_only(&self, prev_msg_id: MessageId, v: usize) -> io::Result<()> {
-        let prev_msg_info = self.settings.propagation_graphs.get_by_id(&prev_msg_id);
-        // Potential follow-up messages:
-        for msg_id in prev_msg_info.get_needed_by() {
-            if msg_id.src != self.my_pid {
-                continue;
-            }
-            let msg_info = self.settings.propagation_graphs.get_by_id(msg_id);
-
-            if !msg_info.get_includes_new_values() {
-                continue;
-            }
-            debug_assert!(msg_info.get_dependencies().len() == 1);
-            debug_assert!(msg_info.get_dependencies().contains(&prev_msg_id));
-
-            let msg = SpreadValueOnly { msg_id: *msg_id, v };
-            self.send_to(msg, msg_id.dest).await?;
-        }
-        Ok(())
+        let proposer = prev_msg_id.proposer;
+        let state_id = self.settings.graphs.next_state_from_msg(prev_msg_id);
+        self.inner_spread(v, proposer, state_id, true, true).await
     }
 
     async fn graph_spread_new_value_only(&self, v: usize) -> io::Result<()> {
-        for msg_id in self.settings.propagation_graphs.get_start(self.my_pid) {
-            debug_assert_eq!(msg_id.src, self.my_pid);
-            let msg_info = self.settings.propagation_graphs.get_by_id(msg_id);
-
-            debug_assert!(msg_info.get_includes_new_values());
-            debug_assert!(msg_info.get_dependencies().is_empty());
-
-            let msg = SpreadValueOnly { msg_id: *msg_id, v };
-            self.send_to(msg, msg_id.dest).await?;
-        }
-        Ok(())
+        let me = self.my_pid;
+        let state_id = Duration::ZERO;
+        self.inner_spread(v, me, state_id, true, true).await
     }
 }
 
-pub(crate) type KCensus = Consensus<KCensusSettings, usize, KCensusRoundState>;
+pub(crate) type KCensus = Consensus<KCensusSettings, KCensusRoundState>;
 
 impl KCensus {
     pub fn new(

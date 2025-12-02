@@ -1,7 +1,8 @@
-use crate::consensus::kcensus::node_state::{Knowledge, NodeState};
+use crate::consensus::kcensus::node_state::NodeState;
 use crate::consensus::kcensus::propagation::{MessageId, PropagationGraphs};
 use std::collections::HashSet;
 use std::fmt;
+use std::time::Duration;
 
 macro_rules! my_state {
     ($self:ident) => {
@@ -10,46 +11,34 @@ macro_rules! my_state {
 }
 
 pub struct KCensusRoundState {
-    nb_nodes: usize,
     my_pid: usize,
     majority: usize,
 
     node_states: Vec<NodeState>,
+    propagation_states: Vec<Duration>,
 
+    proposers: Vec<usize>,
     leaders: Vec<usize>,
     received_msgs: HashSet<MessageId>,
 
-    // can_commit optimizations / scratchpads
-    my_quorum: Vec<usize>,
-    next_combination_pos: Vec<usize>,
-    frozen_size_checked: usize,
-    _bitset_scratchpad: Knowledge,
+    paxos_accept_count: usize,
 }
 
 impl KCensusRoundState {
     pub fn new(nb_nodes: usize, my_pid: usize) -> Self {
-        let majority = (nb_nodes / 2) + 1;
-        let mut node_states = Vec::with_capacity(nb_nodes);
-        for _ in 0..nb_nodes {
-            node_states.push(NodeState::new(nb_nodes));
-        }
-        let mut x = Self {
-            nb_nodes,
+        Self {
             my_pid,
-            majority,
+            majority: (nb_nodes / 2) + 1,
 
-            node_states,
+            node_states: (0..nb_nodes).map(NodeState::new).collect(),
+            propagation_states: vec![Duration::ZERO; nb_nodes],
 
+            proposers: Vec::with_capacity(nb_nodes),
             leaders: Vec::with_capacity(nb_nodes),
             received_msgs: HashSet::with_capacity(nb_nodes),
 
-            my_quorum: Vec::with_capacity(nb_nodes),
-            next_combination_pos: Vec::with_capacity(majority - 1),
-            frozen_size_checked: 0,
-            _bitset_scratchpad: Knowledge::with_capacity(nb_nodes),
-        };
-        x.clear();
-        x
+            paxos_accept_count: 0,
+        }
     }
 
     #[inline]
@@ -57,37 +46,65 @@ impl KCensusRoundState {
         for node_state in self.node_states.iter_mut() {
             node_state.clear();
         }
-        // Alternatively, the following could be set in set_my_v
-        let inserted = my_state!(self).k.insert(self.my_pid);
-        debug_assert!(inserted);
+        for prop_state in self.propagation_states.iter_mut() {
+            *prop_state = Duration::ZERO;
+        }
 
+        self.proposers.clear();
         self.leaders.clear();
         self.received_msgs.clear();
 
-        self.my_quorum.clear();
-        self.next_combination_pos.clear();
-        self.frozen_size_checked = 0;
+        self.paxos_accept_count = 0;
     }
 
     #[inline]
     pub fn get_my_v(&self) -> Option<usize> {
-        my_state!(self).v
+        my_state!(self).get_v()
+    }
+
+    pub fn get_round(&self) -> Option<usize> {
+        my_state!(self).prepared_for()
     }
 
     #[inline]
-    pub fn set_my_v(&mut self, v: usize) {
-        debug_assert!(self.get_my_v().is_none());
-        my_state!(self).v = Some(v);
+    pub fn accept_with_state(
+        &mut self,
+        v: usize,
+        proposer: usize,
+        time: Duration,
+        graph: &PropagationGraphs,
+    ) {
+        assert!(self.get_my_v().is_none());
+        assert!(self.proposers.is_empty());
+        assert!(self.leaders.is_empty());
+        my_state!(self).accept_with_state(v, proposer, time, graph);
+        self.proposers.push(proposer);
+        self.leaders.push(graph.get_leader(proposer));
+    }
+
+    pub fn update_v_state(&mut self, time: Duration, graph: &PropagationGraphs) {
+        assert!(self.get_my_v().is_some());
+        my_state!(self).update_state(time, graph);
     }
 
     #[inline]
     pub fn am_i_frozen(&self) -> bool {
-        my_state!(self).frozen
+        my_state!(self).is_frozen()
     }
 
     #[inline]
-    pub fn freeze(&mut self) {
-        my_state!(self).frozen = true;
+    pub fn freeze_and_prepare(&mut self, leader: usize) {
+        my_state!(self).freeze_and_prepare(leader);
+    }
+
+    pub fn freeze_and_prepare_leaders(&mut self) {
+        for leader in self.leaders.iter() {
+            my_state!(self).freeze_and_prepare(*leader);
+        }
+    }
+
+    pub fn prepared_for(&self) -> Option<usize> {
+        my_state!(self).prepared_for()
     }
 
     #[inline]
@@ -96,10 +113,8 @@ impl KCensusRoundState {
     }
 
     #[inline]
-    pub fn become_leader(&mut self) {
-        debug_assert!(self.leaders.is_empty());
-        my_state!(self).leader = true;
-        self.leaders.push(self.my_pid);
+    pub fn proposers(&self) -> &[usize] {
+        &self.proposers
     }
 
     #[inline]
@@ -108,220 +123,163 @@ impl KCensusRoundState {
     }
 
     #[inline]
-    pub fn i_am_leader(&self) -> bool {
-        // Note: Can only propose if I didn't see other proposals
-        debug_assert_eq!(
-            !self.leaders.is_empty() && self.leaders[0] == self.my_pid,
-            my_state!(self).leader
-        );
-        my_state!(self).leader
+    pub fn has_conflict(&self) -> bool {
+        self.proposers().len() > 1
     }
 
     #[inline]
     pub fn receive_msg(&mut self, msg: MessageId) {
         let inserted = self.received_msgs.insert(msg);
-        debug_assert!(inserted);
+        assert!(inserted);
     }
 
     #[inline]
-    pub fn can_send(&mut self, dependencies: &HashSet<MessageId>) -> bool {
+    pub fn has_received(&mut self, dependencies: &HashSet<MessageId>) -> bool {
         self.received_msgs.is_superset(dependencies)
     }
 
     #[inline]
-    pub fn learn_from(&mut self, remote_states: &[NodeState]) -> bool {
-        let orig_kl = my_state!(self).k.len();
+    pub fn store_remote_states(
+        &mut self,
+        remote_states: &[NodeState],
+        graph: &PropagationGraphs,
+    ) -> bool {
+        let mut changed = false;
+        let my_proposer = my_state!(self).get_proposer();
         for (pid, remote_node_state) in remote_states.iter().enumerate() {
             let local_node_state = &mut self.node_states[pid];
-            local_node_state.k.union_with(&remote_node_state.k);
-            if let Some(node_v) = remote_node_state.v {
-                if remote_node_state.leader && !local_node_state.leader {
-                    debug_assert_ne!(pid, self.my_pid);
-                    debug_assert!(local_node_state.v.is_none());
-                    self.leaders.push(pid);
-                    local_node_state.leader = true;
-                }
-                debug_assert_eq!(local_node_state.v.unwrap_or(node_v), node_v);
-                local_node_state.v = Some(node_v);
-            } else {
-                debug_assert!(!remote_node_state.leader);
-            }
-            local_node_state.frozen |= remote_node_state.frozen;
-            if !self.am_i_frozen() && self.get_my_v() == remote_node_state.v {
-                // Only accumulate into your own knowledge if you're not frozen
-                my_state!(self).k.union_with(&remote_states[pid].k);
-            }
-        }
-        orig_kl < my_state!(self).k.len()
-    }
-
-    pub fn try_adopt(&mut self) -> Option<usize> {
-        let frozen_count = self.node_states.iter().filter(|x| x.frozen).count();
-        if frozen_count < self.majority {
-            return None;
-        }
-
-        let mut max_score = 0usize;
-        let mut max_score_v = None;
-        for some_node in self.node_states.iter() {
-            if !some_node.frozen {
-                continue;
-            }
-            let v = some_node.v;
-            // For all v in the frozen set
-            if v == max_score_v {
+            if (remote_node_state.get_v().is_none() && local_node_state.get_v().is_some())
+                || remote_node_state.get_state_id() < local_node_state.get_state_id()
+                || remote_node_state.prepared_for() < local_node_state.prepared_for()
+                || remote_node_state.get_paxos_accept_round()
+                    < local_node_state.get_paxos_accept_round()
+            {
                 continue;
             }
 
-            let mut v_frozen_count = 0;
-            self._bitset_scratchpad.clear();
-            for node in self.node_states.iter() {
-                if !node.frozen || v != node.v {
-                    continue;
-                }
-                v_frozen_count += 1;
-                self._bitset_scratchpad.union_with(&node.k);
-            }
-            let v_known_count = self._bitset_scratchpad.len();
-            debug_assert!(v_frozen_count <= v_known_count);
-
-            if v_known_count > self.majority {
-                return v;
-            }
-
-            let score = v_known_count * 2 - v_frozen_count;
-
-            if score > max_score {
-                max_score = score;
-                max_score_v = v;
-            }
-        }
-        debug_assert!(max_score_v.is_some());
-        max_score_v
-    }
-
-    // TODO: Allow can_commit to run for other proposals ?
-    pub fn can_commit(&mut self, graph: Option<&PropagationGraphs>) -> bool {
-        // TODO: Filter on v instead of using my k ? (helps if frozen or to allow commiting other props)
-        let k_size = my_state!(self).k.len();
-        debug_assert!(k_size <= self.nb_nodes);
-        if k_size < self.majority {
-            return false;
-        }
-
-        // Use graph when possible
-        if self.i_am_leader() && self.leaders().len() == 1 {
-            if let Some(graph) = graph {
-                return graph.can_commit(self.my_pid, &self.received_msgs);
-            }
-        }
-
-        let e_paxos_quorum = (self.nb_nodes * 3) / 4;
-        let everyone_knows_me = my_state!(self)
-            .k
-            .iter()
-            .all(|pid| self.node_states[pid].k.contains(self.my_pid));
-        if k_size >= e_paxos_quorum && (everyone_knows_me || k_size > e_paxos_quorum) {
-            return true;
-        }
-        let unknown_nodes = self.nb_nodes - k_size;
-        let trivial_frozen = if everyone_knows_me {
-            self.majority - 1
-        } else {
-            self.majority
-        };
-        let minority = self.nb_nodes - self.majority;
-        let min_frozen = (k_size - minority).max(self.frozen_size_checked + 1); // Skip already checked ones
-
-        /* When new nodes appear, if we already checked combinations of up to k-1 frozen,
-        then we know that sets of up to k frozen nodes that include some new nodes are fine
-        (thanks to the monotonicity of the score function & min_frozen increasing with new nodes)
-        thus we only need to refresh my_quorum when reaching k+1 frozen bellow */
-        if self.frozen_size_checked + 1 < min_frozen {
-            // Note: this will trigger a refresh of my_quorum
-            self.next_combination_pos.clear();
-            self.frozen_size_checked = min_frozen - 1;
-        }
-
-        for frozen in min_frozen..trivial_frozen {
-            let max_others_score = 2 * unknown_nodes - (self.majority - frozen);
-            let to_know = self.majority.min(((max_others_score + frozen) / 2) + 1);
-
-            if to_know <= frozen {
-                self.frozen_size_checked = frozen;
-                self.next_combination_pos.clear();
-                continue;
-            }
-            if self.next_combination_pos.is_empty() {
-                if self.my_quorum.len() != k_size {
-                    self.my_quorum.clear();
-                    self.my_quorum.extend(my_state!(self).k.iter());
-                    // Optimisation: Put bigger knowledge first to help early skip
-                    // Note: !x == (usize::MAX - x)
-                    self.my_quorum
-                        .sort_by_key(|a| !self.node_states[*a].k.len());
-
-                    // trace!("Reordering my_quorum len: {}", self.my_quorum.len());
-                    // for pid in self.my_quorum.iter() {
-                    //     trace!("  - Knowledge of {}: {:?}", pid, self.node_states[*pid].k)
-                    // }
-                }
-                self.next_combination_pos.extend(0..frozen);
-            }
-            debug_assert_eq!(self.next_combination_pos.len(), frozen);
-            loop {
-                let known = &mut self._bitset_scratchpad;
-                known.clear();
-                let mut unused_knowledge = frozen;
-                for pos in self.next_combination_pos.iter() {
-                    let pid = self.my_quorum[*pos];
-                    known.union_with(&self.node_states[pid].k);
-                    unused_knowledge -= 1;
-                    // Optimisation: Early skip
-                    if known.len() >= to_know {
-                        break;
+            let proposer = remote_node_state.get_proposer();
+            if remote_node_state.get_paxos_accept_round().is_none()
+                && remote_node_state.get_v().is_some()
+                && proposer != my_proposer
+            {
+                let proposer = proposer.unwrap();
+                // This node is still in KCensus phase (fast-path).expect("Should have proposer if in a KCensus round");
+                if !self.proposers.contains(&proposer) {
+                    self.proposers.push(proposer);
+                    let leader = graph.get_leader(proposer);
+                    if !self.leaders.contains(&leader) {
+                        self.leaders.push(leader);
                     }
                 }
-
-                if known.len() < to_know {
-                    return false;
-                }
-
-                let changed_suffix_size =
-                    self.next_combination(self.my_quorum.len(), unused_knowledge);
-                if changed_suffix_size == 0 {
-                    break;
-                }
             }
-            // Save combinations that are checked
-            self.frozen_size_checked = frozen;
-            self.next_combination_pos.clear();
-        } // for frozen
-        true
-    } // fn can_commit
 
-    #[inline]
-    fn next_combination(&mut self, positions: usize, unused: usize) -> usize {
-        debug_assert!(positions < self.nb_nodes);
-        let pos = &mut self.next_combination_pos;
-        let len = pos.len();
-        debug_assert!(len < self.majority);
+            *local_node_state = remote_node_state.clone();
+            changed = true;
+        }
+        changed
+    }
 
-        // Optimisation: Skip combinations that only change the unused nodes
-        let min_to_move = 1.max(unused + 1);
-        for suffix_size in min_to_move..=len {
-            let suffix_start = len - suffix_size;
-            // Can we move the last "suffix_size" positions ?
-            if pos[suffix_start] + suffix_size < positions {
-                // Yes: Move them and return
-                let new_pos = pos[suffix_start] + 1;
-                for j in 0..suffix_size {
-                    pos[suffix_start + j] = new_pos + j;
-                }
-                return suffix_size;
+    pub fn get_propagation_state(&self, proposer: usize) -> Duration {
+        self.propagation_states[proposer]
+    }
+
+    pub fn set_propagation_state(&mut self, proposer: usize, state_id: Duration) {
+        self.propagation_states[proposer] = state_id;
+    }
+
+    pub fn can_start_paxos_accept(&self) -> bool {
+        self.node_states
+            .iter()
+            .filter(|x| x.prepared_for() == Some(self.my_pid))
+            .count()
+            >= self.majority
+    }
+
+    pub fn can_adopt(&self) -> bool {
+        self.node_states.iter().filter(|x| x.is_frozen()).count() >= self.majority
+    }
+
+    pub fn adopt(&self, graph: &PropagationGraphs) -> Option<usize> {
+        assert!(self.can_adopt());
+
+        let mut highest_paxos_accept_round = None;
+        let mut highest_paxos_accept_value = None;
+
+        for node in self.node_states.iter() {
+            let paxos_accept_round = node.get_paxos_accept_round();
+            if paxos_accept_round > highest_paxos_accept_round {
+                highest_paxos_accept_round = paxos_accept_round;
+                highest_paxos_accept_value = node.get_v();
+                assert!(highest_paxos_accept_value.is_some());
             }
         }
-        0
+        if highest_paxos_accept_round.is_some() {
+            return highest_paxos_accept_value;
+        }
+
+        'proposer_loop: for proposer in self.proposers.iter().copied() {
+            let v = self.node_states[proposer].get_v().unwrap();
+            let v_leader = graph.get_leader(proposer);
+            let v_required_k = graph.get_final_knowledge(proposer);
+            let v_quorum = &v_required_k[v_leader];
+
+            for (pid, node) in self.node_states.iter().enumerate() {
+                // TODO: detect failed commits in more cases to batch more ?
+                if !node.is_frozen() {
+                    continue;
+                }
+
+                if node.get_proposer() != Some(proposer) {
+                    // Node rooting for something else. Check for conflict with v_quorum.
+                    let conflict = match node.get_proposer() {
+                        Some(proposer) => !graph
+                            .get_knowledge(pid, proposer, node.get_state_id())
+                            .is_disjoint(v_quorum),
+                        None => v_quorum.contains(pid),
+                    };
+                    if conflict {
+                        continue 'proposer_loop;
+                    }
+                } else {
+                    // Node rooting for v. Check that it reached the required knowledge.
+                    if graph.get_final_state_id(proposer, pid) != node.get_state_id() {
+                        continue 'proposer_loop;
+                    }
+                }
+            }
+
+            return Some(v);
+        }
+
+        None // Means nothing was commited, thus we can batch
+    }
+
+    pub fn can_commit(&self, graph: &PropagationGraphs) -> bool {
+        if let Some(proposer) = my_state!(self).get_proposer() {
+            if graph.get_leader(proposer) == self.my_pid
+                && graph.get_final_state_id(proposer, self.my_pid)
+                    == self.node_states[self.my_pid].get_state_id()
+            {
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn paxos_accept(&mut self, leader: usize, v: usize) {
+        my_state!(self).paxos_accept(leader, v);
+        if leader == self.my_pid {
+            self.paxos_accept_count += 1;
+        }
+    }
+
+    pub fn recv_paxos_accept(&mut self, src: usize, v: usize) {
+        self.node_states[src].paxos_accept(self.my_pid, v);
+        self.paxos_accept_count += 1;
+    }
+
+    pub fn can_paxos_commit(&self) -> bool {
+        self.paxos_accept_count >= self.majority
     }
 }
 
@@ -329,8 +287,13 @@ impl fmt::Display for KCensusRoundState {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         // write!(f, "[")?;
         for (i, state) in self.node_states.iter().enumerate() {
-            if let Some(v) = state.v {
-                write!(f, "\n  {}: v={}, k={:?}", i, v, state.k)?;
+            if let Some(v) = state.get_v() {
+                write!(f, "\n  {}: leader={:?}, v={}, ", i, state.prepared_for(), v,)?;
+                if let Some(round) = state.get_paxos_accept_round() {
+                    write!(f, "paxos_accept_round={}", round)?;
+                } else if let Some(proposer) = state.get_proposer() {
+                    write!(f, "proposer={}, state={:?}", proposer, state.get_state_id())?;
+                }
             }
         }
         // write!(f, "\n]")?;

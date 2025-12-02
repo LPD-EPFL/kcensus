@@ -16,7 +16,7 @@ type NetworkGraph = DiMatrix<(), f64, Option<f64>, usize>;
 
 #[derive(Ord, PartialOrd, Eq, PartialEq, Hash, Debug, Copy, Clone, Serialize, Deserialize)]
 pub struct MessageId {
-    pub leader: ProcId,
+    pub proposer: ProcId,
     pub src: ProcId,
     pub dest: ProcId,
     time: Duration,
@@ -27,7 +27,7 @@ impl Display for MessageId {
         write!(
             f,
             "(p{} at {:?}: {} -> {})",
-            self.leader, self.time, self.src, self.dest
+            self.proposer, self.time, self.src, self.dest
         )
     }
 }
@@ -45,11 +45,13 @@ pub struct KnowledgeState {
 struct PropagationGraph {
     should_include_value: HashSet<MessageId>,
     states: Vec<BTreeMap<Duration, KnowledgeState>>,
+    leader: ProcId,
 }
 
 #[derive(Debug)]
 pub struct PropagationGraphs {
     graphs: Vec<PropagationGraph>,
+    topology: Topology,
     pub rtts: Vec<Vec<Duration>>,
     pub path_rtts: Vec<Vec<Duration>>,
     pub kcensus_latencies: Vec<Duration>,
@@ -62,7 +64,7 @@ pub struct PropagationGraphs {
 impl PropagationGraphs {
     #[inline]
     pub fn should_include_value(&self, msg_id: &MessageId) -> bool {
-        self.graphs[msg_id.leader]
+        self.graphs[msg_id.proposer]
             .should_include_value
             .contains(msg_id)
     }
@@ -75,13 +77,78 @@ impl PropagationGraphs {
             .1
     }
 
-    pub fn can_commit(&self, leader: ProcId, received: &HashSet<MessageId>) -> bool {
-        for state in self.graphs[leader].states[leader].iter().rev() {
+    pub fn can_commit(&self, proposer: ProcId, received: &HashSet<MessageId>) -> bool {
+        for state in self.graphs[proposer].states[self.get_leader(proposer)]
+            .iter()
+            .rev()
+        {
             if !state.1.dependencies.is_subset(received) {
                 return false;
             }
         }
         true
+    }
+
+    fn find_state(&self, node: ProcId, proposer: ProcId, time: Duration) -> &KnowledgeState {
+        &self.graphs[proposer].states[node]
+            .get(&time)
+            .expect("state should be found")
+    }
+
+    pub fn get_knowledge(&self, node: ProcId, proposer: ProcId, time: Duration) -> &Knowledge {
+        &self.find_state(node, proposer, time).knowledge[node]
+    }
+
+    pub fn get_frozen(&self, node: ProcId, proposer: ProcId, time: Duration) -> bool {
+        self.find_state(node, proposer, time).frozen.contains(node)
+    }
+
+    pub fn get_leader(&self, proposer: ProcId) -> ProcId {
+        self.graphs[proposer].leader
+    }
+
+    pub fn get_final_knowledge(&self, proposer: ProcId) -> &[Knowledge] {
+        let leader = self.graphs[proposer].leader;
+        &self.graphs[proposer].states[leader]
+            .iter()
+            .last()
+            .unwrap()
+            .1
+            .knowledge
+    }
+
+    pub fn get_final_state_id(&self, proposer: ProcId, node: ProcId) -> Duration {
+        *self.graphs[proposer].states[node].iter().last().unwrap().0
+    }
+
+    pub fn get_remote_states(&self, msg: MessageId) -> &[Duration] {
+        &self.graphs[msg.proposer].states[msg.src][&msg.time].remote_states
+    }
+
+    pub fn next_state(
+        &self,
+        proposer: ProcId,
+        node: ProcId,
+        time: Duration,
+    ) -> Option<(Duration, &HashSet<MessageId>)> {
+        self.graphs[proposer].states[node]
+            .range(time..)
+            .skip(1)
+            .next()
+            .map(|(time, ks)| (*time, &ks.dependencies))
+    }
+
+    pub fn next_state_from_msg(&self, msg_id: MessageId) -> Duration {
+        msg_id.time + self.topology.link_latency(msg_id.src, msg_id.dest)
+    }
+
+    pub fn get_new_messages_to_spread(
+        &self,
+        proposer: ProcId,
+        node: ProcId,
+        time: Duration,
+    ) -> &[MessageId] {
+        &self.graphs[proposer].states[node][&time].needed_by
     }
 }
 
@@ -134,7 +201,7 @@ fn are_compatible(knowledge_a: &[Knowledge], knowledge_b: &[Knowledge], f: usize
 }
 
 pub fn compute_propagation_graphs(
-    topology: &Topology,
+    topology: Topology,
     kcensus_graph: bool,
     shortest_paths: bool,
 ) -> PropagationGraphs {
@@ -444,6 +511,7 @@ pub fn compute_propagation_graphs(
                 propagation_graphs.push(PropagationGraph {
                     should_include_value: HashSet::new(),
                     states: Vec::new(),
+                    leader,
                 });
                 kcensus_latencies.push(FAULTY_LATENCY);
                 continue 'leader_loop;
@@ -536,7 +604,7 @@ pub fn compute_propagation_graphs(
                 let mut current_time = Duration::ZERO;
                 let mut current = leader;
                 let mut shortest_path_from_leader = true;
-                let mut shortest_path_to_leader = false;
+                let mut _shortest_path_to_leader = false;
 
                 // Loop over the three (/one) checkpoints of the triangle (/value_only_patH)
                 let checkpoints = if value_only_path {
@@ -547,7 +615,7 @@ pub fn compute_propagation_graphs(
                 for (step, target) in checkpoints.into_iter().enumerate() {
                     if step > 0 && target == leader {
                         shortest_path_from_leader = false;
-                        shortest_path_to_leader = true;
+                        _shortest_path_to_leader = true;
                     }
 
                     // For every step towards the checkpoints
@@ -566,7 +634,7 @@ pub fn compute_propagation_graphs(
                             shortest_path_from_leader &= prev_dest[leader][current] == src;
                             let left = path_latencies[src][target] + path_latencies[target][leader];
                             let to_leader = path_latencies[src][leader];
-                            shortest_path_to_leader |= left == to_leader;
+                            _shortest_path_to_leader |= left == to_leader;
                         }
 
                         // Find existing compatible message or create new one (and add to source state)
@@ -579,7 +647,7 @@ pub fn compute_propagation_graphs(
                             assert!(!new_msg);
                             // Reuse existing message
                             let msg_id = MessageId {
-                                leader,
+                                proposer: leader,
                                 src,
                                 dest: current,
                                 time: *compatible_time,
@@ -602,7 +670,7 @@ pub fn compute_propagation_graphs(
                             assert!(inserted);
 
                             let msg_id = MessageId {
-                                leader,
+                                proposer: leader,
                                 src,
                                 dest: current,
                                 time: current_time,
@@ -735,12 +803,14 @@ pub fn compute_propagation_graphs(
             propagation_graphs.push(PropagationGraph {
                 should_include_value,
                 states,
+                leader,
             });
         }
     }
 
     PropagationGraphs {
         graphs: propagation_graphs,
+        topology,
         rtts,
         path_rtts,
         kcensus_latencies,

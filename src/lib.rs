@@ -117,7 +117,7 @@ pub async fn run() -> io::Result<()> {
     debug!("Loaded topology:{topology}");
     let start = Instant::now();
     let propagation_graphs = compute_propagation_graphs(
-        &topology,
+        topology.clone(),
         matches!(algo, Algo::KCensus),
         matches!(algo, Algo::KCensus | Algo::WeakReplication),
     );

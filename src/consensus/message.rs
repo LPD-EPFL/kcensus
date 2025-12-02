@@ -64,7 +64,7 @@ impl ConsensusMessage {
 
     pub fn get_v(&self) -> Option<usize> {
         match &self.msg {
-            KCensusM(msg) => Some(msg.get_v(self.src)),
+            KCensusM(msg) => Some(msg.get_v()),
             PaxosM(msg) => Some(msg.get_v()),
             Commit { v, .. } => Some(*v),
             ReadRequest { .. } => None,

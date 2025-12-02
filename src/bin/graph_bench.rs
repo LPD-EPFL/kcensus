@@ -21,7 +21,7 @@ struct Args {
 fn main() {
     env_logger::init();
     let args = Args::parse();
-    let mut topology = Topology::from_path(&args.config, None);
+    let topology = Topology::from_path(&args.config, None);
     let nb_nodes = topology.nb_nodes;
     let mut faults = Vec::with_capacity(args.fault_count);
     let mut start = Instant::now();
@@ -33,10 +33,10 @@ fn main() {
             faults.clear();
             faults.extend(0..args.fault_count);
             loop {
-                topology.faults.clear();
+                let mut topology = topology.clone();
                 topology.faults.extend(faults.iter().copied());
                 // println!("faults: {:?}", topology.faults);
-                let _ = compute_propagation_graphs(&topology, true, true);
+                let _ = compute_propagation_graphs(topology, true, true);
                 count += 1;
                 if !next_combination(&mut faults, nb_nodes) {
                     break;
