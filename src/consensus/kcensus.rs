@@ -110,7 +110,10 @@ impl ConsensusShardTrait for KCensusShard {
                         remote_states
                     }
                 };
-                assert_eq!(remote_states[proposer].get_v(), Some(v));
+                assert!(
+                    remote_states[proposer].get_v() == Some(v)
+                        || remote_states[proposer].get_paxos_accept_round().is_some()
+                );
                 let _remote_change = self
                     .round_state
                     .store_remote_states(&remote_states, &self.settings.graphs);
@@ -335,7 +338,12 @@ impl KCensusShard {
 
             if !value_only {
                 let remote_states = if self.round_state.has_conflict() {
-                    Some(self.round_state.clone_node_states())
+                    let node_states = self.round_state.clone_node_states();
+                    assert!(
+                        node_states[proposer].get_v() == Some(v)
+                            || node_states[proposer].get_paxos_accept_round().is_some()
+                    );
+                    Some(node_states)
                 } else {
                     None
                 };
@@ -374,6 +382,7 @@ impl KCensusShard {
         self.round_state
             .accept_with_state(v, me, state_id, &self.settings.graphs);
 
+        assert!(!self.round_state.has_conflict());
         self.spread(v, me, state_id, new_value).await
     }
 
