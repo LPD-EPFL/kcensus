@@ -1,6 +1,7 @@
 ---
 - name: Deploy and run kcensus experiment
   hosts: kcensus_nodes
+  gather_facts: no
   remote_user: ec2-user
   become: no
 
@@ -12,6 +13,13 @@
     remote_work_dir: "/home/ec2-user/kcensus_app"
 
   tasks:
+    - name: Wait for SSH to become available
+      wait_for:
+        host: "{{ inventory_hostname }}"
+        port: 22
+        state: started
+      delegate_to: localhost
+
     - name: Fail if required local files are missing
       ansible.builtin.stat:
         path: "{{ item }}"
@@ -47,7 +55,7 @@
         src: "{{ local_configs_path }}"
         dest: "{{ remote_work_dir }}/configs"
 
-    - name: Run the experiment script (asynchronous)
+    - name: Run the experiment script (takes ~10min)
       ansible.builtin.shell:
         cmd: "./exp6.sh"
         chdir: "{{ remote_work_dir }}"

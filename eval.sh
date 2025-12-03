@@ -25,7 +25,7 @@ function start_cassandra() {
     (
       local name="cassandra-$i"
       if [ -z "$(docker ps -a -q --filter="name=$name")" ]; then
-        docker run -e JVM_OPTS="-Xms256M -Xmx1024M" --name "$name" -p $((CASSANDRA_BASE_PORT + i - 1)):9042 -d cassandra
+        docker run -e JVM_OPTS="-Xms256M -Xmx1024M" --name "$name" -p $((CASSANDRA_BASE_PORT + i - 1)):9042 -d shotover/cassandra-test:5.0-rc1-r3
       else
         echo "$name already running" >/dev/null
       fi
