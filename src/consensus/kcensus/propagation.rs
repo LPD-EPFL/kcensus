@@ -71,7 +71,7 @@ impl PropagationGraphs {
 
     #[inline]
     pub fn get_start(&self, leader: ProcId) -> &KnowledgeState {
-        &self.graphs[leader].states[leader]
+        self.graphs[leader].states[leader]
             .first_key_value()
             .expect("should have at least one state")
             .1
@@ -90,7 +90,7 @@ impl PropagationGraphs {
     }
 
     fn find_state(&self, node: ProcId, proposer: ProcId, time: Duration) -> &KnowledgeState {
-        &self.graphs[proposer].states[node]
+        self.graphs[proposer].states[node]
             .get(&time)
             .expect("state should be found")
     }
@@ -133,8 +133,7 @@ impl PropagationGraphs {
     ) -> Option<(Duration, &HashSet<MessageId>)> {
         self.graphs[proposer].states[node]
             .range(time..)
-            .skip(1)
-            .next()
+            .nth(1)
             .map(|(time, ks)| (*time, &ks.dependencies))
     }
 
@@ -439,8 +438,8 @@ pub fn compute_propagation_graphs(
             prev_partial_total_time: Duration,
             nb_nodes: usize,
             max_levels: &Vec<usize>,
-            knowledge_levelss: &Vec<Vec<(Duration, Vec<Knowledge>, usize)>>,
-            compatible_levelss: &Vec<Vec<Vec<usize>>>,
+            knowledge_levels: &Vec<Vec<(Duration, Vec<Knowledge>, usize)>>,
+            compatible_levels: &Vec<Vec<Vec<usize>>>,
         ) {
             let pid_a = pids_done;
             let pids_done = pids_done + 1;
@@ -448,16 +447,16 @@ pub fn compute_propagation_graphs(
                 let mut new_levels = prev_levels.clone();
                 new_levels[pid_a] = level_a;
                 let new_partial_total_time =
-                    prev_partial_total_time + knowledge_levelss[pid_a][level_a].0;
+                    prev_partial_total_time + knowledge_levels[pid_a][level_a].0;
                 let mut new_curr_total_time = new_partial_total_time;
                 let mut new_min_total_time = new_partial_total_time;
                 for pid_b in pids_done..nb_nodes {
-                    new_min_total_time += knowledge_levelss[pid_b][prev_levels[pid_b]].0;
-                    let req_level_b = compatible_levelss[pid_a][level_a][pid_b];
+                    new_min_total_time += knowledge_levels[pid_b][prev_levels[pid_b]].0;
+                    let req_level_b = compatible_levels[pid_a][level_a][pid_b];
                     if req_level_b > new_levels[pid_b] {
                         new_levels[pid_b] = req_level_b;
                     }
-                    new_curr_total_time += knowledge_levelss[pid_b][new_levels[pid_b]].0;
+                    new_curr_total_time += knowledge_levels[pid_b][new_levels[pid_b]].0;
                 }
 
                 if *best_total_time <= new_min_total_time {
@@ -484,8 +483,8 @@ pub fn compute_propagation_graphs(
                         new_partial_total_time,
                         nb_nodes,
                         max_levels,
-                        knowledge_levelss,
-                        compatible_levelss,
+                        knowledge_levels,
+                        compatible_levels,
                     );
                 }
             }
@@ -548,12 +547,12 @@ pub fn compute_propagation_graphs(
                 vec![BTreeMap::new(); nb_nodes];
 
             // Prepare initial states
-            for i in 0..nb_nodes {
+            for (i, state) in states.iter_mut().enumerate() {
                 let mut knowledge = vec![BitSet::new(); nb_nodes];
                 if i == leader {
                     knowledge[leader].insert(leader);
                 }
-                states[i].insert(
+                state.insert(
                     Duration::ZERO,
                     KnowledgeState {
                         knowledge,
@@ -654,7 +653,7 @@ pub fn compute_propagation_graphs(
                             };
                             debug_assert!(
                                 states[src]
-                                    .get_mut(&current_time)
+                                    .get_mut(compatible_time)
                                     .expect("should have state at src")
                                     .needed_by
                                     .contains(&msg_id)
@@ -718,12 +717,12 @@ pub fn compute_propagation_graphs(
                                 needed_by: vec![],
                                 frozen: BitSet::new(),
                             };
-                            let inserted = !states[current].insert(current_time, state).is_none();
+                            let inserted = states[current].insert(current_time, state).is_none();
                             assert!(inserted);
                         }
 
                         // Update dest state's knowledge
-                        let [cur_state, src_state] = states
+                        let [src_state, cur_state] = states
                             .get_disjoint_mut([src, current])
                             .expect("src should != current");
                         let state = cur_state
@@ -777,8 +776,8 @@ pub fn compute_propagation_graphs(
             for node in 0..nb_nodes {
                 let final_node_state = states[node].iter_mut().last().expect("should have state");
                 let final_node_time = *final_node_state.0;
-                for other_node in 0..nb_nodes {
-                    for (_, state) in states[other_node].iter_mut() {
+                for other_state in states.iter_mut() {
+                    for (_, state) in other_state.iter_mut() {
                         if state.remote_states[node] == final_node_time {
                             state.frozen.insert(node);
                         }
@@ -787,7 +786,7 @@ pub fn compute_propagation_graphs(
             }
 
             // Sanity checks:
-            assert_eq!(should_include_value.len(), nb_nodes);
+            assert_eq!(should_include_value.len(), nb_nodes - 1);
             debug_assert!({
                 let final_leader_state =
                     states[leader].last_key_value().expect("should have state");
