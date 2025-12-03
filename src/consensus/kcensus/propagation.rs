@@ -523,6 +523,7 @@ pub fn compute_propagation_graphs(
                 triangular_paths[leader][triangle_count - 1].total_latency,
                 max_latency
             );
+            trace!("leader {leader} ({}):", topology.regions[leader]);
             trace!(
                 "Left after truncate: {} real triangles, {} total",
                 triangular_paths[leader]
@@ -530,6 +531,20 @@ pub fn compute_propagation_graphs(
                     .filter(|x| x.first != leader && x.second != leader && x.first != x.second)
                     .count(),
                 triangular_paths[leader].len()
+            );
+
+            let min_level_lat = knowledge_levels[leader][0].0;
+            let max_level_lat = knowledge_levels[leader].last().unwrap().0;
+            let best_level_lat = max_latency;
+            trace!(
+                "levels: min: {min_level_lat:?}, max: {max_level_lat:?}, best: {best_level_lat:?} ({:.4}x min, {:.1}% min-max)",
+                best_level_lat.as_secs_f64() / min_level_lat.as_secs_f64(),
+                100.0 * (best_level_lat - min_level_lat).as_secs_f64()
+                    / (max_level_lat - min_level_lat).as_secs_f64()
+            );
+            trace!(
+                "quorum size: {}",
+                knowledge_levels[leader][best_levels[leader]].1[leader].len()
             );
             trace!(
                 "longest path: {}",
