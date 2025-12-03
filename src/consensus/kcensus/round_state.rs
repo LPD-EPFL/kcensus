@@ -281,6 +281,7 @@ impl KCensusRoundState {
     }
 
     pub fn recv_paxos_accept(&mut self, src: usize, v: usize) {
+        self.node_states[src].freeze_and_prepare(self.my_pid);
         self.node_states[src].paxos_accept(self.my_pid, v);
         self.paxos_accept_count += 1;
     }
