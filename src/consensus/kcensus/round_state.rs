@@ -75,11 +75,17 @@ impl KCensusRoundState {
         graph: &PropagationGraphs,
     ) {
         assert!(self.get_my_v().is_none());
-        assert!(self.proposers.is_empty());
-        assert!(self.leaders.is_empty());
         my_state!(self).accept_with_state(v, proposer, time, graph);
-        self.proposers.push(proposer);
-        self.leaders.push(graph.get_leader(proposer));
+        if self.proposers.is_empty() {
+            assert!(self.leaders.is_empty());
+            self.proposers.push(proposer);
+            self.leaders.push(graph.get_leader(proposer));
+        } else {
+            assert_eq!(self.proposers.len(), 1);
+            assert_eq!(self.leaders.len(), 1);
+            assert_eq!(self.proposers[0], proposer);
+            assert_eq!(self.leaders[0], graph.get_leader(proposer));
+        }
     }
 
     pub fn update_v_state(&mut self, time: Duration, graph: &PropagationGraphs) {
@@ -193,6 +199,7 @@ impl KCensusRoundState {
             .filter(|x| x.prepared_for() == Some(self.my_pid))
             .count()
             >= self.majority
+            && my_state!(self).get_paxos_accept_round() != Some(self.my_pid)
     }
 
     pub fn can_adopt(&self) -> bool {

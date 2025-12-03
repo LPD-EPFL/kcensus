@@ -196,6 +196,16 @@ impl ConsensusShardTrait for KCensusShard {
                 if leader != self.my_pid {
                     assert_eq!(leader, src);
                     self.round_state.paxos_accept(leader, v);
+                    self.send_to(
+                        PaxosAccept {
+                            slot,
+                            leader,
+                            v,
+                            new_value: false,
+                        },
+                        leader,
+                    )
+                    .await?;
                 } else {
                     assert_eq!(v, self.get_my_v().unwrap());
                     self.round_state.recv_paxos_accept(src, v);
