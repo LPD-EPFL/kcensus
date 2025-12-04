@@ -33,9 +33,13 @@ struct Args {
     db: Option<String>,
     #[arg(short, long, default_value_t = Algo::KCensus, value_enum)]
     algo: Algo,
-    #[arg(short, long, default_value_t = 10)]
-    requests: usize,
-    #[arg(short, long, default_value_t = Ingress::RoundRobin, value_enum)]
+    #[arg(long, value_parser = humantime::parse_duration, default_value = "10s", value_name = "EXP_DURATION")]
+    duration: Duration,
+    #[arg(long, value_parser = humantime::parse_duration, default_value = "1s", value_name = "WARMUP")]
+    warmup: Duration,
+    #[arg(long, value_parser = humantime::parse_duration, default_value = "2s", value_name = "WARMDOWN")]
+    warmdown: Duration,
+    #[arg(short, long, default_value_t = Ingress::Exponential, value_enum)]
     ingress: Ingress,
     #[arg(short, long, default_value_t = 10f32, value_name = "TARGET_REQ/S")]
     throughput: f32,
@@ -71,7 +75,6 @@ enum Algo {
 
 #[derive(clap::ValueEnum, Clone, Debug)]
 enum Ingress {
-    RoundRobin,
     Exponential,
     Constant,
 }
@@ -147,32 +150,11 @@ pub async fn run() -> io::Result<()> {
 
     let client_task = tokio::task::spawn(client.run(cassandra::Workload {
         nb_keys: args.keys,
-        nb_requests: args.requests,
+        duration: args.duration,
+        warmup: args.warmup,
+        warmdown: args.warmdown,
         rw_ratio: args.writes,
         interval: match args.ingress {
-            Ingress::RoundRobin => {
-                let predecessor = (my_pid + nb_nodes - 1) % nb_nodes;
-                let commit_notification_time = if topology.faults.contains(predecessor) {
-                    Duration::from_secs(0)
-                } else {
-                    propagation_graphs.rtts[predecessor]
-                        .iter()
-                        .enumerate()
-                        .filter(|(replica, _)| !topology.faults.contains(*replica))
-                        .map(|(_, x)| x)
-                        .max()
-                        .expect("There should be a maximum RTT.")
-                        .to_owned()
-                        / args.speedup
-                };
-
-                cassandra::RequestInterval::new_round_robin(
-                    my_pid,
-                    &topology,
-                    commit_notification_time,
-                )
-                .await
-            }
             Ingress::Exponential => {
                 cassandra::RequestInterval::new_exponential(args.throughput * args.speedup as f32)
             }
