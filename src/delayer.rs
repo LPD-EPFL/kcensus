@@ -29,14 +29,13 @@ impl Delayer {
         mut input_stream: impl Stream<Item = io::Result<MsgWithSource>> + Unpin,
         simulate_delays: bool,
     ) {
-        let dead = topology.faults.contains(my_pid);
         let delay = Delay::new(Instant::now()).expect("Delayer failed to init delay");
         pin!(delay);
 
-        let mut queues: Vec<VecDeque<MsgWithDeadline>> = Vec::with_capacity(topology.nb_nodes);
-        for _ in 0..topology.nb_nodes {
+        let mut queues: Vec<VecDeque<MsgWithDeadline>> = Vec::with_capacity(topology.nb_processes);
+        for _ in 0..topology.nb_processes {
             queues.push(VecDeque::with_capacity(
-                topology.nb_nodes * topology.nb_nodes,
+                topology.nb_processes * topology.nb_processes,
             ));
         }
 
@@ -71,10 +70,6 @@ impl Delayer {
                         self.delayed_msg_tx.send(msg).await.expect(
                             "Channel should not be closed yet"
                         );
-                        continue
-                    }
-
-                    if dead || topology.faults.contains(msg.src) {
                         continue
                     }
 

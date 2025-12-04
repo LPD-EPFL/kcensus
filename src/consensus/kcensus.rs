@@ -8,7 +8,7 @@ use crate::consensus::message::{CommandBatch, ConsensusMessage};
 use crate::consensus::read_tracker::ReadTracker;
 use crate::consensus::{Consensus, ConsensusShard, ConsensusShardTrait};
 use crate::multi_sink::{MultiSink, ShardMultiSink};
-use log::trace;
+use log::{debug, trace};
 use std::collections::HashMap;
 use std::io;
 use std::sync::Arc;
@@ -29,6 +29,7 @@ pub(crate) type KCensusShard = ConsensusShard<KCensusSettings, KCensusRoundState
 impl KCensusShard {
     pub fn new(
         nb_nodes: usize,
+        majority: usize,
         my_pid: usize,
         sinks: ShardMultiSink,
         leader_priority: Vec<usize>,
@@ -51,7 +52,7 @@ impl KCensusShard {
             settings: KCensusSettings {
                 graphs: propagation_graphs,
             },
-            round_state: KCensusRoundState::new(nb_nodes, my_pid),
+            round_state: KCensusRoundState::new(nb_nodes, majority, my_pid),
         }
     }
 }
@@ -63,6 +64,10 @@ impl ConsensusShardTrait for KCensusShard {
             KCensusM(msg) => msg,
             x => panic!("Unexpected message type: {x:?}"),
         };
+
+        if !matches!(msg, SpreadValueOnly { .. }) {
+            debug!("Processing spread msg: {msg:?}");
+        }
 
         // TODO: Ignore some messages if max_seen_slot > slot ?
         // TODO: Handle dead nodes / packet loss ?
@@ -388,7 +393,7 @@ impl KCensusShard {
 
     async fn graph_spread_value_only(&self, prev_msg_id: MessageId, v: usize) -> io::Result<()> {
         let proposer = prev_msg_id.proposer;
-        let state_id = self.settings.graphs.next_state_from_msg(prev_msg_id);
+        let state_id = self.settings.graphs.msg_arrival_state_id(prev_msg_id);
         self.inner_spread(v, proposer, state_id, true, true).await
     }
 
@@ -404,6 +409,7 @@ pub(crate) type KCensus = Consensus<KCensusSettings, KCensusRoundState>;
 impl KCensus {
     pub fn new(
         nb_nodes: usize,
+        majority: usize,
         my_pid: usize,
         sinks: MultiSink,
         leader_priority: Vec<usize>,
@@ -418,6 +424,7 @@ impl KCensus {
                 .map(|shard_id| {
                     KCensusShard::new(
                         nb_nodes,
+                        majority,
                         my_pid,
                         ShardMultiSink {
                             shard_id,

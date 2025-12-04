@@ -43,6 +43,8 @@ struct Args {
     writes: f32,
     #[arg(short, long, num_args = 0.., value_delimiter = ',')]
     faults: Vec<usize>,
+    #[arg(short, long, num_args = 0.., value_delimiter = ',', short_alias = 'v')]
+    non_voting: Vec<usize>,
     #[arg(short, long, default_value_t = 1u32, value_name = "SIMULATION_SPEED")]
     speedup: u32,
     #[arg(long, help = "Simulate link delays. (Default: only if localhost)")]
@@ -94,7 +96,7 @@ pub async fn run() -> io::Result<()> {
 
     let args = Args::parse();
     let my_pid = args.pid;
-    let topology = Topology::from_path(&args.config, Some(args.faults));
+    let topology = Topology::from_path(&args.config, args.non_voting, Some(args.faults));
     let delay_mode = args.simulate_delays.unwrap_or_else(|| {
         topology
             .addresses
@@ -102,10 +104,10 @@ pub async fn run() -> io::Result<()> {
             .all(|(address, _)| address == "localhost" || address == "127.0.0.1")
     });
 
-    let epaxos_max_faults = topology.nb_nodes - ((topology.nb_nodes * 3) / 4);
+    let epaxos_quorum = (topology.nb_replicas * 3) / 4;
     let algo = match args.algo {
         Algo::EPaxos => {
-            if topology.faults.len() > epaxos_max_faults {
+            if topology.alive_replicas.len() < epaxos_quorum {
                 Algo::Paxos
             } else {
                 Algo::EPaxos
@@ -113,7 +115,6 @@ pub async fn run() -> io::Result<()> {
         }
         x => x,
     };
-    let faulty = topology.faults.contains(my_pid);
     debug!("Loaded topology:{topology}");
     let start = Instant::now();
     let propagation_graphs = compute_propagation_graphs(
@@ -124,13 +125,8 @@ pub async fn run() -> io::Result<()> {
     println!("Computed propagation graphs in {:?}", start.elapsed());
     let nb_nodes = topology.regions.len();
 
-    let (consensus_msg_sinks, consensus_msg_streams) = connect_all(
-        my_pid,
-        topology.nb_nodes,
-        topology.addresses.clone(),
-        Some(topology.faults.clone()),
-    )
-    .await;
+    let (consensus_msg_sinks, consensus_msg_streams) =
+        connect_all(my_pid, topology.nb_processes, topology.addresses.clone()).await;
     let (delayer, delayed_msg_rx) = Delayer::new();
     let delayer_task = tokio::task::spawn(delayer.run(
         topology.clone(),
@@ -152,19 +148,12 @@ pub async fn run() -> io::Result<()> {
         interval: match args.ingress {
             Ingress::RoundRobin => {
                 let predecessor = (my_pid + nb_nodes - 1) % nb_nodes;
-                let commit_notification_time = if topology.faults.contains(predecessor) {
-                    Duration::from_secs(0)
-                } else {
-                    propagation_graphs.rtts[predecessor]
-                        .iter()
-                        .enumerate()
-                        .filter(|(replica, _)| !topology.faults.contains(*replica))
-                        .map(|(_, x)| x)
-                        .max()
-                        .expect("There should be a maximum RTT.")
-                        .to_owned()
-                        / args.speedup
-                };
+                let commit_notification_time = propagation_graphs.rtts[predecessor]
+                    .iter()
+                    .max()
+                    .expect("There should be a maximum RTT.")
+                    .to_owned()
+                    / args.speedup;
 
                 cassandra::RequestInterval::new_round_robin(
                     my_pid,
@@ -180,7 +169,6 @@ pub async fn run() -> io::Result<()> {
                 reqs_per_second: args.throughput * args.speedup as f32,
             },
         },
-        faulty,
     }));
 
     match algo {
@@ -193,6 +181,7 @@ pub async fn run() -> io::Result<()> {
             leader_prio.sort_by_key(|pid| propagation_graphs.kcensus_latencies[*pid]);
             let mut consensus_obj = KCensus::new(
                 nb_nodes,
+                (topology.alive_replicas.len() / 2) + 1,
                 my_pid,
                 consensus_msg_sinks,
                 leader_prio,
@@ -280,7 +269,9 @@ pub async fn run() -> io::Result<()> {
                 let (rtt, quorum) = match algo {
                     Algo::NoReplication => {
                         // The leader is the node with the lowest median ping.
-                        let leader = (0..topology.nb_nodes)
+                        let leader = topology
+                            .alive_replicas
+                            .iter()
                             .min_by_key(|&potential_leader| {
                                 let mut rtts = propagation_graphs.rtts[potential_leader].clone();
                                 rtts.sort();
@@ -290,7 +281,7 @@ pub async fn run() -> io::Result<()> {
                         (propagation_graphs.rtts[leader][my_pid] / args.speedup, 1)
                     }
                     Algo::WeakReplication => {
-                        let mut rtts = propagation_graphs.path_rtts[my_pid].clone();
+                        let mut rtts = propagation_graphs.rtts[my_pid].clone();
                         rtts.sort();
                         (rtts[rtts.len() / 2] / args.speedup, rtts.len() / 2)
                     }

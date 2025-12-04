@@ -4,7 +4,7 @@ use crate::message::Message;
 use bincode::Options;
 use bit_set::BitSet;
 use futures::SinkExt;
-use log::debug;
+use log::trace;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::io;
@@ -44,19 +44,9 @@ impl MultiSink {
             my_pid,
             nb_nodes,
             sinks: HashMap::with_capacity(nb_nodes - 1),
-            faults: BitSet::with_capacity(nb_nodes),
+            faults: BitSet::new(),
             stats: Stats::default(),
         }
-    }
-
-    pub fn new_with_faults(
-        my_pid: usize,
-        nb_nodes: usize,
-        faults: impl Iterator<Item = usize>,
-    ) -> Self {
-        let mut x = Self::new(my_pid, nb_nodes);
-        x.faults.extend(faults);
-        x
     }
 
     pub fn insert_sink(&mut self, pid: usize, sink: WrappedSink) {
@@ -68,7 +58,7 @@ impl MultiSink {
 
     #[inline]
     pub async fn broadcast(&mut self, msg: Message) -> io::Result<()> {
-        debug!("Broadcasting {msg:?}");
+        trace!("Broadcasting {msg:?}");
         let bytes = encode(&msg);
         for (dest, sink) in self.sinks.iter_mut() {
             if msg.is_consensus_msg() {
@@ -86,7 +76,7 @@ impl MultiSink {
 
     #[inline]
     pub async fn send(&mut self, msg: Message, pid: usize) -> io::Result<()> {
-        debug!("Sending to {pid}: {msg:?}");
+        trace!("Sending to {pid}: {msg:?}");
         debug_assert!(pid != self.my_pid);
         if msg.is_consensus_msg() && self.faults.contains(pid) {
             return Ok(());

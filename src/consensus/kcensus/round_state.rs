@@ -25,10 +25,10 @@ pub struct KCensusRoundState {
 }
 
 impl KCensusRoundState {
-    pub fn new(nb_nodes: usize, my_pid: usize) -> Self {
+    pub fn new(nb_nodes: usize, majority: usize, my_pid: usize) -> Self {
         Self {
             my_pid,
-            majority: (nb_nodes / 2) + 1,
+            majority,
 
             node_states: (0..nb_nodes).map(NodeState::new).collect(),
             propagation_states: vec![Duration::ZERO; nb_nodes],
@@ -240,7 +240,7 @@ impl KCensusRoundState {
                     // Node rooting for something else. Check for conflict with v_quorum.
                     let conflict = match node.get_proposer() {
                         Some(proposer) => !graph
-                            .get_knowledge(pid, proposer, node.get_state_id())
+                            .get_knowledge(proposer, pid, node.get_state_id())
                             .is_disjoint(v_quorum),
                         None => v_quorum.contains(pid),
                     };

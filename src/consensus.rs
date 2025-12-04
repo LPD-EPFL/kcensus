@@ -6,7 +6,7 @@ use crate::message::Message::{ConsensusM, Done};
 use crate::message::MsgWithSource;
 use crate::multi_sink::{MultiSink, ShardMultiSink};
 use command::Command;
-use log::{debug, info};
+use log::{debug, info, trace};
 use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::sync::Arc;
@@ -279,7 +279,7 @@ where
                 .receive_ready(uid)
                 .map(CommandBatch::Single));
         }
-        debug!("Processing message: {msg:?}");
+        trace!("Processing message: {msg:?}");
         self.process_message(msg).await
     }
 

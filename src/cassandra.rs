@@ -272,19 +272,18 @@ impl RoundRobinSynchronizer {
     async fn new(my_pid: usize, topology: &Topology, max_rtt: Duration) -> Self {
         let (sinks, streams) = connect_all(
             my_pid,
-            topology.nb_nodes,
+            topology.nb_processes,
             topology
                 .addresses
                 .iter()
                 .map(|(ip, port)| (ip.clone(), port + 1000))
                 .collect(),
-            None,
         )
         .await;
         Self {
             my_pid,
             initiate: my_pid == 0,
-            nb_nodes: topology.nb_nodes,
+            nb_nodes: topology.nb_processes,
             max_rtt,
             sinks,
             streams: Box::pin(streams),
@@ -354,7 +353,6 @@ pub struct Workload {
     pub nb_requests: usize,
     pub rw_ratio: f32, // 0 = 100% reads, 1 = 100 %writes
     pub interval: RequestInterval,
-    pub faulty: bool,
     pub nb_keys: usize,
 }
 
@@ -452,12 +450,6 @@ impl Client {
         for i in 0..workload.nb_requests {
             if let RequestInterval::RoundRobin { synchronizer } = &mut workload.interval {
                 synchronizer.wait().await;
-                if workload.faulty {
-                    synchronizer.notify().await;
-                }
-            }
-            if workload.faulty {
-                continue;
             }
             let request = self.generate_request(&workload, i as u64);
             scheduled_time = workload.interval.next(&scheduled_time);
@@ -484,7 +476,7 @@ impl Client {
     }
 
     async fn run_parallel(mut self, mut workload: Workload) {
-        if workload.faulty || workload.nb_requests == 0 {
+        if workload.nb_requests == 0 {
             // If the replica is faulty or has no requests, we can skip processing
             return;
         }

@@ -80,7 +80,7 @@ impl NodeState {
         assert!(!self.is_frozen());
         self.v_state_nanos = duration.as_nanos() as u64;
         let proposer = self.v_proposer.unwrap();
-        if graph.get_frozen(self.id, proposer, duration) {
+        if graph.get_frozen(proposer, self.id, duration) {
             self.frozen_and_prepared = Some(graph.get_leader(proposer));
         }
     }
