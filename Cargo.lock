@@ -670,6 +670,7 @@ dependencies = [
  "clap",
  "env_logger",
  "futures",
+ "humantime",
  "log",
  "petgraph",
  "rand",
