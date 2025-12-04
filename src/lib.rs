@@ -53,6 +53,8 @@ struct Args {
     simulate_delays: Option<bool>,
     #[arg(short, long, default_value_t = 1usize, value_name = "KEY_COUNT")]
     keys: usize,
+    #[arg(long, default_value_t = 0f64, value_name = "ZIPFIAN_SKEW", help="0 is uniform.")]
+    skew: f64,
 }
 
 #[derive(clap::ValueEnum, Clone, Debug)]
@@ -149,7 +151,7 @@ pub async fn run() -> io::Result<()> {
     let start = Instant::now();
 
     let client_task = tokio::task::spawn(client.run(cassandra::Workload {
-        nb_keys: args.keys,
+        key_distribution: rand_distr::Zipf::new(args.keys as f64, args.skew).expect("Incorrect skew"),
         duration: args.duration,
         warmup: args.warmup,
         warmdown: args.warmdown,

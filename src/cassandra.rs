@@ -275,7 +275,14 @@ pub struct Workload {
     pub rw_ratio: f32, // 0 = 100% reads, 1 = 100 %writes
     pub interval: RequestInterval,
     pub faulty: bool,
-    pub nb_keys: usize,
+    pub key_distribution: rand_distr::Zipf<f64>,
+}
+
+impl Workload {
+    pub fn random_key(&self) -> usize {
+        // Zipfian distributions are off by 1
+        self.key_distribution.sample(&mut rand::rng()) as usize - 1
+    }
 }
 
 pub struct Client {
@@ -299,7 +306,7 @@ impl Client {
     }
 
     fn generate_request(&self, workload: &Workload, request_id: u64) -> Command {
-        let key = rand::random_range(0..workload.nb_keys);
+        let key = workload.random_key();
         if rand::random_range(0. ..1.) < workload.rw_ratio {
             Command::new_write(
                 self.my_pid,
