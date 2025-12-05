@@ -13,7 +13,6 @@ pub enum Message {
         value: Option<CommandBatch>,
     },
     Done,
-    RoundRobin,
 }
 
 #[derive(Debug)]

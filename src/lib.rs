@@ -33,9 +33,13 @@ struct Args {
     db: Option<String>,
     #[arg(short, long, default_value_t = Algo::KCensus, value_enum)]
     algo: Algo,
-    #[arg(short, long, default_value_t = 10)]
-    requests: usize,
-    #[arg(short, long, default_value_t = Ingress::RoundRobin, value_enum)]
+    #[arg(long, value_parser = humantime::parse_duration, default_value = "10s", value_name = "EXP_DURATION")]
+    duration: Duration,
+    #[arg(long, value_parser = humantime::parse_duration, default_value = "1s", value_name = "WARMUP")]
+    warmup: Duration,
+    #[arg(long, value_parser = humantime::parse_duration, default_value = "2s", value_name = "WARMDOWN")]
+    warmdown: Duration,
+    #[arg(short, long, default_value_t = Ingress::Exponential, value_enum)]
     ingress: Ingress,
     #[arg(short, long, default_value_t = 10f32, value_name = "TARGET_REQ/S")]
     throughput: f32,
@@ -51,6 +55,8 @@ struct Args {
     simulate_delays: Option<bool>,
     #[arg(short, long, default_value_t = 1usize, value_name = "KEY_COUNT")]
     keys: usize,
+    #[arg(long, default_value_t = 0f64, value_name = "ZIPFIAN_SKEW", help="0 is uniform.", short_alias = 'z')]
+    skew: f64,
 }
 
 #[derive(clap::ValueEnum, Copy, Clone, Debug, PartialEq)]
@@ -73,7 +79,6 @@ enum Algo {
 
 #[derive(clap::ValueEnum, Clone, Debug)]
 enum Ingress {
-    RoundRobin,
     Exponential,
     Constant,
 }
@@ -142,26 +147,12 @@ pub async fn run() -> io::Result<()> {
     let start = Instant::now();
 
     let client_task = tokio::task::spawn(client.run(cassandra::Workload {
-        nb_keys: args.keys,
-        nb_requests: args.requests,
+        key_distribution: rand_distr::Zipf::new(args.keys as f64, args.skew).expect("Incorrect skew"),
+        duration: args.duration,
+        warmup: args.warmup,
+        warmdown: args.warmdown,
         rw_ratio: args.writes,
         interval: match args.ingress {
-            Ingress::RoundRobin => {
-                let predecessor = (my_pid + process_count - 1) % process_count;
-                let commit_notification_time = propagation_graphs.rtts[predecessor]
-                    .iter()
-                    .max()
-                    .expect("There should be a maximum RTT.")
-                    .to_owned()
-                    / args.speedup;
-
-                cassandra::RequestInterval::new_round_robin(
-                    my_pid,
-                    &topology,
-                    commit_notification_time,
-                )
-                .await
-            }
             Ingress::Exponential => {
                 cassandra::RequestInterval::new_exponential(args.throughput * args.speedup as f32)
             }

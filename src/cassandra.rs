@@ -1,27 +1,19 @@
-use crate::connector::connect_all;
 use crate::consensus::command::{Command, CommittedCommand};
 use crate::eval;
-use crate::message::{Message, MsgWithSource};
-use crate::multi_sink::MultiSink;
-use crate::topology::Topology;
 use futures::future::join_all;
-use futures::StreamExt;
 use log::trace;
 use rand_distr::{Distribution, Exp};
 use scylla::client::{session::Session, session_builder::SessionBuilder, PoolSize};
 use scylla::statement::prepared::PreparedStatement;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::io;
 use std::num::NonZeroUsize;
-use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::{mpsc, Semaphore};
 use tokio::{pin, select};
-use tokio_stream::Stream;
 use tokio_timerfd::Delay;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -248,9 +240,6 @@ impl PreparedHandler {
 }
 
 pub enum RequestInterval {
-    RoundRobin {
-        synchronizer: RoundRobinSynchronizer,
-    }, // 1 request at a time, alternating among nodes
     Exponential {
         distribution: Exp<f32>,
     },
@@ -258,76 +247,7 @@ pub enum RequestInterval {
         reqs_per_second: f32,
     },
 }
-
-pub struct RoundRobinSynchronizer {
-    my_pid: usize,
-    initiate: bool,
-    nb_nodes: usize,
-    max_rtt: Duration,
-    sinks: MultiSink,
-    streams: Pin<Box<dyn Stream<Item = Result<MsgWithSource, io::Error>> + Send>>,
-}
-
-impl RoundRobinSynchronizer {
-    async fn new(my_pid: usize, topology: &Topology, max_rtt: Duration) -> Self {
-        let (sinks, streams) = connect_all(
-            my_pid,
-            topology.nb_processes,
-            topology
-                .addresses
-                .iter()
-                .map(|(ip, port)| (ip.clone(), port + 1000))
-                .collect(),
-        )
-        .await;
-        Self {
-            my_pid,
-            initiate: my_pid == 0,
-            nb_nodes: topology.nb_processes,
-            max_rtt,
-            sinks,
-            streams: Box::pin(streams),
-        }
-    }
-
-    async fn notify(&mut self) {
-        self.sinks
-            .send(Message::RoundRobin, (self.my_pid + 1) % self.nb_nodes)
-            .await
-            .expect("Failed to broadcast round robin");
-    }
-
-    async fn wait(&mut self) {
-        if self.initiate {
-            self.initiate = false;
-            return;
-        }
-        let next_msg = self
-            .streams
-            .as_mut()
-            .next()
-            .await
-            .expect("We should always be notified");
-        match next_msg {
-            Ok(MsgWithSource {
-                msg: Message::RoundRobin,
-                ..
-            }) => {}
-            Ok(MsgWithSource { .. }) => panic!("Unexpected msg in round-robin synchronizer!"),
-            Err(_) => {}
-        }
-        tokio_timerfd::sleep(self.max_rtt)
-            .await
-            .expect("Robin failed to sleep.");
-    }
-}
-
 impl RequestInterval {
-    pub async fn new_round_robin(my_pid: usize, topology: &Topology, max_rtt: Duration) -> Self {
-        let synchronizer = RoundRobinSynchronizer::new(my_pid, topology, max_rtt).await;
-        RequestInterval::RoundRobin { synchronizer }
-    }
-
     pub fn new_exponential(throughput: f32) -> Self {
         RequestInterval::Exponential {
             distribution: Exp::new(throughput).expect("Failed to create exponential distribution"),
@@ -338,7 +258,6 @@ impl RequestInterval {
 impl RequestInterval {
     fn next(&mut self, last: &Instant) -> Instant {
         match self {
-            RequestInterval::RoundRobin { .. } => Instant::now(),
             RequestInterval::Exponential { distribution } => {
                 *last + Duration::from_secs_f32(distribution.sample(&mut rand::rng()))
             }
@@ -350,10 +269,19 @@ impl RequestInterval {
 }
 
 pub struct Workload {
-    pub nb_requests: usize,
+    pub duration: Duration,
+    pub warmup: Duration,
+    pub warmdown: Duration,
     pub rw_ratio: f32, // 0 = 100% reads, 1 = 100 %writes
     pub interval: RequestInterval,
-    pub nb_keys: usize,
+    pub key_distribution: rand_distr::Zipf<f64>,
+}
+
+impl Workload {
+    pub fn random_key(&self) -> usize {
+        // Zipfian distributions are off by 1
+        self.key_distribution.sample(&mut rand::rng()) as usize - 1
+    }
 }
 
 pub struct Client {
@@ -377,7 +305,7 @@ impl Client {
     }
 
     fn generate_request(&self, workload: &Workload, request_id: u64) -> Command {
-        let key = rand::random_range(0..workload.nb_keys);
+        let key = workload.random_key();
         if rand::random_range(0. ..1.) < workload.rw_ratio {
             Command::new_write(
                 self.my_pid,
@@ -427,60 +355,12 @@ impl Client {
         eval::log("executed", &readable, &event);
     }
 
-    pub async fn run(self, workload: Workload) {
-        match workload.interval {
-            RequestInterval::RoundRobin { .. } => {
-                // Keep sequential execution for RoundRobin due to synchronization requirements
-                self.run_sequential(workload).await;
-            }
-            RequestInterval::Exponential { .. } | RequestInterval::Constant { .. } => {
-                // Use parallel execution for Exponential and Constant intervals
-                self.run_parallel(workload).await;
-            }
-        }
-    }
+    pub async fn run(mut self, mut workload: Workload) {
 
-    async fn run_sequential(mut self, mut workload: Workload) {
-        let mut scheduled_time = Instant::now();
-
-        // Initialize delay object for timing
-        let delay = Delay::new(Instant::now()).expect("Failed to init delay");
-        pin!(delay);
-
-        for i in 0..workload.nb_requests {
-            if let RequestInterval::RoundRobin { synchronizer } = &mut workload.interval {
-                synchronizer.wait().await;
-            }
-            let request = self.generate_request(&workload, i as u64);
-            scheduled_time = workload.interval.next(&scheduled_time);
-
-            // Use delay to wait until the scheduled time
-            delay.as_mut().reset(scheduled_time);
-            delay.as_mut().await.expect("Delay failed");
-
-            let issued_time = Instant::now();
-            self.client_request_tx
-                .send(request)
-                .await
-                .expect("Client failed to queue request");
-            let response = self
-                .client_response_rx
-                .recv()
-                .await
-                .expect("Client failed to receive response");
-            self.log_executed_response(response, scheduled_time, issued_time);
-            if let RequestInterval::RoundRobin { synchronizer } = &mut workload.interval {
-                synchronizer.notify().await;
-            }
-        }
-    }
-
-    async fn run_parallel(mut self, mut workload: Workload) {
-        if workload.nb_requests == 0 {
-            // If the replica is faulty or has no requests, we can skip processing
-            return;
-        }
-        let num_requests = workload.nb_requests;
+        let warmup_start = Instant::now();
+        let warmup_end = warmup_start + workload.warmup;
+        let warmdown_start = warmup_end + workload.duration;
+        let warmdown_end = warmdown_start + workload.warmdown;
 
         // Track scheduled_time and issued_time for each request_id
         let mut request_timings: HashMap<u64, (Instant, Instant)> = HashMap::new();
@@ -499,8 +379,7 @@ impl Client {
         // Set initial delay for first request
         scheduled_time = workload.interval.next(&scheduled_time);
         delay.as_mut().reset(scheduled_time);
-
-        while responses_received < num_requests {
+        while Instant::now() < warmdown_end || responses_received != current_request_id {
             let no_response = self.client_response_rx.is_empty();
             select! {
                 // Handle sending the next request when its time arrives
@@ -518,8 +397,8 @@ impl Client {
 
                     current_request_id += 1;
 
-                    // Prepare for next request if there is one
-                    if current_request_id < num_requests {
+                    // Prepare next request, while we haven't reached the end of the warmdown
+                    if Instant::now() < warmdown_end {
                         next_request = Some(
                             self.generate_request(&workload, current_request_id as u64)
                         );
@@ -540,17 +419,14 @@ impl Client {
                         let (scheduled_time, issued_time) = request_timings
                             .remove(&request_id)
                             .expect("Response received for an unknown request_id");
-                        self.log_executed_response(response, scheduled_time, issued_time);
-
+                        if (warmup_end..warmdown_start).contains(&scheduled_time) {
+                            self.log_executed_response(response, scheduled_time, issued_time);
+                        }
                         responses_received += 1;
                     }
                 }
             }
         }
-        assert_eq!(
-            current_request_id, num_requests,
-            "Invalid amount of requests were sent"
-        );
     }
 }
 
