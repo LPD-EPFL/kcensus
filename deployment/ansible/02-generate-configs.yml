@@ -1,39 +1,54 @@
 ---
-- name: Generate configurations for kcensus experiment
+- name: Measure latencies in parallel
   hosts: kcensus_nodes
   gather_facts: no
-  vars:
-    master_config_path: "/tmp/master-config.json"
-
+  strategy: free
   tasks:
     - name: Generate dynamic region list
       run_once: true
       set_fact:
         dynamic_regions: "{{ groups['kcensus_nodes'] | map('extract', hostvars, 'aws_region') | list }}"
 
-    - name: Start measuring all one-way latencies with ping
-      ansible.builtin.shell: >
-        sudo ping -c 500 -i 0.005 {{ item }} |
-        grep 'icmp_seq' |
-        grep -oP 'time=\K[0-9.]+' |
-        sort -n |
-        head -n -50 |
-        tail -n +51 |
-        awk '{ total += $1; count++ } END { if (count > 0) print total/count/2; else print "9999" }'
-      async: 600
-      poll: 0
-      loop: "{{ groups['kcensus_nodes'] }}"
-      register: async_jobs
+    - name: Create ping script on target host
+      ansible.builtin.copy:
+        dest: /tmp/ping_nodes.sh
+        mode: '0755'
+        content: |
+          {% raw %}
+          #!/usr/bin/env bash
+          nodes=("$@")
 
-    - name: Wait for all pings to be done
-      ansible.builtin.async_status:
-        jid: "{{ item.ansible_job_id }}"
-      loop: "{{ async_jobs.results }}"
-      register: all_ping_results
-      until: all_ping_results.finished
-      retries: 600
-      delay: 1
+          nodes_json=$(
+            printf "%s\n" "${nodes[@]}" |
+            xargs -P 100 -I{} bash -c '
+              n="$1"
+              val=$(sudo ping -c 100 -i 0.02 "$n" \
+                | grep "icmp_seq" \
+                | grep -oP "time=\K[0-9.]+" \
+                | sort -n \
+                | head -n -10 \
+                | tail -n +11 \
+                | awk "{ total += \$1; count++ } END { if (count>0) print total/count/2; else print \"9999\" }")
+              printf "\"%s\": %s\n" "$n" "$val"
+            ' _ {} | paste -sd "," -)
+          
+          printf "{%s}\n" "$nodes_json"
+          {% endraw %}
 
+    - name: Run ping script
+      ansible.builtin.shell: /tmp/ping_nodes.sh {{ groups['kcensus_nodes'] | join(' ') }}
+      register: latencies
+
+    - name: Report latencies
+      ansible.builtin.debug:
+        msg: "{{ (latencies.stdout | from_json) }}"
+
+- name: Build configs on localhost
+  hosts: kcensus_nodes
+  gather_facts: no
+  vars:
+    master_config_path: "/tmp/master-config.json"
+  tasks:
     - name: Assemble master configuration on the control node
       run_once: true
       delegate_to: localhost
@@ -61,8 +76,8 @@
             {%-     if i == j -%}
             {%-       set _ = row.append(0.0) -%}
             {%-     else -%}
-            {%-       set ping_result = hostvars[source_host]['all_ping_results']['results'][j] -%}
-            {%-       set latency = ping_result.stdout | float(9999.0) | round(2, 'floor') -%}
+            {%-       set ping_result = (hostvars[source_host].latencies.stdout | from_json)[node_list[j]] -%}
+            {%-       set latency = ping_result | float(9999.0) | round(2, 'floor') -%}
             {%-       set _ = row.append(latency) -%}
             {%-     endif -%}
             {%-   endfor -%}
@@ -121,8 +136,8 @@
           {%-     if i == j -%}
           {%-       set _ = row.append(0.0) -%}
           {%-     else -%}
-          {%-       set ping_result = hostvars[source_host]['all_ping_results']['results'][j] -%}
-          {%-       set latency = ping_result.stdout | float(9999.0) | round(2, 'floor') -%}
+          {%-       set ping_result = (hostvars[source_host].latencies.stdout | from_json)[groups['kcensus_nodes'][j]] -%}
+          {%-       set latency = ping_result | float(9999.0) | round(2, 'floor') -%}
           {%-       set _ = row.append(latency) -%}
           {%-     endif -%}
           {%-   endfor -%}
@@ -130,6 +145,12 @@
           {%- endfor -%}
           {{ matrix }}
 
+# Generate toml on each host
+- name: Generate toml on each host
+  hosts: kcensus_nodes
+  gather_facts: no
+  strategy: free
+  tasks:
     - name: Create config.toml from template
       ansible.builtin.template:
         src: config.toml.j2
