@@ -165,8 +165,8 @@ impl ConsensusShardTrait for PaxosFamilyShard {
             }
             Accept { round, v, .. } => {
                 if round.leader != self.my_pid {
-                    self.round_state.accept_v(src, round, v);
                     if src == round.leader {
+                        self.round_state.accept_v(src, round, v);
                         self.answer_accept().await?;
                         if self.settings.mode != MultiPaxos3P
                             || self.get_committer(v) != Some(self.my_pid)
@@ -176,6 +176,7 @@ impl ConsensusShardTrait for PaxosFamilyShard {
                     } else {
                         assert_eq!(self.settings.mode, MultiPaxos3P);
                         assert_eq!(self.get_committer(v), Some(self.my_pid));
+                        self.round_state.receive_accepted(src);
                     }
                 } else {
                     self.round_state.receive_accepted(src);
