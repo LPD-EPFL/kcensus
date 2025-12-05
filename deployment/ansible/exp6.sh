@@ -6,7 +6,6 @@ BASE_LOG_DIR="./logs"
 REPLICATED_ALGOS=(kcensus epaxos multi-paxos paxos weak-replication)
 ALGOS=(no-replication ${REPLICATED_ALGOS[@]})
 WRITES=(1)
-REQUESTS=100
 SPEEDUP=10000000 # latency precision does not matter
 
 if ! command -v "/usr/bin/time" >/dev/null 2>&1
@@ -53,7 +52,10 @@ function run() {
   local INGRESS="$5"
   local THROUGHPUT="$6"
   local FAULTS="$7"
-  local TITLE="c=$CONFIG/a=$ALGO/w=$WRITES/r=$REQUESTS/i=$INGRESS/t=$THROUGHPUT/s=$SPEEDUP/f=$FAULTS"
+  local KEYS="$8"
+  local SKEW="$9"
+  local SHARDS="$10"
+  local TITLE="c=$CONFIG/a=$ALGO/w=$WRITES/r=$REQUESTS/i=$INGRESS/t=$THROUGHPUT/s=$SPEEDUP/f=$FAULTS/k=$KEYS/skew=$SKEW/shards=$SHARDS"
   local LOG_DIR="$BASE_LOG_DIR/$TITLE/"
   mkdir -p "$LOG_DIR"
   killall kcensus 2>/dev/null
@@ -72,19 +74,23 @@ function run() {
        FAULTS_ARG="-f $FAULTS"
     fi
     local time_format='[log=time] Memory (KB): %M, System (s): %S User (s): %U | {"memory": %M, "system": %S, "user": %U}'
-    (/usr/bin/time -f "$time_format" ./kcensus --simulate-delays true -p "$pid" --config "configs/$CONFIG" $CASSANDRA_ARG -a "$ALGO" -w "$WRITES" -r "$REQUESTS" -i "$INGRESS" -t "$THROUGHPUT" -s "$SPEEDUP" $FAULTS_ARG)>"$LOG_DIR/$pid.stdout" 2>>"$LOG_DIR/$pid.stderr" &
+    (/usr/bin/time -f "$time_format" ./kcensus --simulate-delays true -p "$pid" --config "configs/$CONFIG" $CASSANDRA_ARG -a "$ALGO" -w "$WRITES" -d "$DURATION" -i "$INGRESS" -t "$THROUGHPUT" -s "$SPEEDUP" $FAULTS_ARG -k "$KEYS" --skew "$SKEW")>"$LOG_DIR/$pid.stdout" 2>>"$LOG_DIR/$pid.stderr" &
   done
   wait
 }
 
 # Resources
 function exp-6() {
-  local requests=1000
+  local duration="10s"
+  local throughput=10
+  local keys=10
+  local skew=0
+  local shards=10
   for configs in aws-random; do
     for writes in "${WRITES[@]}"; do
       for num_replicas in $(seq 3 2 31); do
         for algo in "${ALGOS[@]}"; do
-          run "${configs}/${num_replicas}.toml" "$algo" "$writes" "$((requests / num_replicas))" round-robin 0
+          run "${configs}/${num_replicas}.toml" "$algo" "$writes" "$duration" exponential "$throughput" "$keys" "$skew" "$shards"
         done
       done
     done
