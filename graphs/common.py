@@ -65,10 +65,10 @@ parser.add_argument(
 )
 parser.add_argument("-w", "--writes", type=float, default=0.5, help="Ratio of writes")
 parser.add_argument(
-    "-r", "--requests", type=int, default=100, help="Number of requests per client"
+    "-d", "--duration", type=str, default="10s", help="Duration of the experiment in seconds"
 )
 parser.add_argument(
-    "-i", "--ingress", type=str, default="round-robin", help="Type of ingress"
+    "-i", "--ingress", type=str, default="exponential", help="Type of ingress"
 )
 parser.add_argument(
     "-t", "--throughput", type=float, default="10", help="Target req/s per client"
@@ -83,8 +83,17 @@ parser.add_argument(
     "-g", "--geo", type=int, default=0, choices=[0, 1],
     help="Setting this to 1 takes into account that experiments are done on aws servers."
 )
+parser.add_argument(
+    "-k", "--keys", type=int, default=100, help="Key count"
+)
+parser.add_argument(
+    "--skew", type=float, default=0, help="Zipfian skew"
+)
+parser.add_argument(
+    "--shards", type=float, default=100, help="Shard count"
+)
 args = parser.parse_args()
-serialized_args = f'-c={args.config.replace("/", "-")}-w={args.writes:g}-r={args.requests}-i={args.ingress}-t={args.throughput:g}-s={args.speedup}-f={args.faults}-g={args.geo}'
+serialized_args = f'-c={args.config.replace("/", "-")}-w={args.writes:g}-d={args.duration}-i={args.ingress}-t={args.throughput:g}-s={args.speedup}-f={args.faults}-g={args.geo}-keys={args.keys}-skew={args.skew}-shards={args.shards}'
 
 def k_formatter(x, _):
     if x < 1000:
