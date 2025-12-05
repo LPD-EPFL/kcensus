@@ -275,6 +275,7 @@ pub struct Workload {
     pub rw_ratio: f32, // 0 = 100% reads, 1 = 100 %writes
     pub interval: RequestInterval,
     pub key_distribution: rand_distr::Zipf<f64>,
+    pub shards: usize,
 }
 
 impl Workload {
@@ -313,7 +314,7 @@ impl Client {
                 &Request::Put {
                     key: format!("key{key}"),
                     value: format!("v{}.{}!", self.my_pid, request_id),
-                    shard: key as u64,
+                    shard: (key % workload.shards) as u64,
                     request_id,
                 },
             )
@@ -323,7 +324,7 @@ impl Client {
                 key,
                 &Request::Get {
                     key: format!("key{key}"),
-                    shard: key as u64,
+                    shard: (key % workload.shards) as u64,
                     request_id,
                 },
             )

@@ -57,6 +57,8 @@ struct Args {
     keys: usize,
     #[arg(long, default_value_t = 0f64, value_name = "ZIPFIAN_SKEW", help="0 is uniform.", short_alias = 'z')]
     skew: f64,
+    #[arg(long, value_name = "SHARD_COUNT", help="Defaults to the key count")]
+    shards: Option<usize>,
 }
 
 #[derive(clap::ValueEnum, Copy, Clone, Debug, PartialEq)]
@@ -148,6 +150,7 @@ pub async fn run() -> io::Result<()> {
 
     let client_task = tokio::task::spawn(client.run(cassandra::Workload {
         key_distribution: rand_distr::Zipf::new(args.keys as f64, args.skew).expect("Incorrect skew"),
+        shards: args.shards.unwrap_or(args.keys),
         duration: args.duration,
         warmup: args.warmup,
         warmdown: args.warmdown,
