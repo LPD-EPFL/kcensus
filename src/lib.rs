@@ -35,7 +35,7 @@ struct Args {
     algo: Algo,
     #[arg(long, value_parser = humantime::parse_duration, default_value = "10s", value_name = "EXP_DURATION")]
     duration: Duration,
-    #[arg(long, value_parser = humantime::parse_duration, default_value = "1s", value_name = "WARMUP")]
+    #[arg(long, value_parser = humantime::parse_duration, default_value = "2s", value_name = "WARMUP")]
     warmup: Duration,
     #[arg(long, value_parser = humantime::parse_duration, default_value = "2s", value_name = "WARMDOWN")]
     warmdown: Duration,
@@ -55,9 +55,15 @@ struct Args {
     simulate_delays: Option<bool>,
     #[arg(short, long, default_value_t = 1usize, value_name = "KEY_COUNT")]
     keys: usize,
-    #[arg(long, default_value_t = 0f64, value_name = "ZIPFIAN_SKEW", help="0 is uniform.", short_alias = 'z')]
+    #[arg(
+        long,
+        default_value_t = 0f64,
+        value_name = "ZIPFIAN_SKEW",
+        help = "0 is uniform.",
+        short_alias = 'z'
+    )]
     skew: f64,
-    #[arg(long, value_name = "SHARD_COUNT", help="Defaults to the key count")]
+    #[arg(long, value_name = "SHARD_COUNT", help = "Defaults to the key count")]
     shards: Option<usize>,
 }
 
@@ -149,7 +155,8 @@ pub async fn run() -> io::Result<()> {
     let start = Instant::now();
 
     let client_task = tokio::task::spawn(client.run(cassandra::Workload {
-        key_distribution: rand_distr::Zipf::new(args.keys as f64, args.skew).expect("Incorrect skew"),
+        key_distribution:
+            rand_distr::Zipf::new(args.keys as f64, args.skew).expect("Incorrect skew"),
         shards: args.shards.unwrap_or(args.keys),
         duration: args.duration,
         warmup: args.warmup,
