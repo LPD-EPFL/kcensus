@@ -1,11 +1,12 @@
 use crate::consensus::kcensus::propagation::PropagationGraphs;
 use bit_set::BitSet;
 use serde::{Deserialize, Serialize};
+use std::cmp::Ordering;
 use std::time::Duration;
 
 pub type Knowledge = BitSet;
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct NodeState {
     id: usize,
     v: Option<usize>,
@@ -13,6 +14,35 @@ pub struct NodeState {
     v_state_nanos: u64,
     frozen_and_prepared: Option<usize>,
     paxos_accept_round: Option<usize>,
+}
+
+impl PartialOrd<Self> for NodeState {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        assert_eq!(self.id, other.id);
+        let accept_ord = self.paxos_accept_round.cmp(&other.paxos_accept_round);
+        let prepare_ord = self.prepared_for().cmp(&other.prepared_for());
+        if accept_ord != Ordering::Equal {
+            assert!(prepare_ord == accept_ord || prepare_ord == Ordering::Equal);
+            return Some(accept_ord);
+        } else if prepare_ord != Ordering::Equal {
+            return Some(prepare_ord);
+        }
+
+        let state_ord = self.v_state_nanos.cmp(&other.v_state_nanos);
+        if state_ord != Ordering::Equal {
+            return Some(state_ord);
+        }
+
+        if self.v.is_some() == other.v.is_some() {
+            assert_eq!(self, other);
+            return Some(Ordering::Equal);
+        }
+
+        let v_ord = self.v.is_some().cmp(&other.v.is_some());
+        let prop_ord = self.v_proposer.is_some().cmp(&other.v_proposer.is_some());
+        assert_eq!(v_ord, prop_ord);
+        Some(v_ord)
+    }
 }
 
 impl NodeState {

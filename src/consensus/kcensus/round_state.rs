@@ -155,12 +155,7 @@ impl KCensusRoundState {
         let my_proposer = my_state!(self).get_proposer();
         for (pid, remote_node_state) in remote_states.iter().enumerate() {
             let local_node_state = &mut self.node_states[pid];
-            if (remote_node_state.get_v().is_none() && local_node_state.get_v().is_some())
-                || remote_node_state.get_state_id() < local_node_state.get_state_id()
-                || remote_node_state.prepared_for() < local_node_state.prepared_for()
-                || remote_node_state.get_paxos_accept_round()
-                    < local_node_state.get_paxos_accept_round()
-            {
+            if remote_node_state < local_node_state {
                 continue;
             }
 
