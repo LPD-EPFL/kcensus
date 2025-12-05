@@ -1,5 +1,6 @@
 use crate::consensus::kcensus::node_state::NodeState;
 use crate::consensus::kcensus::propagation::{MessageId, PropagationGraphs};
+use bit_set::BitSet;
 use std::collections::HashSet;
 use std::fmt;
 use std::time::Duration;
@@ -25,17 +26,17 @@ pub struct KCensusRoundState {
 }
 
 impl KCensusRoundState {
-    pub fn new(nb_nodes: usize, majority: usize, my_pid: usize) -> Self {
+    pub fn new(process_count: usize, majority: usize, my_pid: usize) -> Self {
         Self {
             my_pid,
             majority,
 
-            node_states: (0..nb_nodes).map(NodeState::new).collect(),
-            propagation_states: vec![Duration::ZERO; nb_nodes],
+            node_states: (0..process_count).map(NodeState::new).collect(),
+            propagation_states: vec![Duration::ZERO; process_count],
 
-            proposers: Vec::with_capacity(nb_nodes),
-            leaders: Vec::with_capacity(nb_nodes),
-            received_msgs: HashSet::with_capacity(nb_nodes),
+            proposers: Vec::with_capacity(process_count),
+            leaders: Vec::with_capacity(process_count),
+            received_msgs: HashSet::with_capacity(process_count),
 
             paxos_accept_count: 0,
         }
@@ -193,13 +194,24 @@ impl KCensusRoundState {
         self.propagation_states[proposer] = state_id;
     }
 
-    pub fn can_start_paxos_accept(&self) -> bool {
-        self.node_states
+    pub fn get_node_states(&self) -> &Vec<NodeState> {
+        &self.node_states
+    }
+
+    pub fn get_paxos_accept_round(&self) -> Option<usize> {
+        my_state!(self).get_paxos_accept_round()
+    }
+
+    pub fn can_start_paxos_accept(&self, alive_replicas: &BitSet) -> bool {
+        let prepared_count = self
+            .node_states
             .iter()
-            .filter(|x| x.prepared_for() == Some(self.my_pid))
-            .count()
-            >= self.majority
-            && my_state!(self).get_paxos_accept_round() != Some(self.my_pid)
+            .enumerate()
+            .filter(|(id, state)| {
+                alive_replicas.contains(*id) && state.prepared_for() == Some(self.my_pid)
+            })
+            .count();
+        prepared_count >= self.majority && self.get_paxos_accept_round() != Some(self.my_pid)
     }
 
     pub fn can_adopt(&self) -> bool {

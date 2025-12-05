@@ -58,7 +58,7 @@ pub struct PropagationGraphs {
     pub epaxos_latencies: Vec<Duration>,
     pub multi_paxos_latencies: Vec<Vec<Duration>>,
     pub multi_paxos_3p_latencies: Vec<Vec<Duration>>,
-    pub multi_paxos_3p_commiters: Vec<Vec<ProcId>>,
+    pub multi_paxos_3p_committers: Vec<Vec<ProcId>>,
 }
 
 impl PropagationGraphs {
@@ -295,7 +295,7 @@ pub fn compute_propagation_graphs(
     let mut epaxos_leader = vec![0usize; nb_processes];
     let mut multi_paxos_latencies = vec![vec![Duration::MAX; nb_processes]; nb_processes];
     let mut multi_paxos_3p_latencies = vec![vec![Duration::MAX; nb_processes]; nb_processes];
-    let mut multi_paxos_3p_commiters = vec![vec![0; nb_processes]; nb_processes];
+    let mut multi_paxos_3p_committers = vec![vec![0; nb_processes]; nb_processes];
 
     // Compute latency of e/multi-/paxos per leader
     for leader in topology.alive_replicas.iter() {
@@ -313,7 +313,7 @@ pub fn compute_propagation_graphs(
 
         for requester in 0..nb_processes {
             let best_latency = &mut multi_paxos_3p_latencies[leader][requester];
-            let best_commiter = &mut multi_paxos_3p_commiters[leader][requester];
+            let best_commiter = &mut multi_paxos_3p_committers[leader][requester];
 
             let is_replicas = topology.alive_replicas.contains(requester);
             for commiter in topology.alive_replicas.iter() {
@@ -957,7 +957,7 @@ pub fn compute_propagation_graphs(
             // Add to list of graphs/latencies
             assert_eq!(kcensus_latencies.len(), proposer);
             assert_eq!(propagation_graphs.len(), proposer);
-            kcensus_latencies.push(leader_latency);
+            kcensus_latencies.push(proposer_latency);
             propagation_graphs.push(PropagationGraph {
                 should_include_value,
                 states,
@@ -976,6 +976,6 @@ pub fn compute_propagation_graphs(
         epaxos_latencies,
         multi_paxos_latencies,
         multi_paxos_3p_latencies,
-        multi_paxos_3p_commiters,
+        multi_paxos_3p_committers,
     }
 }

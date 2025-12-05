@@ -4,6 +4,7 @@ use std::collections::HashMap;
 
 pub struct PaxosFamilyRoundState {
     my_pid: usize,
+    replica: bool,
     majority: usize,
     e_paxos_quorum: usize,
 
@@ -29,12 +30,19 @@ pub struct PaxosFamilyRoundState {
 }
 
 impl PaxosFamilyRoundState {
-    pub fn new(nb_nodes: usize, my_pid: usize, starting_round: Option<PaxosRound>) -> Self {
-        let majority = (nb_nodes / 2) + 1;
-        let e_paxos_quorum = ((nb_nodes * 3) / 4).max(majority);
+    pub fn new(
+        my_pid: usize,
+        replica: bool,
+        process_count: usize,
+        replica_count: usize,
+        starting_round: Option<PaxosRound>,
+    ) -> Self {
+        let majority = (replica_count / 2) + 1;
+        let e_paxos_quorum = ((replica_count * 3) / 4).max(majority);
 
         Self {
             my_pid,
+            replica,
             majority,
             e_paxos_quorum,
 
@@ -44,15 +52,15 @@ impl PaxosFamilyRoundState {
             accepted: 0,
             max_rv: None,
 
-            prepared_set: BitSet::with_capacity(nb_nodes),
-            accepted_set: BitSet::with_capacity(nb_nodes),
+            prepared_set: BitSet::with_capacity(process_count),
+            accepted_set: BitSet::with_capacity(process_count),
 
             epaxos_answers: 0,
             epaxos_preaccepted: 0,
-            epaxos_leader_to_v: HashMap::with_capacity(nb_nodes),
-            epaxos_leader_scores: vec![2; nb_nodes],
+            epaxos_leader_to_v: HashMap::with_capacity(process_count),
+            epaxos_leader_scores: vec![2; process_count],
 
-            epaxos_answer_set: BitSet::with_capacity(nb_nodes),
+            epaxos_answer_set: BitSet::with_capacity(process_count),
         }
     }
 
@@ -105,9 +113,11 @@ impl PaxosFamilyRoundState {
             self.max_rv = Some(rv);
         }
 
-        let inserted = self.prepared_set.insert(src);
-        debug_assert!(inserted);
-        self.prepared += 1;
+        if src != self.my_pid || self.replica {
+            let inserted = self.prepared_set.insert(src);
+            debug_assert!(inserted);
+            self.prepared += 1;
+        }
     }
 
     pub fn adopt_from_epaxos(&mut self, round: PaxosRound, v: usize) {
@@ -132,7 +142,7 @@ impl PaxosFamilyRoundState {
 
     #[inline]
     pub fn receive_accepted(&mut self, src: usize) {
-        if self.accepted_set.insert(src) {
+        if (src != self.my_pid || self.replica) && self.accepted_set.insert(src) {
             self.accepted += 1;
         }
     }

@@ -68,8 +68,8 @@ impl NodeState {
         duration: Duration,
         graph: &PropagationGraphs,
     ) {
-        assert!(!self.v.is_some());
-        assert!(!self.v_proposer.is_some());
+        assert!(self.v.is_none());
+        assert!(self.v_proposer.is_none());
         assert_eq!(self.v_state_nanos, 0);
         self.v = Some(v);
         self.v_proposer = Some(proposer);

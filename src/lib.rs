@@ -53,7 +53,7 @@ struct Args {
     keys: usize,
 }
 
-#[derive(clap::ValueEnum, Clone, Debug)]
+#[derive(clap::ValueEnum, Copy, Clone, Debug, PartialEq)]
 enum Algo {
     #[value(name = "kcensus", alias = "KCensus")]
     KCensus,
@@ -119,11 +119,11 @@ pub async fn run() -> io::Result<()> {
     let start = Instant::now();
     let propagation_graphs = compute_propagation_graphs(
         topology.clone(),
-        matches!(algo, Algo::KCensus),
+        algo == Algo::KCensus,
         matches!(algo, Algo::KCensus | Algo::WeakReplication),
     );
     println!("Computed propagation graphs in {:?}", start.elapsed());
-    let nb_nodes = topology.regions.len();
+    let process_count = topology.regions.len();
 
     let (consensus_msg_sinks, consensus_msg_streams) =
         connect_all(my_pid, topology.nb_processes, topology.addresses.clone()).await;
@@ -147,7 +147,7 @@ pub async fn run() -> io::Result<()> {
         rw_ratio: args.writes,
         interval: match args.ingress {
             Ingress::RoundRobin => {
-                let predecessor = (my_pid + nb_nodes - 1) % nb_nodes;
+                let predecessor = (my_pid + process_count - 1) % process_count;
                 let commit_notification_time = propagation_graphs.rtts[predecessor]
                     .iter()
                     .max()
@@ -177,11 +177,12 @@ pub async fn run() -> io::Result<()> {
                 "Expected local latency (no-contention): {:?}",
                 propagation_graphs.kcensus_latencies[my_pid]
             );
-            let mut leader_prio: Vec<_> = (0..nb_nodes).collect();
+            let mut leader_prio: Vec<_> = (0..process_count).collect();
             leader_prio.sort_by_key(|pid| propagation_graphs.kcensus_latencies[*pid]);
             let mut consensus_obj = KCensus::new(
-                nb_nodes,
-                (topology.alive_replicas.len() / 2) + 1,
+                process_count,
+                topology.alive_replicas.len(),
+                &topology.alive_replicas,
                 my_pid,
                 consensus_msg_sinks,
                 leader_prio,
@@ -193,7 +194,7 @@ pub async fn run() -> io::Result<()> {
             let _ = tokio::join!(app.run(), consensus);
         }
         Algo::Paxos => {
-            let mut leader_prio: Vec<_> = (0..nb_nodes).collect();
+            let mut leader_prio: Vec<_> = topology.alive_replicas.iter().collect();
             leader_prio.sort_by_key(|pid| propagation_graphs.paxos_latencies[*pid]);
             let leader = leader_prio[0] == my_pid;
             println!(
@@ -201,10 +202,13 @@ pub async fn run() -> io::Result<()> {
                 propagation_graphs.paxos_latencies[my_pid] / if leader { 2 } else { 1 }
             );
             let mut consensus_obj = PaxosFamily::new(
-                nb_nodes,
+                process_count,
+                topology.nb_replicas,
+                &topology.alive_replicas,
                 my_pid,
                 consensus_msg_sinks,
                 leader_prio,
+                None,
                 Mode::Paxos,
                 args.keys,
             );
@@ -213,17 +217,20 @@ pub async fn run() -> io::Result<()> {
             let _ = tokio::join!(app.run(), consensus);
         }
         Algo::EPaxos => {
-            let mut leader_prio: Vec<_> = (0..nb_nodes).collect();
+            let mut leader_prio: Vec<_> = topology.alive_replicas.iter().collect();
             leader_prio.sort_by_key(|pid| propagation_graphs.epaxos_latencies[*pid]);
             println!(
                 "Expected local latency (no-contention): {:?}",
                 propagation_graphs.epaxos_latencies[my_pid]
             );
             let mut consensus_obj = PaxosFamily::new(
-                nb_nodes,
+                process_count,
+                topology.nb_replicas,
+                &topology.alive_replicas,
                 my_pid,
                 consensus_msg_sinks,
                 leader_prio,
+                None,
                 Mode::EPaxos,
                 args.keys,
             );
@@ -232,25 +239,33 @@ pub async fn run() -> io::Result<()> {
             let _ = tokio::join!(app.run(), consensus);
         }
         Algo::MultiPaxos | Algo::MultiPaxos3P => {
-            let is_3p = matches!(algo, Algo::MultiPaxos3P);
+            let is_3p = algo == Algo::MultiPaxos3P;
             let multi_paxos_latencies = if is_3p {
                 &propagation_graphs.multi_paxos_3p_latencies
             } else {
                 &propagation_graphs.multi_paxos_latencies
             };
-            let mut leader_prio: Vec<_> = (0..nb_nodes).collect();
+            let mut leader_prio: Vec<_> = topology.alive_replicas.iter().collect();
             leader_prio
                 .sort_by_cached_key(|pid| multi_paxos_latencies[*pid].iter().sum::<Duration>());
             let leader = leader_prio[0];
+            let committers = if is_3p {
+                Some(propagation_graphs.multi_paxos_3p_committers[leader].clone())
+            } else {
+                None
+            };
             println!(
                 "Expected local latency with leader {} (no-contention): {:?}",
                 leader, multi_paxos_latencies[leader][my_pid]
             );
             let mut consensus_obj = PaxosFamily::new(
-                nb_nodes,
+                process_count,
+                topology.nb_replicas,
+                &topology.alive_replicas,
                 my_pid,
                 consensus_msg_sinks,
                 leader_prio,
+                committers,
                 if is_3p {
                     Mode::MultiPaxos3P
                 } else {

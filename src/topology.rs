@@ -93,7 +93,7 @@ impl Topology {
         alive_replicas.difference_with(&faults);
 
         Topology {
-            nb_processes,
+            nb_processes: nb_processes,
             nb_replicas,
             alive_replicas,
             regions,
