@@ -103,7 +103,7 @@ impl PaxosMsg {
     pub fn can_include_value(&self, src: usize) -> bool {
         match self {
             Prepare { round, .. } => round.leader == src,
-            Accept { round, .. } => round.leader == src && *round == PaxosRound::default(),
+            Accept { round, .. } => round.leader == src && round.round_group == 0,
             ForwardRequest { .. } => true,
         }
     }

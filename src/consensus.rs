@@ -7,7 +7,7 @@ use crate::message::MsgWithSource;
 use crate::multi_sink::{MultiSink, ShardMultiSink};
 use bit_set::BitSet;
 use command::Command;
-use log::{debug, info};
+use log::{debug, info, trace};
 use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::sync::Arc;
@@ -123,6 +123,7 @@ where
                     let msg = opt_msg.unwrap();
                     let shard = match msg.msg {
                         ConsensusM { shard, msg, value } => {
+                            trace!("received: {msg:?}");
                             let new_value = value.is_some();
                             if let Some(value) = value {
                                 debug_assert!(msg.can_include_value());
