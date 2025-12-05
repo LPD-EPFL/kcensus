@@ -1,3 +1,4 @@
+use bit_set::BitSet;
 use clap::Parser;
 use kcensus::consensus::kcensus::propagation::compute_propagation_graphs;
 use kcensus::eval;
@@ -10,6 +11,8 @@ use std::time::{Duration, Instant};
 struct Args {
     #[arg(short, long)]
     config: String,
+    #[arg(short, long, num_args = 0.., value_delimiter = ',', short_alias = 'v')]
+    non_voting: Vec<usize>,
     #[clap(short, long, default_value = "0")]
     fault_count: usize,
     #[clap(long, default_value = "1000", short_alias = 'w')]
@@ -21,8 +24,8 @@ struct Args {
 fn main() {
     env_logger::init();
     let args = Args::parse();
-    let topology = Topology::from_path(&args.config, None);
-    let nb_nodes = topology.nb_nodes;
+    let topology = Topology::from_path(&args.config, args.non_voting, None);
+    let nb_processes = topology.nb_processes;
     let mut faults = Vec::with_capacity(args.fault_count);
     let mut start = Instant::now();
     let mut count: u32 = 0;
@@ -34,11 +37,13 @@ fn main() {
             faults.extend(0..args.fault_count);
             loop {
                 let mut topology = topology.clone();
-                topology.faults.extend(faults.iter().copied());
+                topology
+                    .alive_replicas
+                    .difference_with(&BitSet::from_iter(faults.iter().copied()));
                 // println!("faults: {:?}", topology.faults);
                 let _ = compute_propagation_graphs(topology, true, true);
                 count += 1;
-                if !next_combination(&mut faults, nb_nodes) {
+                if !next_combination(&mut faults, nb_processes) {
                     break;
                 }
             }

@@ -1,7 +1,6 @@
 use crate::message::Message::Hello;
 use crate::message::{Message, MsgWithSource};
 use crate::multi_sink::MultiSink;
-use bit_set::BitSet;
 use futures::stream::select_all;
 use futures::{Stream, TryStreamExt};
 use log::debug;
@@ -65,12 +64,11 @@ pub async fn connect_all(
     my_pid: usize,
     nb_nodes: usize,
     addresses: Vec<(String, u16)>,
-    faults: Option<BitSet>,
 ) -> (
     MultiSink,
     impl Stream<Item = Result<MsgWithSource, io::Error>>,
 ) {
-    let mut sinks = MultiSink::new_with_faults(my_pid, nb_nodes, faults.iter().flatten());
+    let mut sinks = MultiSink::new(my_pid, nb_nodes);
     let mut streams = Vec::with_capacity(nb_nodes);
 
     let wrap_with_source_pid = |pid: usize| move |m: Message| m.with_source(pid);

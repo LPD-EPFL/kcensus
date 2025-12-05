@@ -274,7 +274,6 @@ pub struct Workload {
     pub warmdown: Duration,
     pub rw_ratio: f32, // 0 = 100% reads, 1 = 100 %writes
     pub interval: RequestInterval,
-    pub faulty: bool,
     pub key_distribution: rand_distr::Zipf<f64>,
     pub shards: usize,
 }
@@ -358,10 +357,6 @@ impl Client {
     }
 
     pub async fn run(mut self, mut workload: Workload) {
-        if workload.faulty {
-            // If the replica is faulty, we can skip processing
-            return;
-        }
 
         let warmup_start = Instant::now();
         let warmup_end = warmup_start + workload.warmup;

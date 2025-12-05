@@ -8,7 +8,8 @@ use crate::consensus::message::{CommandBatch, ConsensusMessage};
 use crate::consensus::read_tracker::ReadTracker;
 use crate::consensus::{Consensus, ConsensusShard, ConsensusShardTrait};
 use crate::multi_sink::{MultiSink, ShardMultiSink};
-use log::trace;
+use bit_set::BitSet;
+use log::{debug, info, trace};
 use std::collections::HashMap;
 use std::io;
 use std::sync::Arc;
@@ -28,30 +29,36 @@ pub(crate) type KCensusShard = ConsensusShard<KCensusSettings, KCensusRoundState
 
 impl KCensusShard {
     pub fn new(
-        nb_nodes: usize,
+        process_count: usize,
+        replica_count: usize,
+        alive_replicas: BitSet,
         my_pid: usize,
         sinks: ShardMultiSink,
         leader_priority: Vec<usize>,
         propagation_graphs: Arc<PropagationGraphs>,
     ) -> Self {
-        assert!(my_pid < nb_nodes);
+        assert!(my_pid < process_count);
+        let majority = 1 + (replica_count / 2);
+        let replica = alive_replicas.contains(my_pid);
         Self {
-            nb_nodes,
-            my_pid,
+            process_count,
+            alive_replicas,
+            replica,
             leader_priority,
+            my_pid,
 
             sinks,
 
             next_uid: my_pid,
             slot: 0,
-            queued_commands: HashMap::with_capacity(nb_nodes),
+            queued_commands: HashMap::with_capacity(process_count),
 
-            read_tracker: ReadTracker::new(1 + nb_nodes / 2),
+            read_tracker: ReadTracker::new(majority),
 
             settings: KCensusSettings {
                 graphs: propagation_graphs,
             },
-            round_state: KCensusRoundState::new(nb_nodes, my_pid),
+            round_state: KCensusRoundState::new(process_count, majority, my_pid),
         }
     }
 }
@@ -63,6 +70,12 @@ impl ConsensusShardTrait for KCensusShard {
             KCensusM(msg) => msg,
             x => panic!("Unexpected message type: {x:?}"),
         };
+
+        if !matches!(msg, SpreadValueOnly { .. }) {
+            debug!("Processing kcensus msg from {src}: {msg:?}");
+        } else {
+            trace!("Processing kcensus msg from {src}: {msg:?}");
+        }
 
         // TODO: Ignore some messages if max_seen_slot > slot ?
         // TODO: Handle dead nodes / packet loss ?
@@ -96,9 +109,9 @@ impl ConsensusShardTrait for KCensusShard {
                     None => {
                         let remote_state_ids = self.settings.graphs.get_remote_states(msg_id);
                         let mut remote_states: Vec<_> =
-                            (0..self.nb_nodes).map(NodeState::new).collect();
-                        for i in 0..self.nb_nodes {
-                            if i == msg_id.proposer || remote_state_ids[i] != Duration::ZERO {
+                            (0..self.process_count).map(NodeState::new).collect();
+                        for i in 0..self.process_count {
+                            if remote_state_ids[i] != Duration::ZERO || i == msg_id.proposer {
                                 remote_states[i].accept_with_state(
                                     v,
                                     msg_id.proposer,
@@ -163,13 +176,17 @@ impl ConsensusShardTrait for KCensusShard {
                     assert!(self.round_state.can_commit(&self.settings.graphs));
                     let v = my_v.unwrap();
                     self.sinks.broadcast(Commit { slot, v }, None).await?;
+                    info!("Commit via kcensus: v={v}");
                     let value = self.commit_slot(v, false);
                     return Ok(Some(value));
                 }
-
                 if self.round_state.prepared_for() == Some(self.my_pid) {
                     assert!(conflict);
-                    if self.round_state.can_start_paxos_accept() {
+                    assert!(self.replica);
+                    if self
+                        .round_state
+                        .can_start_paxos_accept(&self.alive_replicas)
+                    {
                         let adopted_v = self.round_state.adopt(&self.settings.graphs);
                         let (new_value, adopted_v) = match adopted_v {
                             Some(adopted_v) => (false, adopted_v),
@@ -180,6 +197,13 @@ impl ConsensusShardTrait for KCensusShard {
                         };
                         self.broadcast_paxos_accept(adopted_v, new_value).await?;
                         self.round_state.paxos_accept(self.my_pid, adopted_v);
+                    } else {
+                        debug!(
+                            "Leader of conflicting state, but not ready to accept. prepared_for: {:?}, last_accepted: {:?}, state: {:?}",
+                            self.round_state.prepared_for(),
+                            self.round_state.get_paxos_accept_round(),
+                            self.round_state.get_node_states(),
+                        )
                     }
                 }
             }
@@ -187,7 +211,7 @@ impl ConsensusShardTrait for KCensusShard {
             PaxosAccept {
                 slot, leader, v, ..
             } => {
-                if slot < self.slot {
+                if slot < self.slot || !self.replica {
                     return Ok(None);
                 }
 
@@ -214,6 +238,7 @@ impl ConsensusShardTrait for KCensusShard {
                     self.round_state.recv_paxos_accept(src, v);
                     if self.round_state.can_paxos_commit() {
                         self.sinks.broadcast(Commit { slot, v }, None).await?;
+                        info!("Commit via paxos: v={v}");
                         let value = self.commit_slot(v, false);
                         return Ok(Some(value));
                     }
@@ -276,6 +301,10 @@ impl ConsensusShardTrait for KCensusShard {
     #[inline]
     fn should_lead(&self) -> bool {
         self.my_pid == self.leader_priority[0]
+    }
+
+    fn can_propose(&self) -> bool {
+        true
     }
 }
 
@@ -388,7 +417,7 @@ impl KCensusShard {
 
     async fn graph_spread_value_only(&self, prev_msg_id: MessageId, v: usize) -> io::Result<()> {
         let proposer = prev_msg_id.proposer;
-        let state_id = self.settings.graphs.next_state_from_msg(prev_msg_id);
+        let state_id = self.settings.graphs.msg_arrival_state_id(prev_msg_id);
         self.inner_spread(v, proposer, state_id, true, true).await
     }
 
@@ -403,7 +432,9 @@ pub(crate) type KCensus = Consensus<KCensusSettings, KCensusRoundState>;
 
 impl KCensus {
     pub fn new(
-        nb_nodes: usize,
+        process_count: usize,
+        replica_count: usize,
+        alive_replicas: &BitSet,
         my_pid: usize,
         sinks: MultiSink,
         leader_priority: Vec<usize>,
@@ -413,11 +444,13 @@ impl KCensus {
         let sinks = Arc::new(Mutex::new(sinks));
         let propagation_graphs = Arc::new(propagation_graphs);
         Self {
-            nb_nodes,
+            process_count,
             shards: (0..shard_count)
                 .map(|shard_id| {
                     KCensusShard::new(
-                        nb_nodes,
+                        process_count,
+                        replica_count,
+                        alive_replicas.clone(),
                         my_pid,
                         ShardMultiSink {
                             shard_id,

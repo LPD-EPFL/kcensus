@@ -5,8 +5,9 @@ use crate::eval;
 use crate::message::Message::{ConsensusM, Done};
 use crate::message::MsgWithSource;
 use crate::multi_sink::{MultiSink, ShardMultiSink};
+use bit_set::BitSet;
 use command::Command;
-use log::{debug, info};
+use log::{debug, info, trace};
 use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::sync::Arc;
@@ -22,9 +23,11 @@ mod read_tracker;
 
 pub(crate) struct ConsensusShard<AlgoSettings, AlgoRoundState> {
     // Settings
-    nb_nodes: usize,
-    my_pid: usize,
+    process_count: usize,
+    alive_replicas: BitSet,
+    replica: bool,
     leader_priority: Vec<usize>,
+    my_pid: usize,
 
     // Connections
     sinks: ShardMultiSink,
@@ -41,7 +44,7 @@ pub(crate) struct ConsensusShard<AlgoSettings, AlgoRoundState> {
 }
 
 pub(crate) struct Consensus<AlgoSettings, AlgoRoundState> {
-    nb_nodes: usize,
+    process_count: usize,
     shards: Vec<ConsensusShard<AlgoSettings, AlgoRoundState>>,
     sinks: Arc<Mutex<MultiSink>>,
 }
@@ -62,6 +65,8 @@ pub(crate) trait ConsensusShardTrait {
     fn ongoing(&self) -> bool;
 
     fn should_lead(&self) -> bool;
+
+    fn can_propose(&self) -> bool;
 }
 
 impl<AS, ARS> Consensus<AS, ARS>
@@ -78,12 +83,13 @@ where
         let mut done = false;
 
         let mut queued_messages: Vec<VecDeque<ConsensusMessage>> =
-            vec![VecDeque::with_capacity(self.nb_nodes); self.shards.len()];
+            vec![VecDeque::with_capacity(self.process_count); self.shards.len()];
+        assert!(self.shards[0].can_forward_proposals() || self.shards[0].can_propose());
         let likely_queued = (!self.shards[0].can_forward_proposals()) as usize;
         let mut my_queued_commands: Vec<VecDeque<Command>> =
             vec![VecDeque::with_capacity(likely_queued); self.shards.len()];
 
-        'main_loop: while count_done < self.nb_nodes {
+        'main_loop: while count_done < self.process_count {
             // Read new messages and/or new local command
             let shard = select! {
                 command = new_client_commands_rx.recv(), if !done => {
@@ -117,6 +123,7 @@ where
                     let msg = opt_msg.unwrap();
                     let shard = match msg.msg {
                         ConsensusM { shard, msg, value } => {
+                            trace!("received: {msg:?}");
                             let new_value = value.is_some();
                             if let Some(value) = value {
                                 debug_assert!(msg.can_include_value());
@@ -256,7 +263,7 @@ where
                 return Ok(None);
             }
             debug_assert_eq!(slot, self.slot);
-            info!("Commit msg: v={v}");
+            info!("Commit via msg: v={v}");
             return Ok(Some(self.commit_slot(v, true)));
         };
         if let ReadRequest { uid } = msg.msg {
@@ -279,7 +286,6 @@ where
                 .receive_ready(uid)
                 .map(CommandBatch::Single));
         }
-        debug!("Processing message: {msg:?}");
         self.process_message(msg).await
     }
 
@@ -315,6 +321,7 @@ where
 
             let result = self.read_tracker.commit_slot();
             for read_only_command in result.into_iter() {
+                info!("Commit read.");
                 commit(read_only_command).await;
             }
 
@@ -368,11 +375,15 @@ where
     }
 
     #[inline]
-    fn get_requester(&self, v: usize) -> Option<usize> {
-        let cmd = self
-            .queued_commands
+    fn get_command(&self, v: usize) -> &CommandBatch {
+        self.queued_commands
             .get(&v)
-            .expect("Queued command not found");
+            .expect("Queued command not found")
+    }
+
+    #[inline]
+    fn get_requester(&self, v: usize) -> Option<usize> {
+        let cmd = self.get_command(v);
         if let CommandBatch::Single(cmd) = cmd {
             Some(cmd.requester)
         } else {
@@ -382,7 +393,7 @@ where
 
     fn get_next_uid(&mut self) -> usize {
         let uid = self.next_uid;
-        self.next_uid += self.nb_nodes;
+        self.next_uid += self.process_count;
         uid
     }
 }

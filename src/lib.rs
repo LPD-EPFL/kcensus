@@ -35,7 +35,7 @@ struct Args {
     algo: Algo,
     #[arg(long, value_parser = humantime::parse_duration, default_value = "10s", value_name = "EXP_DURATION")]
     duration: Duration,
-    #[arg(long, value_parser = humantime::parse_duration, default_value = "1s", value_name = "WARMUP")]
+    #[arg(long, value_parser = humantime::parse_duration, default_value = "2s", value_name = "WARMUP")]
     warmup: Duration,
     #[arg(long, value_parser = humantime::parse_duration, default_value = "2s", value_name = "WARMDOWN")]
     warmdown: Duration,
@@ -47,19 +47,27 @@ struct Args {
     writes: f32,
     #[arg(short, long, num_args = 0.., value_delimiter = ',')]
     faults: Vec<usize>,
+    #[arg(short, long, num_args = 0.., value_delimiter = ',', short_alias = 'v')]
+    non_voting: Vec<usize>,
     #[arg(short, long, default_value_t = 1u32, value_name = "SIMULATION_SPEED")]
     speedup: u32,
     #[arg(long, help = "Simulate link delays. (Default: only if localhost)")]
     simulate_delays: Option<bool>,
     #[arg(short, long, default_value_t = 1usize, value_name = "KEY_COUNT")]
     keys: usize,
-    #[arg(long, default_value_t = 0f64, value_name = "ZIPFIAN_SKEW", help="0 is uniform.")]
+    #[arg(
+        long,
+        default_value_t = 0f64,
+        value_name = "ZIPFIAN_SKEW",
+        help = "0 is uniform.",
+        short_alias = 'z'
+    )]
     skew: f64,
-    #[arg(long, value_name = "SHARD_COUNT", help="Defaults to the key count")]
+    #[arg(long, value_name = "SHARD_COUNT", help = "Defaults to the key count")]
     shards: Option<usize>,
 }
 
-#[derive(clap::ValueEnum, Clone, Debug)]
+#[derive(clap::ValueEnum, Copy, Clone, Debug, PartialEq)]
 enum Algo {
     #[value(name = "kcensus", alias = "KCensus")]
     KCensus,
@@ -101,7 +109,7 @@ pub async fn run() -> io::Result<()> {
 
     let args = Args::parse();
     let my_pid = args.pid;
-    let topology = Topology::from_path(&args.config, Some(args.faults));
+    let topology = Topology::from_path(&args.config, args.non_voting, Some(args.faults));
     let delay_mode = args.simulate_delays.unwrap_or_else(|| {
         topology
             .addresses
@@ -109,10 +117,10 @@ pub async fn run() -> io::Result<()> {
             .all(|(address, _)| address == "localhost" || address == "127.0.0.1")
     });
 
-    let epaxos_max_faults = topology.nb_nodes - ((topology.nb_nodes * 3) / 4);
+    let epaxos_quorum = (topology.nb_replicas * 3) / 4;
     let algo = match args.algo {
         Algo::EPaxos => {
-            if topology.faults.len() > epaxos_max_faults {
+            if topology.alive_replicas.len() < epaxos_quorum {
                 Algo::Paxos
             } else {
                 Algo::EPaxos
@@ -120,24 +128,18 @@ pub async fn run() -> io::Result<()> {
         }
         x => x,
     };
-    let faulty = topology.faults.contains(my_pid);
     debug!("Loaded topology:{topology}");
     let start = Instant::now();
     let propagation_graphs = compute_propagation_graphs(
         topology.clone(),
-        matches!(algo, Algo::KCensus),
+        algo == Algo::KCensus,
         matches!(algo, Algo::KCensus | Algo::WeakReplication),
     );
     println!("Computed propagation graphs in {:?}", start.elapsed());
-    let nb_nodes = topology.regions.len();
+    let process_count = topology.regions.len();
 
-    let (consensus_msg_sinks, consensus_msg_streams) = connect_all(
-        my_pid,
-        topology.nb_nodes,
-        topology.addresses.clone(),
-        Some(topology.faults.clone()),
-    )
-    .await;
+    let (consensus_msg_sinks, consensus_msg_streams) =
+        connect_all(my_pid, topology.nb_processes, topology.addresses.clone()).await;
     let (delayer, delayed_msg_rx) = Delayer::new();
     let delayer_task = tokio::task::spawn(delayer.run(
         topology.clone(),
@@ -153,7 +155,8 @@ pub async fn run() -> io::Result<()> {
     let start = Instant::now();
 
     let client_task = tokio::task::spawn(client.run(cassandra::Workload {
-        key_distribution: rand_distr::Zipf::new(args.keys as f64, args.skew).expect("Incorrect skew"),
+        key_distribution:
+            rand_distr::Zipf::new(args.keys as f64, args.skew).expect("Incorrect skew"),
         shards: args.shards.unwrap_or(args.keys),
         duration: args.duration,
         warmup: args.warmup,
@@ -167,7 +170,6 @@ pub async fn run() -> io::Result<()> {
                 reqs_per_second: args.throughput * args.speedup as f32,
             },
         },
-        faulty,
     }));
 
     match algo {
@@ -176,10 +178,12 @@ pub async fn run() -> io::Result<()> {
                 "Expected local latency (no-contention): {:?}",
                 propagation_graphs.kcensus_latencies[my_pid]
             );
-            let mut leader_prio: Vec<_> = (0..nb_nodes).collect();
+            let mut leader_prio: Vec<_> = (0..process_count).collect();
             leader_prio.sort_by_key(|pid| propagation_graphs.kcensus_latencies[*pid]);
             let mut consensus_obj = KCensus::new(
-                nb_nodes,
+                process_count,
+                topology.alive_replicas.len(),
+                &topology.alive_replicas,
                 my_pid,
                 consensus_msg_sinks,
                 leader_prio,
@@ -191,7 +195,7 @@ pub async fn run() -> io::Result<()> {
             let _ = tokio::join!(app.run(), consensus);
         }
         Algo::Paxos => {
-            let mut leader_prio: Vec<_> = (0..nb_nodes).collect();
+            let mut leader_prio: Vec<_> = topology.alive_replicas.iter().collect();
             leader_prio.sort_by_key(|pid| propagation_graphs.paxos_latencies[*pid]);
             let leader = leader_prio[0] == my_pid;
             println!(
@@ -199,10 +203,13 @@ pub async fn run() -> io::Result<()> {
                 propagation_graphs.paxos_latencies[my_pid] / if leader { 2 } else { 1 }
             );
             let mut consensus_obj = PaxosFamily::new(
-                nb_nodes,
+                process_count,
+                topology.nb_replicas,
+                &topology.alive_replicas,
                 my_pid,
                 consensus_msg_sinks,
                 leader_prio,
+                None,
                 Mode::Paxos,
                 args.keys,
             );
@@ -211,17 +218,20 @@ pub async fn run() -> io::Result<()> {
             let _ = tokio::join!(app.run(), consensus);
         }
         Algo::EPaxos => {
-            let mut leader_prio: Vec<_> = (0..nb_nodes).collect();
+            let mut leader_prio: Vec<_> = topology.alive_replicas.iter().collect();
             leader_prio.sort_by_key(|pid| propagation_graphs.epaxos_latencies[*pid]);
             println!(
                 "Expected local latency (no-contention): {:?}",
                 propagation_graphs.epaxos_latencies[my_pid]
             );
             let mut consensus_obj = PaxosFamily::new(
-                nb_nodes,
+                process_count,
+                topology.nb_replicas,
+                &topology.alive_replicas,
                 my_pid,
                 consensus_msg_sinks,
                 leader_prio,
+                None,
                 Mode::EPaxos,
                 args.keys,
             );
@@ -230,25 +240,33 @@ pub async fn run() -> io::Result<()> {
             let _ = tokio::join!(app.run(), consensus);
         }
         Algo::MultiPaxos | Algo::MultiPaxos3P => {
-            let is_3p = matches!(algo, Algo::MultiPaxos3P);
+            let is_3p = algo == Algo::MultiPaxos3P;
             let multi_paxos_latencies = if is_3p {
                 &propagation_graphs.multi_paxos_3p_latencies
             } else {
                 &propagation_graphs.multi_paxos_latencies
             };
-            let mut leader_prio: Vec<_> = (0..nb_nodes).collect();
+            let mut leader_prio: Vec<_> = topology.alive_replicas.iter().collect();
             leader_prio
                 .sort_by_cached_key(|pid| multi_paxos_latencies[*pid].iter().sum::<Duration>());
             let leader = leader_prio[0];
+            let committers = if is_3p {
+                Some(propagation_graphs.multi_paxos_3p_committers[leader].clone())
+            } else {
+                None
+            };
             println!(
                 "Expected local latency with leader {} (no-contention): {:?}",
                 leader, multi_paxos_latencies[leader][my_pid]
             );
             let mut consensus_obj = PaxosFamily::new(
-                nb_nodes,
+                process_count,
+                topology.nb_replicas,
+                &topology.alive_replicas,
                 my_pid,
                 consensus_msg_sinks,
                 leader_prio,
+                committers,
                 if is_3p {
                     Mode::MultiPaxos3P
                 } else {
@@ -267,7 +285,9 @@ pub async fn run() -> io::Result<()> {
                 let (rtt, quorum) = match algo {
                     Algo::NoReplication => {
                         // The leader is the node with the lowest median ping.
-                        let leader = (0..topology.nb_nodes)
+                        let leader = topology
+                            .alive_replicas
+                            .iter()
                             .min_by_key(|&potential_leader| {
                                 let mut rtts = propagation_graphs.rtts[potential_leader].clone();
                                 rtts.sort();
@@ -277,7 +297,7 @@ pub async fn run() -> io::Result<()> {
                         (propagation_graphs.rtts[leader][my_pid] / args.speedup, 1)
                     }
                     Algo::WeakReplication => {
-                        let mut rtts = propagation_graphs.path_rtts[my_pid].clone();
+                        let mut rtts = propagation_graphs.rtts[my_pid].clone();
                         rtts.sort();
                         (rtts[rtts.len() / 2] / args.speedup, rtts.len() / 2)
                     }
