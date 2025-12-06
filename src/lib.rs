@@ -347,14 +347,18 @@ pub async fn run() -> io::Result<()> {
                                     .serialize(&cmd)
                                     .expect("Local server failed to serialize command");
                                 read_buffer.resize(serialized.len(), 0);
-                                for _ in 0..1.max(quorum - 1) {
-                                    // No need to send to ourselves.
+
+                                // No need to send to ourselves.
+                                let msgs = quorum - topology.alive_replicas.contains(my_pid) as usize;
+                                for _ in 0..msgs {
                                     writer
                                         .write_all(&serialized)
                                         .await
                                         .expect("Local server failed to write command");
                                     network_stats.msg_count += 1;
                                     network_stats.byte_count += serialized.len();
+                                }
+                                for _ in 0..msgs {
                                     let read = reader
                                         .read(&mut read_buffer)
                                         .await
@@ -366,6 +370,8 @@ pub async fn run() -> io::Result<()> {
                                         .expect("Remote server failed to write reply");
                                     network_stats.msg_count += 1;
                                     network_stats.byte_count += serialized.len();
+                                }
+                                for _ in 0..msgs {
                                     let read = reader
                                         .read(&mut read_buffer)
                                         .await
