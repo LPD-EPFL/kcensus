@@ -3,6 +3,7 @@ use clap::Parser;
 use kcensus::consensus::kcensus::propagation::compute_propagation_graphs;
 use kcensus::eval;
 use kcensus::topology::Topology;
+use log::info;
 use serde::Serialize;
 use std::time::{Duration, Instant};
 
@@ -15,17 +16,17 @@ struct Args {
     non_voting: Vec<usize>,
     #[clap(short, long, default_value = "0")]
     fault_count: usize,
-    #[clap(long, default_value = "1000", short_alias = 'w')]
+    #[clap(long, default_value = "0", short_alias = 'w')]
     min_warmup: u32,
-    #[clap(short, long, default_value = "1000", short_alias = 's')]
+    #[clap(short, long, default_value = "1", short_alias = 's')]
     min_samples: u32,
 }
 
 fn main() {
     env_logger::init();
     let args = Args::parse();
-    let topology = Topology::from_path(&args.config, args.non_voting, None);
-    let nb_processes = topology.nb_processes;
+    let base_topology = Topology::from_path(&args.config, args.non_voting, None);
+    let nb_processes = base_topology.nb_processes;
     let mut faults = Vec::with_capacity(args.fault_count);
     let mut start = Instant::now();
     let mut count: u32 = 0;
@@ -36,12 +37,47 @@ fn main() {
             faults.clear();
             faults.extend(0..args.fault_count);
             loop {
-                let mut topology = topology.clone();
+                let mut topology = base_topology.clone();
                 topology
                     .alive_replicas
                     .difference_with(&BitSet::from_iter(faults.iter().copied()));
                 // println!("faults: {:?}", topology.faults);
-                let _ = compute_propagation_graphs(topology, true, true);
+                let graph = compute_propagation_graphs(topology, true, true);
+                let mut total_kcensus = Duration::ZERO;
+                let mut total_paxos = Duration::ZERO;
+                let mut total_epaxos = Duration::ZERO;
+                let mut total_mpaxos = Duration::ZERO;
+                let mut total_mpaxos_3p = Duration::ZERO;
+                for proposer in 0..nb_processes {
+                    let leader = graph.multi_paxos_leaders[0];
+                    let leader_3p = graph.multi_paxos_3p_leaders[0];
+                    let committer_3p = graph.multi_paxos_3p_committers[leader_3p][proposer];
+
+                    let kcensus = graph.kcensus_latencies[proposer];
+                    total_kcensus += kcensus;
+                    let paxos = graph.paxos_latencies[proposer];
+                    total_paxos += paxos;
+                    let epaxos = graph.epaxos_latencies[proposer];
+                    total_epaxos += epaxos;
+                    let mpaxos = graph.multi_paxos_latencies[leader][proposer];
+                    total_mpaxos += mpaxos;
+                    let mpaxos_3p = graph.multi_paxos_3p_latencies[leader_3p][proposer];
+                    total_mpaxos_3p += mpaxos_3p;
+                    info!("proposer {proposer} ({})", base_topology.regions[proposer],);
+                    info!(
+                        "  paxos: {paxos:?}, epaxos: {epaxos:?}, multi-paxos: {mpaxos:?}, multi-paxos-3p: {mpaxos_3p:?} (committer {committer_3p})"
+                    );
+                }
+                let to_avg_millis =
+                    |total: Duration| (total.as_nanos() as f64) / 10000000.0 / nb_processes as f64;
+                info!(
+                    "Averages: kcensus: {:.2}ms paxos: {:.2} epaxos: {:.2}ms multi-paxos: {:.2}ms multi-paxos-3p: {:.2}ms",
+                    to_avg_millis(total_kcensus),
+                    to_avg_millis(total_paxos),
+                    to_avg_millis(total_epaxos),
+                    to_avg_millis(total_mpaxos),
+                    to_avg_millis(total_mpaxos_3p),
+                );
                 count += 1;
                 if !next_combination(&mut faults, nb_processes) {
                     break;
