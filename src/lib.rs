@@ -121,6 +121,7 @@ pub async fn run() -> io::Result<()> {
             .iter()
             .all(|(address, _)| address == "localhost" || address == "127.0.0.1")
     });
+    let shards = args.shards.unwrap_or(args.keys);
 
     let epaxos_quorum = (topology.nb_replicas * 3) / 4;
     let algo = match args.algo {
@@ -155,14 +156,14 @@ pub async fn run() -> io::Result<()> {
     ));
 
     let ((client, mut new_client_request_rx), (app, committed_request_tx)) =
-        cassandra::App::new(args.db, args.speedup, my_pid, args.keys).await;
+        cassandra::App::new(args.db, args.speedup, my_pid, shards).await;
 
     let start = Instant::now();
 
     let client_task = tokio::task::spawn(client.run(cassandra::Workload {
         key_distribution:
             rand_distr::Zipf::new(args.keys as f64, args.skew).expect("Incorrect skew"),
-        shards: args.shards.unwrap_or(args.keys),
+        shards,
         duration: args.duration,
         warmup: args.warmup,
         warmdown: args.warmdown,
@@ -193,7 +194,7 @@ pub async fn run() -> io::Result<()> {
                 consensus_msg_sinks,
                 leader_prio,
                 propagation_graphs,
-                args.keys,
+                shards,
             );
             let consensus =
                 consensus_obj.run(delayed_msg_rx, new_client_request_rx, committed_request_tx);
@@ -216,7 +217,7 @@ pub async fn run() -> io::Result<()> {
                 leader_prio,
                 Some(committers),
                 Mode::Paxos,
-                args.keys,
+                shards,
             );
             let consensus =
                 consensus_obj.run(delayed_msg_rx, new_client_request_rx, committed_request_tx);
@@ -239,7 +240,7 @@ pub async fn run() -> io::Result<()> {
                 leader_prio,
                 Some(committers),
                 Mode::EPaxos,
-                args.keys,
+                shards,
             );
             let consensus =
                 consensus_obj.run(delayed_msg_rx, new_client_request_rx, committed_request_tx);
@@ -278,7 +279,7 @@ pub async fn run() -> io::Result<()> {
                 } else {
                     Mode::MultiPaxos
                 },
-                args.keys,
+                shards,
             );
             let consensus =
                 consensus_obj.run(delayed_msg_rx, new_client_request_rx, committed_request_tx);

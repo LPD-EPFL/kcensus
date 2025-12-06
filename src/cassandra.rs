@@ -304,7 +304,7 @@ impl Client {
         if rand::random_range(0. ..1.) < workload.rw_ratio {
             Command::new_write(
                 self.my_pid,
-                key,
+                key % workload.shards,
                 &Request::Put {
                     key: format!("key{key}"),
                     value: format!("v{}.{}!", self.my_pid, request_id),
@@ -315,7 +315,7 @@ impl Client {
         } else {
             Command::new_read_only(
                 self.my_pid,
-                key,
+                key % workload.shards,
                 &Request::Get {
                     key: format!("key{key}"),
                     shard: (key % workload.shards) as u64,
