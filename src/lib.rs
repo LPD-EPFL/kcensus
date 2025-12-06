@@ -295,18 +295,21 @@ pub async fn run() -> io::Result<()> {
                             .alive_replicas
                             .iter()
                             .min_by_key(|&potential_leader| {
-                                propagation_graphs.rtts[potential_leader]
+                                propagation_graphs.link_rtts[potential_leader]
                                     .iter()
                                     .sum::<Duration>()
                             })
                             .expect("There should be a leader");
-                        (propagation_graphs.rtts[leader][my_pid] / args.speedup, 1)
+                        (
+                            propagation_graphs.link_rtts[leader][my_pid] / args.speedup,
+                            1,
+                        )
                     }
                     Algo::WeakReplication => {
                         let mut rtts = topology
                             .alive_replicas
                             .iter()
-                            .map(|rep| propagation_graphs.rtts[my_pid][rep])
+                            .map(|rep| propagation_graphs.path_rtts[my_pid][rep])
                             .collect::<Vec<_>>();
                         rtts.sort();
                         (rtts[rtts.len() / 2] / args.speedup, rtts.len() / 2)

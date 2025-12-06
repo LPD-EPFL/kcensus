@@ -52,7 +52,8 @@ struct PropagationGraph {
 pub struct PropagationGraphs {
     graphs: Vec<PropagationGraph>,
     topology: Topology,
-    pub rtts: Vec<Vec<Duration>>,
+    pub link_rtts: Vec<Vec<Duration>>,
+    pub path_rtts: Vec<Vec<Duration>>,
     pub min_effort_latencies: Vec<Duration>,
     pub kcensus_latencies: Vec<Duration>,
     pub paxos_latencies: Vec<Duration>,
@@ -262,7 +263,15 @@ pub fn compute_propagation_graphs(
         }
     }
 
-    let rtts: Vec<Vec<_>> = (0..nb_processes)
+    let link_rtts: Vec<Vec<_>> = (0..nb_processes)
+        .map(|src| {
+            (0..nb_processes)
+                .map(|dest| topology.link_latency(src, dest) + topology.link_latency(dest, src))
+                .collect()
+        })
+        .collect();
+
+    let path_rtts: Vec<Vec<_>> = (0..nb_processes)
         .map(|src| {
             (0..nb_processes)
                 .map(|dest| path_latencies[src][dest] + path_latencies[dest][src])
@@ -313,7 +322,7 @@ pub fn compute_propagation_graphs(
         epaxos_committers[leader] = leader;
 
         let multi_paxos_latency = (0..nb_processes)
-            .map(|requester| rtts[requester][leader] + quorum_rtts[leader][maj_quorum - 1])
+            .map(|requester| link_rtts[requester][leader] + quorum_rtts[leader][maj_quorum - 1])
             .collect();
         multi_paxos_latencies[leader] = multi_paxos_latency;
 
@@ -344,12 +353,12 @@ pub fn compute_propagation_graphs(
             continue;
         }
         for leader in topology.alive_replicas.iter() {
-            let paxos_latency = rtts[proposer][leader] + paxos_latencies[leader];
+            let paxos_latency = link_rtts[proposer][leader] + paxos_latencies[leader];
             if paxos_latency < paxos_latencies[proposer] {
                 paxos_latencies[proposer] = paxos_latency;
                 paxos_committers[proposer] = leader;
             }
-            let epaxos_latency = rtts[proposer][leader] + epaxos_latencies[leader];
+            let epaxos_latency = link_rtts[proposer][leader] + epaxos_latencies[leader];
             if epaxos_latency < epaxos_latencies[proposer] {
                 epaxos_latencies[proposer] = epaxos_latency;
                 epaxos_committers[proposer] = leader;
@@ -983,7 +992,8 @@ pub fn compute_propagation_graphs(
     PropagationGraphs {
         graphs: propagation_graphs,
         topology,
-        rtts,
+        link_rtts,
+        path_rtts,
         min_effort_latencies,
         kcensus_latencies,
         paxos_latencies,
