@@ -373,7 +373,7 @@ impl Client {
         // Set initial delay for first request
         scheduled_time = workload.interval.next(&scheduled_time);
         delay.as_mut().reset(scheduled_time);
-        while Instant::now() < warmdown_end || responses_received != current_request_id {
+        while scheduled_time < warmdown_end || responses_received != current_request_id {
             let no_response = self.client_response_rx.is_empty();
             select! {
                 // Handle sending the next request when its time arrives
