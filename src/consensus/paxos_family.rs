@@ -183,7 +183,7 @@ impl ConsensusShardTrait for PaxosFamilyShard {
                 }
 
                 if self.round_state.paxos_can_commit() {
-                    if round.leader == self.my_pid {
+                    if round.leader == self.my_pid || self.get_committer(v) == Some(self.my_pid) {
                         self.broadcast_commit().await?;
                     }
                     info!("Commit via Paxos: v={v}");
