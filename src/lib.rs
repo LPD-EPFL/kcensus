@@ -288,7 +288,7 @@ pub async fn run() -> io::Result<()> {
             let latency_mock = async {
                 // For simplicity, requests will be executed locally after a ping delay.
                 // This is a lower bound as this consumes no network + compute is sharded.
-                let (rtt, quorum) = match algo {
+                let (rtt, messages_to_send) = match algo {
                     Algo::NoReplication => {
                         // The leader is the node with the lowest average ping.
                         let leader = topology
@@ -302,7 +302,7 @@ pub async fn run() -> io::Result<()> {
                             .expect("There should be a leader");
                         (
                             propagation_graphs.link_rtts[leader][my_pid] / args.speedup,
-                            1,
+                            (leader != my_pid) as usize,
                         )
                     }
                     Algo::WeakReplication => {
@@ -312,7 +312,9 @@ pub async fn run() -> io::Result<()> {
                             .map(|rep| propagation_graphs.path_rtts[my_pid][rep])
                             .collect::<Vec<_>>();
                         rtts.sort();
-                        (rtts[rtts.len() / 2] / args.speedup, rtts.len() / 2)
+                        let majority = 1 + (topology.nb_replicas / 2);
+                        let to_send = majority - topology.alive_replicas.contains(my_pid) as usize;
+                        (rtts[majority - 1] / args.speedup, to_send)
                     }
                     _ => unreachable!("Algo::(No|Weak)Replication"),
                 };
@@ -348,9 +350,7 @@ pub async fn run() -> io::Result<()> {
                                     .expect("Local server failed to serialize command");
                                 read_buffer.resize(serialized.len(), 0);
 
-                                // No need to send to ourselves.
-                                let msgs = quorum - topology.alive_replicas.contains(my_pid) as usize;
-                                for _ in 0..msgs {
+                                for _ in 0..messages_to_send {
                                     writer
                                         .write_all(&serialized)
                                         .await
@@ -358,7 +358,7 @@ pub async fn run() -> io::Result<()> {
                                     network_stats.msg_count += 1;
                                     network_stats.byte_count += serialized.len();
                                 }
-                                for _ in 0..msgs {
+                                for _ in 0..messages_to_send {
                                     let read = reader
                                         .read(&mut read_buffer)
                                         .await
@@ -371,7 +371,7 @@ pub async fn run() -> io::Result<()> {
                                     network_stats.msg_count += 1;
                                     network_stats.byte_count += serialized.len();
                                 }
-                                for _ in 0..msgs {
+                                for _ in 0..messages_to_send {
                                     let read = reader
                                         .read(&mut read_buffer)
                                         .await
