@@ -286,20 +286,24 @@ pub async fn run() -> io::Result<()> {
                 // This is a lower bound as this consumes no network + compute is sharded.
                 let (rtt, quorum) = match algo {
                     Algo::NoReplication => {
-                        // The leader is the node with the lowest median ping.
+                        // The leader is the node with the lowest average ping.
                         let leader = topology
                             .alive_replicas
                             .iter()
                             .min_by_key(|&potential_leader| {
-                                let mut rtts = propagation_graphs.rtts[potential_leader].clone();
-                                rtts.sort();
-                                rtts[rtts.len() / 2]
+                                propagation_graphs.rtts[potential_leader]
+                                    .iter()
+                                    .sum::<Duration>()
                             })
                             .expect("There should be a leader");
                         (propagation_graphs.rtts[leader][my_pid] / args.speedup, 1)
                     }
                     Algo::WeakReplication => {
-                        let mut rtts = propagation_graphs.rtts[my_pid].clone();
+                        let mut rtts = topology
+                            .alive_replicas
+                            .iter()
+                            .map(|rep| propagation_graphs.rtts[my_pid][rep])
+                            .collect::<Vec<_>>();
                         rtts.sort();
                         (rtts[rtts.len() / 2] / args.speedup, rtts.len() / 2)
                     }
