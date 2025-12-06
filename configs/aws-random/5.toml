@@ -1,8 +1,8 @@
-regions = ['Oregon (us-west-2)', 'Mexico (mx-central-1)', 'Jakarta (ap-southeast-3)', 'Thailand (ap-southeast-7)', 'Hong Kong (ap-east-1)']
+regions = ['Canada Central ca-central-1', 'Europe Paris eu-west-3', 'Middle East Bahrain me-south-1', 'Asia Pacific Thailand ap-southeast-7', 'Asia Pacific Seoul ap-northeast-2']
 raw_latencies = [
-    [0, 89.11, 176.86, 194.89, 144.81],
-    [90.06, 0, 251.7, 265.34, 208.99],
-    [176.33, 252.13, 0, 40.71, 51],
-    [194.32, 265.96, 41.51, 0, 63.73],
-    [144.92, 210.64, 51.87, 63.55, 0]
+  [0, 85.35, 168.39, 251.92, 183.59],
+  [85.32, 0, 90.48, 183.24, 254.52],
+  [167.8, 90.21, 0, 118.21, 163.08],
+  [252.77, 183.16, 118.14, 0, 97.06],
+  [183.84, 251.05, 163.5, 98.28, 0]
 ]
