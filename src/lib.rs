@@ -199,11 +199,11 @@ pub async fn run() -> io::Result<()> {
         Algo::Paxos => {
             let mut leader_prio: Vec<_> = topology.alive_replicas.iter().collect();
             leader_prio.sort_by_key(|pid| propagation_graphs.paxos_latencies[*pid]);
-            let leader = leader_prio[0] == my_pid;
             println!(
                 "Expected local latency (no-contention): {:?}",
-                propagation_graphs.paxos_latencies[my_pid] / if leader { 2 } else { 1 }
+                propagation_graphs.paxos_latencies[my_pid]
             );
+            let committers = propagation_graphs.paxos_committers;
             let mut consensus_obj = PaxosFamily::new(
                 process_count,
                 topology.nb_replicas,
@@ -211,7 +211,7 @@ pub async fn run() -> io::Result<()> {
                 my_pid,
                 consensus_msg_sinks,
                 leader_prio,
-                None,
+                Some(committers),
                 Mode::Paxos,
                 args.keys,
             );
@@ -226,6 +226,7 @@ pub async fn run() -> io::Result<()> {
                 "Expected local latency (no-contention): {:?}",
                 propagation_graphs.epaxos_latencies[my_pid]
             );
+            let committers = propagation_graphs.epaxos_committers;
             let mut consensus_obj = PaxosFamily::new(
                 process_count,
                 topology.nb_replicas,
@@ -233,7 +234,7 @@ pub async fn run() -> io::Result<()> {
                 my_pid,
                 consensus_msg_sinks,
                 leader_prio,
-                None,
+                Some(committers),
                 Mode::EPaxos,
                 args.keys,
             );

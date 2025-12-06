@@ -254,13 +254,10 @@ impl ConsensusShardTrait for PaxosFamilyShard {
                 .copied()
                 .find(|leader| {
                     self.alive_replicas.contains(*leader)
-                        && self.queued_commands.values().any(|value| {
-                            if let CommandBatch::Single(cmd) = value {
-                                cmd.requester == *leader
-                            } else {
-                                false
-                            }
-                        })
+                        && self
+                            .queued_commands
+                            .keys()
+                            .any(|v| self.get_committer(*v) == Some(*leader))
                 })
                 .unwrap_or(self.leader_priority[0])
         };
