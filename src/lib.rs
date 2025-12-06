@@ -93,7 +93,7 @@ enum Ingress {
     Constant,
 }
 
-pub async fn run() -> io::Result<()> {
+pub fn init_logger() {
     env_logger::builder()
         .format(|buf, record| {
             let time = Utc::now();
@@ -108,7 +108,10 @@ pub async fn run() -> io::Result<()> {
             )
         })
         .init();
+}
 
+pub async fn run() -> io::Result<()> {
+    init_logger();
     let args = Args::parse();
     let my_pid = args.pid;
     let topology = Topology::from_path(&args.config, args.non_voting, Some(args.faults));

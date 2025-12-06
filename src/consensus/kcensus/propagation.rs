@@ -53,6 +53,7 @@ pub struct PropagationGraphs {
     graphs: Vec<PropagationGraph>,
     topology: Topology,
     pub rtts: Vec<Vec<Duration>>,
+    pub min_effort_latencies: Vec<Duration>,
     pub kcensus_latencies: Vec<Duration>,
     pub paxos_latencies: Vec<Duration>,
     pub paxos_committers: Vec<ProcId>,
@@ -293,6 +294,7 @@ pub fn compute_propagation_graphs(
         .map(|(src, quorum_3p_rtts_for_dest)| &quorum_3p_rtts_for_dest[src])
         .collect();
 
+    let mut min_effort_latencies = vec![Duration::MAX; nb_processes];
     let mut paxos_latencies = vec![Duration::MAX; nb_processes];
     let mut paxos_committers = vec![0usize; nb_processes];
     let mut epaxos_latencies = vec![Duration::MAX; nb_processes];
@@ -337,6 +339,7 @@ pub fn compute_propagation_graphs(
 
     // Compute latency of paxos/epaxos for non-replica processes
     for proposer in 0..nb_processes {
+        min_effort_latencies[proposer] = quorum_rtts[proposer][min_quorum - 1];
         if topology.alive_replicas.contains(proposer) {
             continue;
         }
@@ -981,6 +984,7 @@ pub fn compute_propagation_graphs(
         graphs: propagation_graphs,
         topology,
         rtts,
+        min_effort_latencies,
         kcensus_latencies,
         paxos_latencies,
         paxos_committers,

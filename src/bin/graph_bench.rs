@@ -1,8 +1,8 @@
 use bit_set::BitSet;
 use clap::Parser;
 use kcensus::consensus::kcensus::propagation::compute_propagation_graphs;
-use kcensus::eval;
 use kcensus::topology::Topology;
+use kcensus::{eval, init_logger};
 use log::info;
 use serde::Serialize;
 use std::time::{Duration, Instant};
@@ -23,7 +23,7 @@ struct Args {
 }
 
 fn main() {
-    env_logger::init();
+    init_logger();
     let args = Args::parse();
     let base_topology = Topology::from_path(&args.config, args.non_voting, None);
     let nb_processes = base_topology.nb_processes;
@@ -43,40 +43,35 @@ fn main() {
                     .difference_with(&BitSet::from_iter(faults.iter().copied()));
                 // println!("faults: {:?}", topology.faults);
                 let graph = compute_propagation_graphs(topology, true, true);
-                let mut total_kcensus = Duration::ZERO;
-                let mut total_paxos = Duration::ZERO;
-                let mut total_epaxos = Duration::ZERO;
-                let mut total_mpaxos = Duration::ZERO;
-                let mut total_mpaxos_3p = Duration::ZERO;
-                for proposer in 0..nb_processes {
-                    let leader = graph.multi_paxos_leaders[0];
-                    let leader_3p = graph.multi_paxos_3p_leaders[0];
-                    let committer_3p = graph.multi_paxos_3p_committers[leader_3p][proposer];
 
+                let leader = graph.multi_paxos_leaders[0];
+                let leader_3p = graph.multi_paxos_3p_leaders[0];
+                for proposer in 0..nb_processes {
+                    let min_effort = graph.min_effort_latencies[proposer];
                     let kcensus = graph.kcensus_latencies[proposer];
-                    total_kcensus += kcensus;
                     let paxos = graph.paxos_latencies[proposer];
-                    total_paxos += paxos;
                     let epaxos = graph.epaxos_latencies[proposer];
-                    total_epaxos += epaxos;
                     let mpaxos = graph.multi_paxos_latencies[leader][proposer];
-                    total_mpaxos += mpaxos;
                     let mpaxos_3p = graph.multi_paxos_3p_latencies[leader_3p][proposer];
-                    total_mpaxos_3p += mpaxos_3p;
+                    let committer_3p = graph.multi_paxos_3p_committers[leader_3p][proposer];
                     info!("proposer {proposer} ({})", base_topology.regions[proposer],);
                     info!(
-                        "  paxos: {paxos:?}, epaxos: {epaxos:?}, multi-paxos: {mpaxos:?}, multi-paxos-3p: {mpaxos_3p:?} (committer {committer_3p})"
+                        "  min-effort: {min_effort:?}, kcensus: {kcensus:?}, paxos: {paxos:?}, epaxos: {epaxos:?}, multi-paxos: {mpaxos:?}, multi-paxos-3p: {mpaxos_3p:?} (committer {committer_3p})"
                     );
                 }
-                let to_avg_millis =
-                    |total: Duration| (total.as_nanos() as f64) / 10000000.0 / nb_processes as f64;
+
+                let avg_millis = |durations: &[Duration]| {
+                    1_000.0 * durations.iter().sum::<Duration>().as_secs_f64()
+                        / durations.len() as f64
+                };
                 info!(
-                    "Averages: kcensus: {:.2}ms paxos: {:.2} epaxos: {:.2}ms multi-paxos: {:.2}ms multi-paxos-3p: {:.2}ms",
-                    to_avg_millis(total_kcensus),
-                    to_avg_millis(total_paxos),
-                    to_avg_millis(total_epaxos),
-                    to_avg_millis(total_mpaxos),
-                    to_avg_millis(total_mpaxos_3p),
+                    "Averages: min-effort: {:.2}ms kcensus: {:.2}ms paxos: {:.2} epaxos: {:.2}ms multi-paxos: {:.2}ms multi-paxos-3p: {:.2}ms",
+                    avg_millis(&graph.min_effort_latencies),
+                    avg_millis(&graph.kcensus_latencies),
+                    avg_millis(&graph.paxos_latencies),
+                    avg_millis(&graph.epaxos_latencies),
+                    avg_millis(&graph.multi_paxos_latencies[leader]),
+                    avg_millis(&graph.multi_paxos_3p_latencies[leader]),
                 );
                 count += 1;
                 if !next_combination(&mut faults, nb_processes) {
