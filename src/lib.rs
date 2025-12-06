@@ -1,4 +1,5 @@
 use crate::connector::connect_all;
+use crate::consensus::command::Command;
 use crate::consensus::kcensus::propagation::compute_propagation_graphs;
 use crate::consensus::kcensus::KCensus;
 use crate::consensus::paxos_family::{Mode, PaxosFamily};
@@ -9,6 +10,7 @@ use chrono::prelude::*;
 use clap::{arg, Parser};
 use env_logger::fmt::style;
 use log::debug;
+use std::collections::VecDeque;
 use std::io;
 use std::io::Write;
 use std::time::{Duration, Instant};
@@ -316,49 +318,75 @@ pub async fn run() -> io::Result<()> {
                 let (mut reader, _addr) = listener.accept().await.unwrap();
                 let mut read_buffer = vec![];
 
-                while let Some(command) = new_client_request_rx.recv().await {
-                    if rtt.is_zero() {
-                        committed_request_tx
-                            .send(command)
-                            .await
-                            .expect("Unreplicated server failed to send committed request");
-                        continue;
-                    } // Purely local operation
-                    let serialized = serializer
-                        .serialize(&command)
-                        .expect("Local server failed to serialize command");
-                    read_buffer.resize(serialized.len(), 0);
-                    for _ in 0..1.max(quorum - 1) {
-                        // No need to send to ourselves.
-                        writer
-                            .write_all(&serialized)
-                            .await
-                            .expect("Local server failed to write command");
-                        network_stats.msg_count += 1;
-                        network_stats.byte_count += serialized.len();
-                        let read = reader
-                            .read(&mut read_buffer)
-                            .await
-                            .expect("Remote server failed to read command");
-                        assert_eq!(read, serialized.len(), "Read a partial command.");
-                        writer
-                            .write_all(&serialized)
-                            .await
-                            .expect("Remote server failed to write reply");
-                        network_stats.msg_count += 1;
-                        network_stats.byte_count += serialized.len();
-                        let read = reader
-                            .read(&mut read_buffer)
-                            .await
-                            .expect("Local server failed to read reply");
-                        assert_eq!(read, serialized.len(), "Read a partial reply.");
+                let mut queue: VecDeque<(Command, Instant)> = VecDeque::new();
+                let timer = tokio_timerfd::sleep(Duration::ZERO);
+                tokio::pin!(timer);
+                loop {
+                    tokio::select! {
+                        maybe_cmd = new_client_request_rx.recv() => {
+                            if let Some(cmd) = maybe_cmd {
+                                if rtt.is_zero() {
+                                    committed_request_tx
+                                        .send(cmd)
+                                        .await
+                                        .expect("Unreplicated server failed to send committed request");
+                                    continue;
+                                } // Purely local operation
+                                let serialized = serializer
+                                    .serialize(&cmd)
+                                    .expect("Local server failed to serialize command");
+                                read_buffer.resize(serialized.len(), 0);
+                                for _ in 0..1.max(quorum - 1) {
+                                    // No need to send to ourselves.
+                                    writer
+                                        .write_all(&serialized)
+                                        .await
+                                        .expect("Local server failed to write command");
+                                    network_stats.msg_count += 1;
+                                    network_stats.byte_count += serialized.len();
+                                    let read = reader
+                                        .read(&mut read_buffer)
+                                        .await
+                                        .expect("Remote server failed to read command");
+                                    assert_eq!(read, serialized.len(), "Read a partial command.");
+                                    writer
+                                        .write_all(&serialized)
+                                        .await
+                                        .expect("Remote server failed to write reply");
+                                    network_stats.msg_count += 1;
+                                    network_stats.byte_count += serialized.len();
+                                    let read = reader
+                                        .read(&mut read_buffer)
+                                        .await
+                                        .expect("Local server failed to read reply");
+                                    assert_eq!(read, serialized.len(), "Read a partial reply.");
+                                }
+                                let completes_at = Instant::now() + rtt;
+                                queue.push_back((cmd, completes_at));
+                                timer.as_mut().reset(queue.front().unwrap().1);
+                            } else { // The client is done, exit.
+                                break;
+                            }
+                        }
+                        _ = &mut timer, if !queue.is_empty() => {
+                            let now = Instant::now();
+                            // Complete all commands whose timer has expired
+                            while let Some((_, completes_at)) = queue.front() {
+                                if *completes_at <= now {
+                                    let (cmd, _) = queue.pop_front().unwrap();
+                                    committed_request_tx.send(cmd).await.expect(
+                                        "Unreplicated or weakly replicated server failed to send committed request",
+                                    );
+                                } else {
+                                    break;
+                                }
+                            }
+                            // Reset the timer for the next command in the queue
+                            if let Some((_, next_completion)) = queue.front() {
+                                timer.as_mut().reset(*next_completion);
+                            }
+                        }
                     }
-                    tokio_timerfd::sleep(rtt)
-                        .await
-                        .expect("Unreplicated or weakly replicated server failed to sleep");
-                    committed_request_tx.send(command).await.expect(
-                        "Unreplicated or weakly replicated server failed to send committed request",
-                    );
                 }
                 eval::log(
                     "network-done",

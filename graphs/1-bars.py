@@ -26,20 +26,27 @@ delta_ys_bottom = []
 labels = []
 colors = []
 for i, experiment in enumerate(ALGORITHMS.keys()):
-    logs = parse(algo=experiment, config=args.config, writes=args.writes, requests=args.requests, ingress=args.ingress,
+    logs = parse(algo=experiment, config=args.config, writes=args.writes, duration=args.duration, ingress=args.ingress,
                  throughput=args.throughput, speedup=args.speedup, faults=args.faults)
-    average = compute_average(logs['executed'], lambda log: duration_to_ms(log['latency']))
-    percentiles = compute_percentiles(logs['executed'], lambda log: duration_to_ms(log['latency']))
+    all_executed = []
+    for pid_executed in logs["executed"].values():
+        all_executed.extend(pid_executed)
+    average = compute_average(all_executed, lambda log: duration_to_ms(log['latency']))
+    replica_averages = compute_replica_averages(
+        logs["executed"], lambda log: duration_to_ms(log["latency"])
+    )
+    min_replica_avg = min(replica_averages) if replica_averages else average
+    max_replica_avg = max(replica_averages) if replica_averages else average
     MOUSTACHES = (5, 95)
-    print(experiment, average, (percentiles[MOUSTACHES[0]], percentiles[MOUSTACHES[1]]))
+    print(experiment, average, (max_replica_avg, min_replica_avg))
     xs.append(i)
     ys.append(average)
-    delta_ys_top.append(percentiles[MOUSTACHES[1]] - average)
-    delta_ys_bottom.append(average - percentiles[MOUSTACHES[0]])
+    delta_ys_top.append(max_replica_avg - average)
+    delta_ys_bottom.append(average - min_replica_avg)
 
     labels.append(ALGORITHMS[experiment]['label'].replace(' ', '\n').replace('-', '-\n'))
     colors.append(ALGORITHMS[experiment]['color'])
-    text_y = percentiles[MOUSTACHES[1]]  # average / 2
+    text_y = max_replica_avg  # average / 2
     plot.text(i, text_y, f'{round(average)}\N{thin space}ms', horizontalalignment='center',
               verticalalignment='bottom')
 

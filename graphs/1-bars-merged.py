@@ -5,15 +5,18 @@ from common import ALGORITHMS, args
 from logparser import *
 from prelude import lighten_color, plt
 
-# python3 1-bars.py -c=aws-world-ring-13.toml -w=1 -r=100 -i=round-robin -t=0
-# python3 1-bars.py -c=aws-north-america-7.toml -w=1 -r=100 -i=round-robin -t=0
-# python3 1-bars.py -c=aws-europe-7-alt.toml -w=1 -r=100 -i=round-robin -t=0
+# python3 1-bars.py -c=aws-world-ring-13.toml -w=1
+# python3 1-bars.py -c=aws-north-america-7.toml -w=1
+# python3 1-bars.py -c=aws-europe-7-alt.toml -w=1
 writes = 1.0
-requests = 100
-ingress = "round-robin"
-throughput = 0.0
+duration = "10s"
+ingress = "exponential"
+throughput = 10.0
 speedup = 1
 faults = ""
+keys = 100
+skew = 0.0
+shards = 100
 
 fig, subplots = plt.subplots(3, 1, figsize=(3.26, 2.3), tight_layout=True)
 plt.tight_layout(pad=0, w_pad=0, h_pad=0)  # , rect=(0,0,.80,1))
@@ -62,11 +65,14 @@ for c in range(3):
             algo=experiment,
             config=config,
             writes=writes,
-            requests=requests,
+            duration=duration,
             ingress=ingress,
             throughput=throughput,
             speedup=speedup,
             faults=faults,
+            keys=keys,
+            skew=skew,
+            shards=shards,
         )
 
         all_executed = []

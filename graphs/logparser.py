@@ -10,11 +10,14 @@ def parse(
     config="aws-europe-7.toml",
     algo="kcensus",
     writes=0.5,
-    requests=100,
-    ingress="round-robin",
-    throughput=0,
+    duration="10s",
+    ingress="exponential",
+    throughput=10,
     speedup=1,
     faults="",
+    keys=100,
+    skew=0,
+    shards=100,
     std="out",
     stop_at=0,  # 0 means take all requests
 ):
@@ -23,7 +26,7 @@ def parse(
         pids = list(range(num_replicas))
     output = defaultdict(lambda: defaultdict(list))
     for pid in pids:
-        file_path = f"{LOG_DIR}/c={config}/a={algo}/w={writes:g}/r={requests}/i={ingress}/t={throughput:g}/s={speedup}/f={faults}/{pid}.std{std}"
+        file_path = f"{LOG_DIR}/c={config}/a={algo}/w={writes:g}/d={duration}/i={ingress}/t={throughput:g}/s={speedup}/f={faults}/k={keys}/skew={skew:g}/shards={shards}/{pid}.std{std}"
         with open(file_path) as file:
             for key, items in parse_file(file).items():
                 if stop_at:

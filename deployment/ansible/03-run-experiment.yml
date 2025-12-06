@@ -6,11 +6,14 @@
     # default values: will always be overriden
     algo: "kcensus"
     writes: "1"
-    requests: "100"
-    ingress: "round-robin"
-    throughput: "0"
+    duration: "10s"
+    ingress: "exponential"
+    throughput: "10"
     speedup: "1"
     faults: ""
+    keys: "100"
+    skew: "0"
+    shards: "100"
     result_path: "./results_default"
 
   tasks:
@@ -27,10 +30,13 @@
           -d 127.0.0.1:{{ cassandra_port }}
           -a "{{ algo }}"
           -w "{{ writes }}"
-          -r "{{ requests }}"
+          --duration "{{ duration }}"
           -i "{{ ingress }}"
           -t "{{ throughput }}"
           -s "{{ speedup }}"
+          -k "{{ keys }}"
+          --skew "{{ skew }}"
+          --shards "{{ shards }}"
           {{ "-f " + faults if faults else "" }}
         chdir: /home/ec2-user/kcensus_app
       register: job_result

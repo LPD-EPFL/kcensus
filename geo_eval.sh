@@ -6,8 +6,12 @@ BASE_LOG_DIR="./logs"
 REPLICATED_ALGOS=(kcensus epaxos multi-paxos paxos weak-replication)
 ALGOS=(no-replication "${REPLICATED_ALGOS[@]}")
 YCSB=(1 0.5 0.05)
-REQUESTS=100
+DURATION=10s
+THROUGHPUT=10
 SPEEDUP=1
+KEYS=100
+SKEW=0
+SHARDS=100
 
 declare -A CONFIGS
 CONFIGS["aws-europe-7"]="deployment/terraform/regions/europe-7.tfvars"
@@ -89,13 +93,16 @@ function run() {
   local configName="$2"
   local algo="$3"
   local writes="$4"
-  local requests="$5"
+  local duration="$5"
   local ingress="$6"
   local throughput="$7"
   local faults="${8:-}"
+  local keys="${9:-${KEYS}}"
+  local skew="${10:-${SKEW}}"
+  local shards="${11:-${SHARDS}}"
 
   local inventoryFile="inventory-${expId}.ini"
-  local title="c=${configName}/a=${algo}/w=${writes}/r=${requests}/i=${ingress}/t=${throughput}/s=${SPEEDUP}/f=${faults}"
+  local title="c=${configName}/a=${algo}/w=${writes}/d=${duration}/i=${ingress}/t=${throughput}/s=${SPEEDUP}/f=${faults}/k=${keys}/skew=${skew}/shards=${shards}"
   local resultPath="${ABSOLUTE_BASE_LOG_DIR}/${title}"
   mkdir -p "${resultPath}"
 
@@ -106,11 +113,14 @@ function run() {
     ansible-playbook -i "${inventoryFile}" 03-run-experiment.yml \
       -e "algo=${algo}" \
       -e "writes=${writes}" \
-      -e "requests=${requests}" \
+      -e "duration=${duration}" \
       -e "ingress=${ingress}" \
       -e "throughput=${throughput}" \
       -e "speedup=${SPEEDUP}" \
       -e "faults=${faults}" \
+      -e "keys=${keys}" \
+      -e "skew=${skew}" \
+      -e "shards=${shards}" \
       -e "result_path=${resultPath}"
   )
   echo "--> COMPLETED. Logs are in ${resultPath}"
@@ -205,7 +215,7 @@ function exp-1() {
 
     for writes in 1; do
       for algo in "${ALGOS[@]}"; do
-        run "$EXPERIMENT_ID" "$configName" "$algo" "$writes" "$REQUESTS" "round-robin" 0
+        run "$EXPERIMENT_ID" "$configName" "$algo" "$writes" "$DURATION" "exponential" "$THROUGHPUT"
       done
     done
 
@@ -226,12 +236,12 @@ function exp-2() {
   provision "$varFile" "$EXPERIMENT_ID"
   deploy "$EXPERIMENT_ID"
 
-  local LOADS=(0.1 0.2) # req/s per client
+  local LOADS=(100 500) # req/s per client
 
   for writes in 1; do
       for load in "${LOADS[@]}"; do
         for algo in "${ALGOS[@]}"; do
-          run "$EXPERIMENT_ID" "$configName" "$algo" "$writes" "$REQUESTS" "exponential" "$load"
+          run "$EXPERIMENT_ID" "$configName" "$algo" "$writes" "$DURATION" "exponential" "$load"
         done
       done
   done
@@ -253,11 +263,12 @@ function exp-4() {
   deploy "$EXPERIMENT_ID"
 
   local writes=1
-  local requests=10
+  local duration="1s"
+  local throughput=10
 
   for algo in "${REPLICATED_ALGOS[@]}"; do
     for faults in "" $(all_faults "$(digits "$configName")"); do
-      run "$EXPERIMENT_ID" "$configName" "$algo" $writes $requests round-robin 0 "$faults"
+      run "$EXPERIMENT_ID" "$configName" "$algo" $writes $duration exponential $throughput "$faults"
     done
   done
 
@@ -289,7 +300,8 @@ function exp-3-5() {
   echo "--> Master config created at ${masterConfigFile}"
 
   # step 3: run stuff
-  local requests=10
+  local duration="1s"
+  local throughput=10
   for configs_type in aws-random aws-from-paris; do
     for num_replicas in $(seq 3 2 31); do
       local configName="${configs_type}-${num_replicas}"
@@ -317,7 +329,7 @@ function exp-3-5() {
       # step 3.3: run the scalability experiments
       for writes in 1; do
         for algo in "${ALGOS[@]}"; do
-            run_title="c=${configs_type}/${num_replicas}.toml/a=${algo}/w=${writes}/r=${requests}/i=round-robin/t=0/s=${SPEEDUP}/f="
+            run_title="c=${configs_type}/${num_replicas}.toml/a=${algo}/w=${writes}/d=${duration}/i=exponential/t=${throughput}/s=${SPEEDUP}/f=/k=${KEYS}/skew=${SKEW}/shards=${SHARDS}"
             resultPath="${ABSOLUTE_BASE_LOG_DIR}/${run_title}"
             mkdir -p "$resultPath"
             
@@ -325,8 +337,9 @@ function exp-3-5() {
             (
               cd deployment/ansible
               ansible-playbook -i "${subInventoryFile}" 03-run-experiment.yml \
-                -e "algo=${algo}" -e "writes=${writes}" -e "requests=${requests}" \
-                -e "ingress=round-robin" -e "throughput=0" -e "speedup=${SPEEDUP}" \
+                -e "algo=${algo}" -e "writes=${writes}" -e "duration=${duration}" \
+                -e "ingress=exponential" -e "throughput=${throughput}" -e "speedup=${SPEEDUP}" \
+                -e "keys=${KEYS}" -e "skew=${SKEW}" -e "shards=${SHARDS}" \
                 -e "result_path=${resultPath}" -e "sub_config_file=${subConfigFile}"
             )
         done
@@ -401,7 +414,7 @@ function main() {
   fi
 
   init_environment
-  # build_binaries
+  build_binaries
 
   local command="$1"
   shift
