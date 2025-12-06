@@ -1,0 +1,12 @@
+regions = ['Asia Pacific Singapore ap-southeast-1', 'Asia Pacific Jakarta ap-southeast-3', 'Asia Pacific Thailand ap-southeast-7', 'Asia Pacific Malaysia ap-southeast-5', 'Asia Pacific Osaka ap-northeast-3', 'Asia Pacific Seoul ap-northeast-2', 'Asia Pacific Tokyo ap-northeast-1', 'Asia Pacific Hong Kong ap-east-1', 'Asia Pacific Taipei ap-east-2']
+raw_latencies = [
+  [0, 16.66, 27.07, 6.49, 75.3, 70.13, 67.55, 37.1, 50.24],
+  [16.74, 0, 43.21, 22.08, 89.98, 86.56, 82.61, 51.63, 65.58],
+  [26.2, 42.94, 0, 21.69, 101.68, 97.06, 94.86, 62.25, 77.09],
+  [6.45, 21.7, 21.63, 0, 81.03, 76.02, 72.9, 41.33, 56.23],
+  [75.26, 89.6, 101.86, 81.4, 0, 29.15, 8.25, 49.29, 30.57],
+  [70.57, 86.64, 98.28, 75.78, 29.5, 0, 34.84, 37.34, 60.88],
+  [67.65, 81.52, 94.36, 73, 8.51, 34.73, 0, 50.41, 38.76],
+  [34.98, 51.11, 62.71, 43.04, 48.23, 37.17, 50.64, 0, 15.46],
+  [49.97, 66.03, 76.71, 56.34, 30.76, 60.57, 45.64, 15.8, 0]
+]

@@ -1,8 +1,8 @@
-regions = ['Paris (eu-west-3)', 'London (eu-west-2)', 'Ireland (eu-west-1)', 'Zurich (eu-central-2)', 'Frankfurt (eu-central-1)']
+regions = ['Europe Paris eu-west-3', 'Europe London eu-west-2', 'Europe Spain eu-south-2', 'Europe Zurich eu-central-2', 'Europe Frankfurt eu-central-1']
 raw_latencies = [
-    [0, 9.02, 18.53, 10.11, 10.56],
-    [9.13, 0, 10.79, 17.2, 16.93],
-    [18.53, 11.4, 0, 26.88, 26.67],
-    [10.03, 17.39, 26.96, 0, 14.74],
-    [10.58, 16.59, 26.19, 14.61, 0]
+  [0, 6.81, 14.43, 10.16, 8.05],
+  [6.87, 0, 20.88, 17.62, 12.48],
+  [14.26, 20.59, 0, 30.13, 34.04],
+  [9.96, 17.73, 30.73, 0, 7.37],
+  [8.14, 12.42, 37.61, 7.34, 0]
 ]
