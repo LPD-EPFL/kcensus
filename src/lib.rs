@@ -241,20 +241,20 @@ pub async fn run() -> io::Result<()> {
         }
         Algo::MultiPaxos | Algo::MultiPaxos3P => {
             let is_3p = algo == Algo::MultiPaxos3P;
-            let multi_paxos_latencies = if is_3p {
-                &propagation_graphs.multi_paxos_3p_latencies
+            let (multi_paxos_latencies, leader_prio) = if is_3p {
+                (
+                    &propagation_graphs.multi_paxos_3p_latencies,
+                    propagation_graphs.multi_paxos_3p_leaders.clone(),
+                )
             } else {
-                &propagation_graphs.multi_paxos_latencies
+                (
+                    &propagation_graphs.multi_paxos_latencies,
+                    propagation_graphs.multi_paxos_leaders.clone(),
+                )
             };
-            let mut leader_prio: Vec<_> = topology.alive_replicas.iter().collect();
-            leader_prio
-                .sort_by_cached_key(|pid| multi_paxos_latencies[*pid].iter().sum::<Duration>());
             let leader = leader_prio[0];
-            let committers = if is_3p {
-                Some(propagation_graphs.multi_paxos_3p_committers[leader].clone())
-            } else {
-                None
-            };
+            let committers = Some(propagation_graphs.multi_paxos_3p_committers[leader].clone())
+                .take_if(|_| is_3p);
             println!(
                 "Expected local latency with leader {} (no-contention): {:?}",
                 leader, multi_paxos_latencies[leader][my_pid]

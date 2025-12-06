@@ -1,7 +1,7 @@
 use crate::consensus::kcensus::node_state::Knowledge;
 use crate::topology::{Topology, FAULTY_LATENCY};
 use bit_set::BitSet;
-use log::trace;
+use log::{debug, info, trace};
 use petgraph::algo::bellman_ford;
 use petgraph::matrix_graph::DiMatrix;
 use serde::{Deserialize, Serialize};
@@ -57,8 +57,10 @@ pub struct PropagationGraphs {
     pub paxos_latencies: Vec<Duration>,
     pub epaxos_latencies: Vec<Duration>,
     pub multi_paxos_latencies: Vec<Vec<Duration>>,
+    pub multi_paxos_leaders: Vec<usize>,
     pub multi_paxos_3p_latencies: Vec<Vec<Duration>>,
     pub multi_paxos_3p_committers: Vec<Vec<ProcId>>,
+    pub multi_paxos_3p_leaders: Vec<usize>,
 }
 
 impl PropagationGraphs {
@@ -368,8 +370,6 @@ pub fn compute_propagation_graphs(
             vec![Vec::with_capacity(nb_processes); nb_processes];
 
         for proposer in 0..nb_processes {
-            trace!("proposer: {proposer}");
-
             // Compute shortest round-trip paths.
             // Used to ensure the value is sent to everyone (not for knowledge spreading).
             // TODO: don't actually send the values to non-replicas
@@ -405,11 +405,6 @@ pub fn compute_propagation_graphs(
                     }
                 }
                 triangular_paths[proposer][leader].sort_by_key(triangle_latency);
-                // trace!("triangular_paths: {}", triangular_paths.len());
-                trace!(
-                    "  - longest triangular path (leader: {leader}): {}",
-                    triangular_paths[proposer][leader].last().unwrap()
-                );
 
                 // TODO: maybe double-check if this max_lat is good if we start playing with quorums
                 let min_lat = quorum_3p_rtts[proposer][leader][min_quorum - 1];
@@ -659,21 +654,13 @@ pub fn compute_propagation_graphs(
 
             // Trace for debugging
             if proposer == leader {
-                trace!("proposer {proposer} ({}):", topology.regions[proposer]);
+                info!("proposer {proposer} ({}):", topology.regions[proposer]);
             } else {
-                trace!(
+                info!(
                     "proposer {proposer} ({}) with leader {leader}:",
                     topology.regions[proposer]
                 );
             }
-            trace!(
-                "Left after truncate: {} real triangles, {} total",
-                triangular_paths
-                    .iter()
-                    .filter(|x| proposer != x.first && x.first != x.second && x.second != leader)
-                    .count(),
-                triangular_paths.len()
-            );
             let mut min_proposer_latency = Duration::MAX;
             let mut max_proposer_latency = Duration::MAX;
             for leader in topology.alive_replicas.iter() {
@@ -687,14 +674,28 @@ pub fn compute_propagation_graphs(
                     max_proposer_latency = lat;
                 }
             }
-            trace!(
-                "levels: min: {min_proposer_latency:?}, max: {max_proposer_latency:?}, best: {proposer_latency:?} ({:.4}x min, {:.1}% min-max)",
+            info!(
+                "  levels best ({} / {}): {proposer_latency:?} ({:.4}x min, {:.1}% min-max) min: {min_proposer_latency:?}, max: {max_proposer_latency:?}",
+                best.levels[proposer],
+                knowledge_levels.len(),
                 proposer_latency.as_secs_f64() / min_proposer_latency.as_secs_f64(),
                 100.0 * (proposer_latency - min_proposer_latency).as_secs_f64()
                     / (max_proposer_latency - min_proposer_latency).as_secs_f64()
             );
-            trace!("quorum size: {}", best_level.k[leader].len());
-            trace!("longest path: {}", triangular_paths[triangle_count - 1]);
+            debug!(
+                "  quorum size: {}, required knowledge: {:?}",
+                best_level.k[leader].len(),
+                best_level.k
+            );
+            trace!(
+                "  Left after truncate: {} real triangles, {} total, longest path: {}",
+                triangular_paths
+                    .iter()
+                    .filter(|x| proposer != x.first && x.first != x.second && x.second != leader)
+                    .count(),
+                triangular_paths.len(),
+                triangular_paths[triangle_count - 1]
+            );
 
             // TODO: Some knowledge might still not be needed to commit. (but the cost is probably negligible)
             //   Try to check if they are needed for are_compatible?
@@ -967,6 +968,13 @@ pub fn compute_propagation_graphs(
         assert_eq!(sum_of_latencies, best.sum_of_latencies);
     }
 
+    let mut multi_paxos_leaders: Vec<_> = topology.alive_replicas.iter().collect();
+    let mut multi_paxos_3p_leaders: Vec<_> = topology.alive_replicas.iter().collect();
+    multi_paxos_leaders
+        .sort_by_key(|leader| multi_paxos_latencies[*leader].iter().sum::<Duration>());
+    multi_paxos_3p_leaders
+        .sort_by_key(|leader| multi_paxos_3p_latencies[*leader].iter().sum::<Duration>());
+
     PropagationGraphs {
         graphs: propagation_graphs,
         topology,
@@ -975,7 +983,9 @@ pub fn compute_propagation_graphs(
         paxos_latencies,
         epaxos_latencies,
         multi_paxos_latencies,
+        multi_paxos_leaders,
         multi_paxos_3p_latencies,
         multi_paxos_3p_committers,
+        multi_paxos_3p_leaders,
     }
 }
