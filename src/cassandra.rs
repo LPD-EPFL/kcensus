@@ -240,12 +240,8 @@ impl PreparedHandler {
 }
 
 pub enum RequestInterval {
-    Exponential {
-        distribution: Exp<f32>,
-    },
-    Constant {
-        reqs_per_second: f32,
-    },
+    Exponential { distribution: Exp<f32> },
+    Constant { reqs_per_second: f32 },
 }
 impl RequestInterval {
     pub fn new_exponential(throughput: f32) -> Self {
@@ -253,18 +249,16 @@ impl RequestInterval {
             distribution: Exp::new(throughput).expect("Failed to create exponential distribution"),
         }
     }
-}
 
-impl RequestInterval {
     fn next(&mut self, last: &Instant) -> Instant {
-        match self {
-            RequestInterval::Exponential { distribution } => {
-                *last + Duration::from_secs_f32(distribution.sample(&mut rand::rng()))
-            }
-            RequestInterval::Constant { reqs_per_second } => {
-                *last + Duration::from_secs_f32(1. / *reqs_per_second)
-            }
+        let secs = match self {
+            RequestInterval::Exponential { distribution } => distribution.sample(&mut rand::rng()),
+            RequestInterval::Constant { reqs_per_second } => 1. / *reqs_per_second,
+        };
+        if secs.is_infinite() || secs.is_nan() {
+            return *last + Duration::from_secs(1 << 30);
         }
+        *last + Duration::from_secs_f32(secs)
     }
 }
 
@@ -357,7 +351,6 @@ impl Client {
     }
 
     pub async fn run(mut self, mut workload: Workload) {
-
         let warmup_start = Instant::now();
         let warmup_end = warmup_start + workload.warmup;
         let warmdown_start = warmup_end + workload.duration;
