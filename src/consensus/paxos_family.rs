@@ -199,7 +199,10 @@ impl ConsensusShardTrait for PaxosFamilyShard {
 
     #[inline]
     fn can_forward_proposals(&self) -> bool {
-        self.is_multi_paxos() || !self.can_propose()
+        // TODO: maybe we want to return false in some cases ?
+        //   e.g. return self.is_multi_paxos() || !self.can_propose() || few_requests_in_queue ?
+        //   we have to make sure proposers don't stay stuck forever though.
+        true
     }
 
     async fn propose_start(&mut self, value: CommandBatch, contention: bool) -> io::Result<()> {
