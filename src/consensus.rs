@@ -241,7 +241,11 @@ where
     #[inline]
     fn ready_to_process(&self, msg: &ConsensusMessage) -> bool {
         if msg.get_slot() == self.slot {
-            assert_eq!(msg.last_v, self.last_v);
+            assert_eq!(
+                msg.last_v, self.last_v,
+                "last_v should be the same in shard {} for last slot {}, but msg indicates {:?} while local state is {:?}",
+                self.sinks.shard_id, self.slot, msg.last_v, self.last_v
+            );
             match msg.get_v() {
                 None => true,
                 Some(v) => match self.queued_commands.get(&v) {
