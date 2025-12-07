@@ -928,10 +928,11 @@ pub fn compute_propagation_graphs(
                                 max(state.remote_states[i], src_state.remote_states[i]);
 
                             // Check obtained knowledge
-                            debug_assert_eq!(
-                                state.knowledge[i] == src_state.knowledge[i],
-                                state.remote_states[i] == src_state.remote_states[i]
-                            );
+                            // TODO: the following would be true if we always re-propagated knowledge fully
+                            // debug_assert_eq!(
+                            //     state.knowledge[i] == src_state.knowledge[i],
+                            //     state.remote_states[i] == src_state.remote_states[i]
+                            // );
                             debug_assert!(state.knowledge[i].is_subset(&state.knowledge[current]));
                         }
 
