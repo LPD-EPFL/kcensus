@@ -240,11 +240,11 @@ where
 
     #[inline]
     fn ready_to_process(&self, msg: &ConsensusMessage) -> bool {
-        if msg.get_slot() == self.slot {
+        if msg.get_slot() == Some(self.slot) {
             assert_eq!(
                 msg.last_v, self.last_v,
-                "last_v should be the same in shard {} for last slot {}, but msg indicates {:?} while local state is {:?}",
-                self.sinks.shard_id, self.slot, msg.last_v, self.last_v
+                "last_v should be the same in shard {} for slot {}, but msg indicates {:?} while local state is {:?}. msg:{:?}",
+                self.sinks.shard_id, self.slot, msg.last_v, self.last_v, msg
             );
             match msg.get_v() {
                 None => true,
@@ -257,7 +257,7 @@ where
                 },
             }
         } else {
-            msg.get_slot() < self.slot // "Process" messages from lower slots, regardless of value
+            msg.get_slot() < Some(self.slot) // "Process" messages from lower slots, regardless of value
         }
     }
 

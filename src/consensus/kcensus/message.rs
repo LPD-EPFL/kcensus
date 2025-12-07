@@ -37,11 +37,11 @@ impl KCensusMsg {
     }
 
     #[inline]
-    pub fn get_slot(&self) -> usize {
+    pub fn get_slot(&self) -> Option<usize> {
         match self {
-            Spread { slot, .. } => *slot,
-            SpreadValueOnly { .. } => 0,
-            PaxosAccept { slot, .. } => *slot,
+            Spread { slot, .. } => Some(*slot),
+            SpreadValueOnly { .. } => None,
+            PaxosAccept { slot, .. } => Some(*slot),
         }
     }
 

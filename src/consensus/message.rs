@@ -73,15 +73,15 @@ impl ConsensusMessage {
         }
     }
 
-    pub fn get_slot(&self) -> usize {
+    pub fn get_slot(&self) -> Option<usize> {
         match &self.msg {
             KCensusM(msg) => msg.get_slot(),
             PaxosM(msg) => msg.get_slot(),
-            Commit { slot, .. } => *slot,
-            ReadRequest { .. } => 0,
+            Commit { slot, .. } => Some(*slot),
+            ReadRequest { .. } => None,
             ReadResponse {
                 next_readable_slot, ..
-            } => *next_readable_slot,
+            } => Some(*next_readable_slot),
         }
     }
 }

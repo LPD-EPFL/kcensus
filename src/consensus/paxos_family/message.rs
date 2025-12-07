@@ -91,11 +91,11 @@ impl PaxosMsg {
     }
 
     #[inline]
-    pub fn get_slot(&self) -> usize {
+    pub fn get_slot(&self) -> Option<usize> {
         match self {
-            Prepare { slot, .. } => *slot,
-            Accept { slot, .. } => *slot,
-            ForwardRequest { .. } => 0,
+            Prepare { slot, .. } => Some(*slot),
+            Accept { slot, .. } => Some(*slot),
+            ForwardRequest { .. } => None,
         }
     }
 
