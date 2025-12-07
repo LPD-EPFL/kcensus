@@ -89,6 +89,17 @@ module "server_stack_mx_central_1" { # Mexico
   experiment_id  = var.experiment_id
 }
 
+module "server_stack_sa_east_1" { # Sao Paulo
+  count          = contains(local.target_regions_set, "sa-east-1") ? 1 : 0
+  source         = "./modules/server"
+  providers      = { aws = aws.sa-east-1 }
+  region         = "sa-east-1"
+  instance_type  = var.instance_type
+  ssh_public_key = local.ssh_public_key_content
+  my_ip_for_ssh  = chomp(data.http.my_ip.response_body)
+  experiment_id  = var.experiment_id
+}
+
 # Europe, Middle East & Africa (EMEA)
 module "server_stack_eu_west_3" { # Paris
   count          = contains(local.target_regions_set, "eu-west-3") ? 1 : 0
@@ -289,6 +300,17 @@ module "server_stack_ap_east_1" { # Hong Kong
   experiment_id  = var.experiment_id
 }
 
+module "server_stack_ap_east_2" { # Taipei
+  count          = contains(local.target_regions_set, "ap-east-2") ? 1 : 0
+  source         = "./modules/server"
+  providers      = { aws = aws.ap-east-2 }
+  region         = "ap-east-2"
+  instance_type  = var.instance_type
+  ssh_public_key = local.ssh_public_key_content
+  my_ip_for_ssh  = chomp(data.http.my_ip.response_body)
+  experiment_id  = var.experiment_id
+}
+
 module "server_stack_ap_southeast_3" { # Jakarta
   count          = contains(local.target_regions_set, "ap-southeast-3") ? 1 : 0
   source         = "./modules/server"
@@ -365,6 +387,7 @@ resource "null_resource" "manage_inventory" {
     module.server_stack_us_east_2,
     module.server_stack_us_east_1,
     module.server_stack_mx_central_1,
+    module.server_stack_sa_east_1,
     module.server_stack_eu_west_3,
     module.server_stack_eu_west_2,
     module.server_stack_eu_west_1,
@@ -427,6 +450,7 @@ locals {
     contains(local.target_regions_set, "us-east-2") ? { "us-east-2" = module.server_stack_us_east_2[0].public_ip } : {},
     contains(local.target_regions_set, "us-east-1") ? { "us-east-1" = module.server_stack_us_east_1[0].public_ip } : {},
     contains(local.target_regions_set, "mx-central-1") ? { "mx-central-1" = module.server_stack_mx_central_1[0].public_ip } : {},
+    contains(local.target_regions_set, "sa-east-1") ? { "sa-east-1" = module.server_stack_sa_east_1[0].public_ip } : {},
     # EMEA
     contains(local.target_regions_set, "eu-west-3") ? { "eu-west-3" = module.server_stack_eu_west_3[0].public_ip } : {},
     contains(local.target_regions_set, "eu-west-2") ? { "eu-west-2" = module.server_stack_eu_west_2[0].public_ip } : {},
@@ -447,6 +471,7 @@ locals {
     contains(local.target_regions_set, "ap-northeast-2") ? { "ap-northeast-2" = module.server_stack_ap_northeast_2[0].public_ip } : {},
     contains(local.target_regions_set, "ap-northeast-1") ? { "ap-northeast-1" = module.server_stack_ap_northeast_1[0].public_ip } : {},
     contains(local.target_regions_set, "ap-east-1") ? { "ap-east-1" = module.server_stack_ap_east_1[0].public_ip } : {},
+    contains(local.target_regions_set, "ap-east-2") ? { "ap-east-2" = module.server_stack_ap_east_2[0].public_ip } : {},
     contains(local.target_regions_set, "ap-southeast-3") ? { "ap-southeast-3" = module.server_stack_ap_southeast_3[0].public_ip } : {},
     contains(local.target_regions_set, "ap-southeast-7") ? { "ap-southeast-7" = module.server_stack_ap_southeast_7[0].public_ip } : {},
     contains(local.target_regions_set, "ap-southeast-5") ? { "ap-southeast-5" = module.server_stack_ap_southeast_5[0].public_ip } : {},
