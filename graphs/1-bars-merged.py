@@ -5,18 +5,18 @@ from common import ALGORITHMS, args
 from logparser import *
 from prelude import lighten_color, plt
 
-# python3 1-bars.py -c=aws-world-ring-13.toml -w=1
-# python3 1-bars.py -c=aws-north-america-7.toml -w=1
-# python3 1-bars.py -c=aws-europe-7-alt.toml -w=1
+# python3 1-bars.py -c=aws-east-asia-9.toml -w=1
+# python3 1-bars.py -c=aws-europe-8.toml -w=1
+# python3 1-bars.py -c=aws-north-america-7 -w=1
 writes = 1.0
 duration = "10s"
 ingress = "exponential"
-throughput = 10.0
+throughput = 1000
 speedup = 1
 faults = ""
-keys = 100
+keys = 1000000
 skew = 0.0
-shards = 100
+shards = 10000
 
 fig, subplots = plt.subplots(3, 1, figsize=(3.26, 2.3), tight_layout=True)
 plt.tight_layout(pad=0, w_pad=0, h_pad=0)  # , rect=(0,0,.80,1))
@@ -28,18 +28,18 @@ fig.subplots_adjust(
 
 for c in range(3):
     config = [
-        "aws-world-ring-13",
-        "aws-europe-7",
+        "aws-east-asia-9",
+        "aws-europe-8",
         "aws-north-america-7",
     ][c] if args.geo == 1 else [
-            "aws-world-ring-13.toml",
-            "aws-europe-7-alt.toml",
+            "aws-east-asia-9.toml",
+            "aws-europe-8.toml",
             "aws-north-america-7.toml",
         ][c]
     plot = subplots[c]
     title = [
-        "13-Machine Northern Hemisphere (NH) Deployments",
-        "7-Machine Europe (EU) Deployments",
+        "9-Machine East Asia (EA) Deployments",
+        "8-Machine Europe (EU) Deployments",
         "7-Machine North America (NA) Deployments",
     ][c]
     plot.set_title(title, pad=0)
@@ -95,14 +95,12 @@ for c in range(3):
             (min_replica_avg, max_replica_avg),
             (percentiles[1], percentiles[5], percentiles[95], percentiles[99])
         )
-        if config == "aws-world-ring-13":
-            regions = ["us-west-2", "ca-west-1", "ca-central-1",
-                    "eu-west-3", "eu-west-2", "eu-west-1", "me-south-1",
-                    "ap-south-2", "ap-south-1", "ap-southeast-1",
-                    "ap-northeast-2", "ap-northeast-1", "ap-east-1"]
-        elif config == "aws-europe-7":
-            regions = ["eu-west-3", "eu-west-1", "eu-south-2", "eu-south-1",
-                    "eu-north-1", "eu-central-2", "eu-central-1"]
+        if config == "aws-east-asia-9":
+            regions = ["ap-southeast-1", "ap-southeast-3", "ap-southeast-7",
+                    "ap-southeast-5", "ap-northeast-3", "ap-northeast-2", "ap-northeast-1",
+                    "ap-east-1", "ap-east-2"]
+        elif config == "aws-europe-8":
+            regions = ['eu-west-3', 'eu-west-2', 'eu-west-1', 'eu-south-2', 'eu-south-1', 'eu-north-1', 'eu-central-2', 'eu-central-1']
         elif config == "aws-north-america-7":
             regions = ["us-west-2", "us-west-1", "us-east-2", "us-east-1",
                     "ca-west-1", "ca-central-1", "mx-central-1"]

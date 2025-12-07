@@ -38,7 +38,7 @@ ALGORITHMS = {
         "marker": "o",
         "markersize": 2.1,
     },
-    "multi-paxos": {
+    "multi-paxos-3p": {
         "label": "Multi-Paxos",
         "color": orange,
         "lw": 0.7,

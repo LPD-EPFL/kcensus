@@ -6,15 +6,21 @@ from common import ALGORITHMS, args
 from logparser import *
 from prelude import plt
 
+# to update
 # python3 2-cdfs.py -c=aws-world-ring-13.toml -w=1 -r=100 -i=round-robin -t=0
 # python3 2-cdfs.py -c=aws-world-ring-13.toml -w=1 -r=100 -i=exponential -t=0.05
 # python3 2-cdfs.py -c=aws-world-ring-13.toml -w=1 -r=100 -i=exponential -t=0.1
-config = "aws-world-ring-13" if args.geo == 1 else "aws-world-ring-13.toml"
+
+config = "aws-europe-8" if args.geo == 1 else "aws-europe-8.toml"
 writes = 1.0
-requests = 100
-stop_at = 60
+duration = "10s"
+ingress = "exponential"
+throughput = 1000
 speedup = 1
 faults = ""
+keys = 1000000
+skew = 0.0
+shards = 10000
 
 fig, subplots = plt.subplots(3, 1, figsize=(3.11, 2.82), tight_layout=True)
 plt.tight_layout(pad=0, w_pad=0, h_pad=0)  # , rect=(0,0,.80,1))
@@ -25,11 +31,11 @@ fig.subplots_adjust(
 )
 
 for p in range(3):
-    throughput = [0.0, 0.1, 0.2][p] if args.geo == 1 else [0.0, 0.05, 0.1][p]
+    throughput = [500, 1000, 2000][p] if args.geo == 1 else [500, 1000, 2000][p]
     ingress = "exponential" if throughput > 0 else "round-robin"
     plot = subplots[p]
 
-    title = "Request Latency CDF Under " + ["No", "Moderate", "High"][p] + " Contention"
+    title = "Request Latency CDF Under " + ["Little", "Moderate", "High"][p] + " Contention"
     plot.set_title(title, pad=0)
     print(
         "##################################################################################"
@@ -61,12 +67,14 @@ for p in range(3):
             algo=experiment,
             config=config,
             writes=writes,
-            requests=requests,
+            duration=duration,
             ingress=ingress,
             throughput=throughput,
             speedup=speedup,
             faults=faults,
-            stop_at=stop_at,
+            keys=keys,
+            skew=skew,
+            shards=shards,
         )
 
         flattened_output = defaultdict(list)
@@ -94,21 +102,23 @@ for p in range(3):
             plot.set_xlim(0, percentiles[-1])
 
         if args.geo == 1:
-            plot.set_xlim(0, 500)
+            plot.set_xlim(0, 100)
         else:
-            plot.sex_xlim(0, 1000)
+            plot.sex_xlim(0, 100)
 
 
 logs_a = parse(
     algo="weak-replication",
     config=config,
     writes=writes,
-    requests=requests,
-    ingress="round-robin",
-    throughput=0.0,
+    duration=duration,
+    ingress=ingress,
+    throughput=throughput,
     speedup=speedup,
     faults=faults,
-    stop_at=stop_at,
+    keys=keys,
+    skew=skew,
+    shards=shards,
 )
 
 flattened_output = defaultdict(list)
@@ -121,12 +131,14 @@ logs_b = parse(
     algo="kcensus",
     config=config,
     writes=writes,
-    requests=requests,
-    ingress="round-robin",
-    throughput=0.0,
+    duration=duration,
+    ingress=ingress,
+    throughput=throughput,
     speedup=speedup,
     faults=faults,
-    stop_at=stop_at,
+    keys=keys,
+    skew=skew,
+    shards=shards,
 )
 
 flattened_output = defaultdict(list)
