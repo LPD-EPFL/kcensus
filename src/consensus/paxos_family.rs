@@ -102,9 +102,15 @@ impl ConsensusShardTrait for PaxosFamilyShard {
         };
 
         if !matches!(msg, ForwardRequest { .. }) {
-            debug!("Processing kcensus msg from {src}: {msg:?}");
+            debug!(
+                "Processing paxos msg from {src} (shard={}): {msg:?}",
+                self.sinks.shard_id
+            );
         } else {
-            trace!("Processing kcensus msg from {src}: {msg:?}");
+            trace!(
+                "Processing paxos msg from {src} (shard={}): {msg:?}",
+                self.sinks.shard_id
+            );
         }
 
         match msg {

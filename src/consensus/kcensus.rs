@@ -73,9 +73,15 @@ impl ConsensusShardTrait for KCensusShard {
         };
 
         if !matches!(msg, SpreadValueOnly { .. }) {
-            debug!("Processing kcensus msg from {src}: {msg:?}");
+            debug!(
+                "Processing kcensus msg from {src} (shard={}): {msg:?}",
+                self.sinks.shard_id
+            );
         } else {
-            trace!("Processing kcensus msg from {src}: {msg:?}");
+            trace!(
+                "Processing kcensus msg from {src} (shard={}): {msg:?}",
+                self.sinks.shard_id
+            );
         }
 
         // TODO: Ignore some messages if max_seen_slot > slot ?
