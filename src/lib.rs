@@ -386,7 +386,8 @@ pub async fn run() -> io::Result<()> {
                                 break;
                             }
                         }
-                        _ = &mut timer, if !queue.is_empty() => {
+                        res = &mut timer, if !queue.is_empty() => {
+                            res.expect("failed to wait");
                             let now = Instant::now();
                             // Complete all commands whose timer has expired
                             while let Some((_, completes_at)) = queue.front() {
