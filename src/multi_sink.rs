@@ -97,9 +97,10 @@ impl ShardMultiSink {
         &self,
         msg: ConsensusMsg,
         value: Option<CommandBatch>,
+        last_v: Option<usize>,
     ) -> io::Result<()> {
         let mut multi_sink = self.multi_sink.lock().await;
-        let msg = self.build_msg(msg, value, multi_sink.my_pid);
+        let msg = self.build_msg(msg, value, multi_sink.my_pid, last_v);
         multi_sink.broadcast(msg).await
     }
 
@@ -109,17 +110,28 @@ impl ShardMultiSink {
         msg: ConsensusMsg,
         value: Option<CommandBatch>,
         pid: usize,
+        last_v: Option<usize>,
     ) -> io::Result<()> {
         let mut multi_sink = self.multi_sink.lock().await;
-        let msg = self.build_msg(msg, value, multi_sink.my_pid);
+        let msg = self.build_msg(msg, value, multi_sink.my_pid, last_v);
         multi_sink.send(msg, pid).await
     }
 
     #[inline]
-    fn build_msg(&self, msg: ConsensusMsg, value: Option<CommandBatch>, my_pid: usize) -> Message {
+    fn build_msg(
+        &self,
+        msg: ConsensusMsg,
+        value: Option<CommandBatch>,
+        my_pid: usize,
+        last_v: Option<usize>,
+    ) -> Message {
         Message::ConsensusM {
             shard: self.shard_id,
-            msg: ConsensusMessage { msg, src: my_pid },
+            msg: ConsensusMessage {
+                msg,
+                src: my_pid,
+                last_v,
+            },
             value,
         }
     }

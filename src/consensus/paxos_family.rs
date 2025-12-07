@@ -68,6 +68,7 @@ impl PaxosFamilyShard {
             next_uid: my_pid,
             slot: 0,
             queued_commands: HashMap::with_capacity(process_count),
+            last_v: None,
 
             read_tracker: ReadTracker::new(majority),
 
@@ -144,7 +145,7 @@ impl ConsensusShardTrait for PaxosFamilyShard {
                         if self.round_state.epaxos_can_commit() {
                             self.broadcast_commit().await?;
                             info!("Commit via EPaxos: v={v}");
-                            let value = self.commit_slot(v, true);
+                            let value = self.commit_slot(v, false);
                             return Ok(Some(value));
                         }
 
@@ -187,7 +188,7 @@ impl ConsensusShardTrait for PaxosFamilyShard {
                         self.broadcast_commit().await?;
                     }
                     info!("Commit via Paxos: v={v}");
-                    let value = self.commit_slot(v, true);
+                    let value = self.commit_slot(v, false);
                     return Ok(Some(value));
                 }
             }
@@ -232,6 +233,7 @@ impl ConsensusShardTrait for PaxosFamilyShard {
                 value, self.slot, self.round_state.round
             );
         }
+        self.last_v = Some(v);
         self.slot += 1;
         self.goto_round(self.settings.starting_round);
         self.round_state.full_clear();
@@ -317,13 +319,13 @@ impl PaxosFamilyShard {
 
     #[inline]
     async fn send(&self, msg: PaxosMsg, dest: usize) -> io::Result<()> {
-        self.sinks.send(PaxosM(msg), None, dest).await
+        self.sinks.send(PaxosM(msg), None, dest, self.last_v).await
     }
 
     #[inline]
     async fn broadcast(&self, msg: PaxosMsg, with_value: bool) -> io::Result<()> {
         let value = self.value_for_msg(&msg, with_value);
-        self.sinks.broadcast(PaxosM(msg), value).await
+        self.sinks.broadcast(PaxosM(msg), value, self.last_v).await
     }
 
     async fn propose(&mut self, v: usize, with_value: bool) -> io::Result<()> {
@@ -419,7 +421,7 @@ impl PaxosFamilyShard {
             slot: self.slot,
             v: self.round_state.get_v().unwrap(),
         };
-        self.sinks.broadcast(msg, None).await
+        self.sinks.broadcast(msg, None, self.last_v).await
     }
 
     fn is_multi_paxos(&self) -> bool {

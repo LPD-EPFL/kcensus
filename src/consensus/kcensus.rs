@@ -52,6 +52,7 @@ impl KCensusShard {
             next_uid: my_pid,
             slot: 0,
             queued_commands: HashMap::with_capacity(process_count),
+            last_v: None,
 
             read_tracker: ReadTracker::new(majority),
 
@@ -175,7 +176,9 @@ impl ConsensusShardTrait for KCensusShard {
                 if final_state && leader == self.my_pid && !conflict {
                     assert!(self.round_state.can_commit(&self.settings.graphs));
                     let v = my_v.unwrap();
-                    self.sinks.broadcast(Commit { slot, v }, None).await?;
+                    self.sinks
+                        .broadcast(Commit { slot, v }, None, self.last_v)
+                        .await?;
                     info!("Commit via kcensus: v={v}");
                     let value = self.commit_slot(v, false);
                     return Ok(Some(value));
@@ -237,7 +240,9 @@ impl ConsensusShardTrait for KCensusShard {
                     assert_eq!(v, self.get_my_v().unwrap());
                     self.round_state.recv_paxos_accept(src, v);
                     if self.round_state.can_paxos_commit() {
-                        self.sinks.broadcast(Commit { slot, v }, None).await?;
+                        self.sinks
+                            .broadcast(Commit { slot, v }, None, self.last_v)
+                            .await?;
                         info!("Commit via paxos: v={v}");
                         let value = self.commit_slot(v, false);
                         return Ok(Some(value));
@@ -284,6 +289,7 @@ impl ConsensusShardTrait for KCensusShard {
                 self.round_state,
             );
         }
+        self.last_v = Some(v);
         self.slot += 1;
         self.round_state.clear();
         value
@@ -322,7 +328,9 @@ impl KCensusShard {
     #[inline]
     async fn broadcast(&self, msg: KCensusMsg) -> io::Result<()> {
         let value = self.value_for_msg(&msg);
-        self.sinks.broadcast(KCensusM(msg), value).await
+        self.sinks
+            .broadcast(KCensusM(msg), value, self.last_v)
+            .await
     }
 
     async fn broadcast_paxos_accept(&self, v: usize, new_value: bool) -> io::Result<()> {
@@ -338,7 +346,9 @@ impl KCensusShard {
 
     async fn send_to(&self, msg: KCensusMsg, dest: usize) -> io::Result<()> {
         let value = self.value_for_msg(&msg);
-        self.sinks.send(KCensusM(msg), value, dest).await
+        self.sinks
+            .send(KCensusM(msg), value, dest, self.last_v)
+            .await
     }
 
     async fn inner_spread(

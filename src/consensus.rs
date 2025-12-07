@@ -36,6 +36,7 @@ pub(crate) struct ConsensusShard<AlgoSettings, AlgoRoundState> {
     next_uid: usize,
     slot: usize,
     queued_commands: HashMap<usize, CommandBatch>,
+    last_v: Option<usize>,
 
     read_tracker: ReadTracker,
 
@@ -232,12 +233,15 @@ where
     async fn start_read(&mut self, command: Command) -> io::Result<()> {
         let local_ready = self.get_my_v().is_none();
         let uid = self.read_tracker.insert(command, local_ready);
-        self.sinks.broadcast(ReadRequest { uid }, None).await
+        self.sinks
+            .broadcast(ReadRequest { uid }, None, self.last_v)
+            .await
     }
 
     #[inline]
     fn ready_to_process(&self, msg: &ConsensusMessage) -> bool {
         if msg.get_slot() == self.slot {
+            assert_eq!(msg.last_v, self.last_v);
             match msg.get_v() {
                 None => true,
                 Some(v) => match self.queued_commands.get(&v) {
@@ -276,6 +280,7 @@ where
                     },
                     None,
                     msg.src,
+                    self.last_v,
                 )
                 .await?;
             return Ok(None);

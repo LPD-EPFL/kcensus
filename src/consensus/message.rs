@@ -39,6 +39,7 @@ pub enum CommandBatch {
 pub struct ConsensusMessage {
     pub msg: ConsensusMsg,
     pub src: usize,
+    pub last_v: Option<usize>,
 }
 
 impl ConsensusMessage {
