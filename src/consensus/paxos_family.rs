@@ -145,8 +145,8 @@ impl ConsensusShardTrait for PaxosFamilyShard {
                         if self.round_state.epaxos_can_commit() {
                             self.broadcast_commit().await?;
                             info!(
-                                "Commit via EPaxos: shard={} slot={slot} v={v}",
-                                self.sinks.shard_id
+                                "Commit via EPaxos: shard={} slot={} v={v}",
+                                self.sinks.shard_id, self.slot
                             );
                             let value = self.commit_slot(v, false);
                             return Ok(Some(value));
@@ -191,8 +191,8 @@ impl ConsensusShardTrait for PaxosFamilyShard {
                         self.broadcast_commit().await?;
                     }
                     info!(
-                        "Commit via Paxos: shard={} slot={slot} v={v}",
-                        self.sinks.shard_id
+                        "Commit via Paxos: shard={} slot={} v={v}",
+                        self.sinks.shard_id, self.slot
                     );
                     let value = self.commit_slot(v, false);
                     return Ok(Some(value));
