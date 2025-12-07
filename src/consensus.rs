@@ -267,7 +267,10 @@ where
                 return Ok(None);
             }
             debug_assert_eq!(slot, self.slot);
-            info!("Commit via msg: v={v}");
+            info!(
+                "Commit via msg: shard={} slot={slot} v={v}",
+                self.sinks.shard_id
+            );
             return Ok(Some(self.commit_slot(v, true)));
         };
         if let ReadRequest { uid } = msg.msg {
@@ -326,7 +329,10 @@ where
 
             let result = self.read_tracker.commit_slot();
             for read_only_command in result.into_iter() {
-                info!("Commit read.");
+                info!(
+                    "Commit read: shard={} slot={}",
+                    self.sinks.shard_id, self.slot
+                );
                 commit(read_only_command).await;
             }
 

@@ -179,7 +179,10 @@ impl ConsensusShardTrait for KCensusShard {
                     self.sinks
                         .broadcast(Commit { slot, v }, None, self.last_v)
                         .await?;
-                    info!("Commit via kcensus: v={v}");
+                    info!(
+                        "Commit via kcensus: shard={} slot={slot} v={v}",
+                        self.sinks.shard_id
+                    );
                     let value = self.commit_slot(v, false);
                     return Ok(Some(value));
                 }
@@ -243,7 +246,10 @@ impl ConsensusShardTrait for KCensusShard {
                         self.sinks
                             .broadcast(Commit { slot, v }, None, self.last_v)
                             .await?;
-                        info!("Commit via paxos: v={v}");
+                        info!(
+                            "Commit via paxos: shard={} slot={slot} v={v}",
+                            self.sinks.shard_id
+                        );
                         let value = self.commit_slot(v, false);
                         return Ok(Some(value));
                     }
