@@ -22,7 +22,7 @@
             printf "%s\n" "${nodes[@]}" |
             xargs -P 100 -I{} bash -c '
               n="$1"
-              val=$(sudo ping -c 100 -i 0.02 "$n" \
+              val=$(sudo ping -c 100 -i 0.2 "$n" \
                 | grep "icmp_seq" \
                 | grep -oP "time=\K[0-9.]+" \
                 | sort -n \
