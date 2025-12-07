@@ -174,27 +174,29 @@ impl ConsensusShardTrait for PaxosFamilyShard {
                 }
             }
             Accept { round, v, .. } => {
-                if round.leader != self.my_pid {
-                    if src == round.leader {
-                        self.round_state.accept_v(src, round, v);
-                        self.answer_accept().await?;
-                        if self.settings.mode != MultiPaxos3P
-                            || self.get_committer(v) != Some(self.my_pid)
-                        {
-                            return Ok(None);
-                        }
-                    } else {
-                        assert_eq!(self.settings.mode, MultiPaxos3P);
-                        assert_eq!(self.get_committer(v), Some(self.my_pid));
-                        self.round_state.receive_accepted(src);
+                self.round_state.accept_v(src, round, v);
+                if src == round.leader {
+                    self.answer_accept().await?;
+                    if self.settings.mode != MultiPaxos3P
+                        || self.get_committer(v) != Some(self.my_pid)
+                    {
+                        return Ok(None);
                     }
-                } else {
-                    self.round_state.receive_accepted(src);
+                } else if round.leader != self.my_pid {
+                    assert_eq!(self.settings.mode, MultiPaxos3P);
+                    assert_eq!(self.get_committer(v), Some(self.my_pid));
                 }
 
                 if self.round_state.paxos_can_commit() {
-                    if round.leader == self.my_pid || self.get_committer(v) == Some(self.my_pid) {
+                    if round.leader == self.my_pid {
                         self.broadcast_commit().await?;
+                    } else if self.get_committer(v) == Some(self.my_pid) {
+                        let requester = self
+                            .get_requester(v)
+                            .expect("Should have requester if it has a committer");
+                        if requester != self.my_pid {
+                            self.broadcast_commit().await?;
+                        }
                     }
                     info!(
                         "Commit via Paxos: shard={} slot={} v={v}",
@@ -408,12 +410,6 @@ impl PaxosFamilyShard {
             round: self.round_state.round.unwrap(),
             v,
         };
-        debug!(
-            "Mode: {:?}, Round: {:?}, Init: {:?}",
-            self.settings.mode,
-            self.round_state.round,
-            self.get_requester(v)
-        );
         if self.settings.mode == MultiPaxos3P
             && self.round_state.round == self.settings.starting_round
         {

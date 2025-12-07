@@ -9,7 +9,7 @@ pub struct PaxosRound {
     pub leader: usize,
 }
 
-#[derive(Copy, Clone, Debug, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum RoundV {
     EPaxosV {
         leader: usize,

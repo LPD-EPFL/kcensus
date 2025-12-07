@@ -127,16 +127,20 @@ impl PaxosFamilyRoundState {
 
     #[inline]
     pub fn self_accept_v(&mut self, round: PaxosRound) {
-        debug_assert!(self.accepted == 0);
+        assert_eq!(self.accepted, 0);
         debug_assert!(self.accepted_set.is_empty());
         self.accept_v(self.my_pid, round, self.get_v().unwrap());
     }
 
     #[inline]
     pub fn accept_v(&mut self, src: usize, round: PaxosRound, v: usize) {
-        debug_assert!(self.get_last_accepted_round() < Some(round));
-        self.max_rv = Some(RoundV::new_paxos_v(Some(round), v));
-        self.receive_accepted(self.my_pid);
+        let rv = Some(RoundV::new_paxos_v(Some(round), v));
+        if self.get_last_accepted_round() < Some(round) {
+            self.max_rv = rv;
+            self.receive_accepted(self.my_pid);
+        } else {
+            assert_eq!(self.max_rv, rv);
+        }
         self.receive_accepted(src);
     }
 
