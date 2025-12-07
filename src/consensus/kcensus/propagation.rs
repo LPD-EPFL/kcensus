@@ -687,7 +687,7 @@ pub fn compute_propagation_graphs(
                 if lat < min_proposer_latency {
                     min_proposer_latency = lat;
                 }
-                let lat = lat + quorum_rtts[leader][max_quorum];
+                let lat = lat + quorum_rtts[leader][max_quorum - 1];
                 if lat < max_proposer_latency {
                     max_proposer_latency = lat;
                 }
