@@ -7,7 +7,7 @@ use crate::message::MsgWithSource;
 use crate::multi_sink::{MultiSink, ShardMultiSink};
 use bit_set::BitSet;
 use command::Command;
-use log::{debug, info, trace};
+use log::{debug, info, trace, warn};
 use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::sync::Arc;
@@ -185,7 +185,7 @@ where
             let contention = ongoing || should_repropose;
 
             if ongoing && !self.shards[shard].ongoing() {
-                debug!(
+                warn!(
                     "Consensus is not running but messages are still queued. my slot: {:?}, queue: {:?}",
                     self.shards[shard].slot, queued_messages[shard]
                 );
