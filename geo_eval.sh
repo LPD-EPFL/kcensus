@@ -3,24 +3,26 @@
 set -e
 
 BASE_LOG_DIR="./logs"
-REPLICATED_ALGOS=(kcensus epaxos multi-paxos paxos weak-replication)
+REPLICATED_ALGOS=(kcensus weak-replication "multi-paxos-3p" epaxos paxos)
 ALGOS=(no-replication "${REPLICATED_ALGOS[@]}")
-YCSB=(1 0.5 0.05)
 DURATION=10s
-THROUGHPUT=10
+THROUGHPUT=1000 # 0.1 req / shard / sec total
 SPEEDUP=1
-KEYS=100
+KEYS=1000000
 SKEW=0
-SHARDS=100
+SHARDS=10000
 
 declare -A CONFIGS
-CONFIGS["aws-europe-7"]="deployment/terraform/regions/europe-7.tfvars"
-CONFIGS["aws-europe-3"]="deployment/terraform/regions/europe-3.tfvars"
-CONFIGS["aws-europe-2"]="deployment/terraform/regions/europe-2.tfvars"
 CONFIGS["aws-north-america-7"]="deployment/terraform/regions/north-america-7.tfvars"
-CONFIGS["aws-world-ring-13"]="deployment/terraform/regions/world-ring-13.tfvars"
-CONFIGS["aws-world-ring-9"]="deployment/terraform/regions/world-ring-9.tfvars"
+CONFIGS["aws-europe-8"]="deployment/terraform/regions/europe-8.tfvars"
+CONFIGS["aws-east-asia-9"]="deployment/terraform/regions/east-asia-9.tfvars"
 CONFIGS["aws-exp-6"]="deployment/terraform/regions/one.tfvars"
+# Old
+CONFIGS["old/aws-world-ring-13"]="deployment/terraform/regions/world-ring-13.tfvars"
+CONFIGS["old/aws-world-ring-9"]="deployment/terraform/regions/world-ring-9.tfvars"
+CONFIGS["old/aws-europe-7"]="deployment/terraform/regions/europe-7.tfvars"
+CONFIGS["old/aws-europe-3"]="deployment/terraform/regions/europe-3.tfvars"
+CONFIGS["old/aws-europe-2"]="deployment/terraform/regions/europe-2.tfvars"
 
 function show_help() {
     cat << EOF
@@ -101,6 +103,8 @@ function run() {
   local skew="${10:-${SKEW}}"
   local shards="${11:-${SHARDS}}"
 
+  local nonvoting="$(get_nonvoting $configName $algo)"
+
   local inventoryFile="inventory-${expId}.ini"
   local title="c=${configName}/a=${algo}/w=${writes}/d=${duration}/i=${ingress}/t=${throughput}/s=${SPEEDUP}/f=${faults}/k=${keys}/skew=${skew}/shards=${shards}"
   local resultPath="${ABSOLUTE_BASE_LOG_DIR}/${title}"
@@ -108,20 +112,26 @@ function run() {
 
   echo "--> RUNNING: ${title} (Exp ID: ${expId})"
 
+  local proposer_count="$(digits "$configName")"
+  local per_proposer_throughput=$(($throughput / $proposer_count))
+
   (
     cd deployment/ansible
-    ansible-playbook -i "${inventoryFile}" 03-run-experiment.yml \
+    until ansible-playbook -i "${inventoryFile}" 03-run-experiment.yml \
       -e "algo=${algo}" \
       -e "writes=${writes}" \
       -e "duration=${duration}" \
       -e "ingress=${ingress}" \
-      -e "throughput=${throughput}" \
+      -e "throughput=${per_proposer_throughput}" \
       -e "speedup=${SPEEDUP}" \
       -e "faults=${faults}" \
       -e "keys=${keys}" \
       -e "skew=${skew}" \
       -e "shards=${shards}" \
-      -e "result_path=${resultPath}"
+      -e "nonvoting=${nonvoting}" \
+      -e "result_path=${resultPath}"; do
+      echo "Experiment failed, retrying $algo on $configName..."
+    done
   )
   echo "--> COMPLETED. Logs are in ${resultPath}"
 }
@@ -140,15 +150,19 @@ function cleanup_processes() {
 function all_faults() {
 python3 - <<END
 from itertools import combinations
-REPLICAS=$1
-FROM="$2"
-TO="$3"
-MAJORITY=REPLICAS // 2
+SERVERS=$1
+NON_VOTERS=[$2]
+FROM="$3"
+TO="$4"
+VOTERS=list(range(SERVERS))
+for non_voter in NON_VOTERS:
+  VOTERS.remove(non_voter)
+MINORITY=len(VOTERS) // 2
 done = False
 should_yield = FROM == ''
-for r in range(1, MAJORITY + 1):
+for r in range(1, MINORITY + 1):
     if done: break
-    for comb in combinations(range(REPLICAS), r):
+    for comb in combinations(VOTERS, r):
         formatted = ','.join(map(str, comb))
         if formatted == FROM: should_yield = True
         if formatted == TO and TO != '': done = True; break;
@@ -167,37 +181,59 @@ get_regions() {
   local type=$1
   local size=$2
   case "$type-$size" in
-    aws-random-3) echo "ap-southeast-3,ap-southeast-7,ap-east-1";;
-    aws-random-5) echo "us-west-2,mx-central-1,ap-southeast-3,ap-southeast-7,ap-east-1";;
-    aws-random-7) echo "us-west-2,ca-central-1,mx-central-1,me-central-1,ap-southeast-3,ap-southeast-7,ap-east-1";;
-    aws-random-9) echo "us-west-2,us-east-2,ca-central-1,mx-central-1,eu-west-3,me-central-1,ap-southeast-3,ap-southeast-7,ap-east-1";;
-    aws-random-11) echo "us-west-2,us-east-2,ca-central-1,mx-central-1,eu-west-3,eu-south-2,eu-south-1,me-central-1,ap-southeast-3,ap-southeast-7,ap-east-1";;
-    aws-random-13) echo "us-west-2,us-east-2,ca-central-1,mx-central-1,eu-west-3,eu-south-2,eu-south-1,eu-central-2,me-central-1,ap-southeast-3,ap-southeast-7,ap-east-1,af-south-1";;
-    aws-random-15) echo "us-west-2,us-east-2,ca-central-1,mx-central-1,eu-west-3,eu-south-2,eu-south-1,eu-north-1,eu-central-2,eu-central-1,me-central-1,ap-southeast-3,ap-southeast-7,ap-east-1,af-south-1";;
-    aws-random-17) echo "us-west-2,us-east-2,ca-central-1,mx-central-1,eu-west-3,eu-south-2,eu-south-1,eu-north-1,eu-central-2,eu-central-1,me-central-1,ap-southeast-3,ap-southeast-7,ap-southeast-2,ap-southeast-4,ap-east-1,af-south-1";;
-    aws-random-19) echo "us-west-2,us-west-1,us-east-2,ca-central-1,mx-central-1,eu-west-3,eu-west-2,eu-south-2,eu-south-1,eu-north-1,eu-central-2,eu-central-1,me-central-1,ap-southeast-3,ap-southeast-7,ap-southeast-2,ap-southeast-4,ap-east-1,af-south-1";;
-    aws-random-21) echo "us-west-2,us-west-1,us-east-2,ca-central-1,mx-central-1,eu-west-3,eu-west-2,eu-west-1,eu-south-2,eu-south-1,eu-north-1,eu-central-2,eu-central-1,me-south-1,me-central-1,ap-southeast-3,ap-southeast-7,ap-southeast-2,ap-southeast-4,ap-east-1,af-south-1";;
-    aws-random-23) echo "us-west-2,us-west-1,us-east-2,ca-central-1,mx-central-1,eu-west-3,eu-west-2,eu-west-1,eu-south-2,eu-south-1,eu-north-1,eu-central-2,eu-central-1,me-south-1,me-central-1,ap-south-2,ap-southeast-3,ap-southeast-7,ap-southeast-5,ap-southeast-2,ap-southeast-4,ap-east-1,af-south-1";;
-    aws-random-25) echo "us-west-2,us-west-1,us-east-2,ca-central-1,mx-central-1,eu-west-3,eu-west-2,eu-west-1,eu-south-2,eu-south-1,eu-north-1,eu-central-2,eu-central-1,me-south-1,me-central-1,ap-south-2,ap-south-1,ap-southeast-3,ap-southeast-7,ap-southeast-5,ap-southeast-2,ap-southeast-4,ap-northeast-1,ap-east-1,af-south-1";;
-    aws-random-27) echo "us-west-2,us-west-1,us-east-2,ca-central-1,mx-central-1,eu-west-3,eu-west-2,eu-west-1,eu-south-2,eu-south-1,eu-north-1,eu-central-2,eu-central-1,il-central-1,me-south-1,me-central-1,ap-south-2,ap-south-1,ap-southeast-3,ap-southeast-7,ap-southeast-5,ap-northeast-2,ap-southeast-2,ap-southeast-4,ap-northeast-1,ap-east-1,af-south-1";;
-    aws-random-29) echo "us-west-2,us-west-1,us-east-2,us-east-1,ca-central-1,mx-central-1,eu-west-3,eu-west-2,eu-west-1,eu-south-2,eu-south-1,eu-north-1,eu-central-2,eu-central-1,il-central-1,me-south-1,me-central-1,ap-south-2,ap-south-1,ap-southeast-3,ap-southeast-7,ap-southeast-5,ap-northeast-3,ap-northeast-2,ap-southeast-2,ap-southeast-4,ap-northeast-1,ap-east-1,af-south-1";;
-    aws-random-31) echo "us-west-2,us-west-1,us-east-2,us-east-1,ca-west-1,ca-central-1,mx-central-1,eu-west-3,eu-west-2,eu-west-1,eu-south-2,eu-south-1,eu-north-1,eu-central-2,eu-central-1,il-central-1,me-south-1,me-central-1,ap-south-2,ap-south-1,ap-southeast-1,ap-southeast-3,ap-southeast-7,ap-southeast-5,ap-northeast-3,ap-northeast-2,ap-southeast-2,ap-southeast-4,ap-northeast-1,ap-east-1,af-south-1";;
+    aws-random-3) echo "ca-central-1,eu-west-3,ap-northeast-2";;
+    aws-random-5) echo "ca-central-1,eu-west-3,me-south-1,ap-southeast-7,ap-northeast-2";;
+    aws-random-7) echo "us-west-1,us-east-1,ca-central-1,eu-west-3,me-south-1,ap-southeast-7,ap-northeast-2";;
+    aws-random-9) echo "us-west-1,us-east-1,ca-central-1,eu-west-3,eu-west-1,eu-north-1,me-south-1,ap-southeast-7,ap-northeast-2";;
+    aws-random-11) echo "us-west-1,us-east-1,ca-central-1,eu-west-3,eu-west-1,eu-north-1,me-south-1,ap-south-1,ap-southeast-7,ap-northeast-2,ap-northeast-1";;
+    aws-random-13) echo "us-west-1,us-east-1,ca-central-1,mx-central-1,eu-west-3,eu-west-2,eu-west-1,eu-north-1,me-south-1,ap-south-1,ap-southeast-7,ap-northeast-2,ap-northeast-1";;
+    aws-random-15) echo "us-west-1,us-east-1,ca-central-1,mx-central-1,eu-west-3,eu-west-2,eu-west-1,eu-north-1,me-south-1,me-central-1,ap-south-1,ap-southeast-7,ap-southeast-5,ap-northeast-2,ap-northeast-1";;
+    aws-random-17) echo "us-west-1,us-east-1,ca-central-1,mx-central-1,eu-west-3,eu-west-2,eu-west-1,eu-north-1,me-south-1,me-central-1,ap-south-1,ap-southeast-7,ap-southeast-5,ap-northeast-3,ap-northeast-2,ap-northeast-1,ap-east-2";;
+    aws-random-19) echo "us-west-1,us-east-1,ca-central-1,mx-central-1,eu-west-3,eu-west-2,eu-west-1,eu-north-1,me-south-1,me-central-1,ap-south-1,ap-southeast-7,ap-southeast-5,ap-northeast-3,ap-northeast-2,ap-southeast-2,ap-northeast-1,ap-east-1,ap-east-2";;
+    aws-random-21) echo "us-west-1,us-east-1,ca-central-1,mx-central-1,eu-west-3,eu-west-2,eu-west-1,eu-south-1,eu-north-1,eu-central-1,me-south-1,me-central-1,ap-south-1,ap-southeast-7,ap-southeast-5,ap-northeast-3,ap-northeast-2,ap-southeast-2,ap-northeast-1,ap-east-1,ap-east-2";;
+    aws-random-23) echo "us-west-1,us-east-1,ca-central-1,mx-central-1,eu-west-3,eu-west-2,eu-west-1,eu-south-1,eu-north-1,eu-central-1,me-south-1,me-central-1,ap-south-1,ap-southeast-3,ap-southeast-7,ap-southeast-5,ap-northeast-3,ap-northeast-2,ap-southeast-2,ap-northeast-1,ap-east-1,ap-east-2,af-south-1";;
+    aws-random-25) echo "us-west-1,us-east-1,ca-central-1,mx-central-1,eu-west-3,eu-west-2,eu-west-1,eu-south-1,eu-north-1,eu-central-1,il-central-1,me-south-1,me-central-1,ap-south-1,ap-southeast-3,ap-southeast-7,ap-southeast-5,ap-northeast-3,ap-northeast-2,ap-southeast-2,ap-southeast-4,ap-northeast-1,ap-east-1,ap-east-2,af-south-1";;
+    aws-random-27) echo "us-west-1,us-east-2,us-east-1,ca-west-1,ca-central-1,mx-central-1,eu-west-3,eu-west-2,eu-west-1,eu-south-1,eu-north-1,eu-central-1,il-central-1,me-south-1,me-central-1,ap-south-1,ap-southeast-3,ap-southeast-7,ap-southeast-5,ap-northeast-3,ap-northeast-2,ap-southeast-2,ap-southeast-4,ap-northeast-1,ap-east-1,ap-east-2,af-south-1";;
+    aws-random-29) echo "us-west-1,us-east-2,us-east-1,ca-west-1,ca-central-1,mx-central-1,eu-west-3,eu-west-2,eu-west-1,eu-south-1,eu-north-1,eu-central-2,eu-central-1,il-central-1,me-south-1,me-central-1,ap-south-2,ap-south-1,ap-southeast-3,ap-southeast-7,ap-southeast-5,ap-northeast-3,ap-northeast-2,ap-southeast-2,ap-southeast-4,ap-northeast-1,ap-east-1,ap-east-2,af-south-1";;
+    aws-random-31) echo "us-west-2,us-west-1,us-east-2,us-east-1,ca-west-1,ca-central-1,mx-central-1,sa-east-1,eu-west-3,eu-west-2,eu-west-1,eu-south-1,eu-north-1,eu-central-2,eu-central-1,il-central-1,me-south-1,me-central-1,ap-south-2,ap-south-1,ap-southeast-3,ap-southeast-7,ap-southeast-5,ap-northeast-3,ap-northeast-2,ap-southeast-2,ap-southeast-4,ap-northeast-1,ap-east-1,ap-east-2,af-south-1";;
+    aws-random-33) echo "us-west-2,us-west-1,us-east-2,us-east-1,ca-west-1,ca-central-1,mx-central-1,sa-east-1,eu-west-3,eu-west-2,eu-west-1,eu-south-2,eu-south-1,eu-north-1,eu-central-2,eu-central-1,il-central-1,me-south-1,me-central-1,ap-south-2,ap-south-1,ap-southeast-1,ap-southeast-3,ap-southeast-7,ap-southeast-5,ap-northeast-3,ap-northeast-2,ap-southeast-2,ap-southeast-4,ap-northeast-1,ap-east-1,ap-east-2,af-south-1";;
     
-    aws-from-paris-3) echo "eu-west-3,eu-west-2,eu-central-2";;
-    aws-from-paris-5) echo "eu-west-3,eu-west-2,eu-west-1,eu-central-2,eu-central-1";;
+    aws-from-paris-3) echo "eu-west-3,eu-west-2,eu-central-1";;
+    aws-from-paris-5) echo "eu-west-3,eu-west-2,eu-south-2,eu-central-2,eu-central-1";;
     aws-from-paris-7) echo "eu-west-3,eu-west-2,eu-west-1,eu-south-2,eu-south-1,eu-central-2,eu-central-1";;
     aws-from-paris-9) echo "eu-west-3,eu-west-2,eu-west-1,eu-south-2,eu-south-1,eu-north-1,eu-central-2,eu-central-1,il-central-1";;
-    aws-from-paris-11) echo "us-east-1,eu-west-3,eu-west-2,eu-west-1,eu-south-2,eu-south-1,eu-north-1,eu-central-2,eu-central-1,il-central-1,me-south-1";;
+    aws-from-paris-11) echo "us-east-1,ca-central-1,eu-west-3,eu-west-2,eu-west-1,eu-south-2,eu-south-1,eu-north-1,eu-central-2,eu-central-1,il-central-1";;
     aws-from-paris-13) echo "us-east-2,us-east-1,ca-central-1,eu-west-3,eu-west-2,eu-west-1,eu-south-2,eu-south-1,eu-north-1,eu-central-2,eu-central-1,il-central-1,me-south-1";;
     aws-from-paris-15) echo "us-east-2,us-east-1,ca-central-1,eu-west-3,eu-west-2,eu-west-1,eu-south-2,eu-south-1,eu-north-1,eu-central-2,eu-central-1,il-central-1,me-south-1,me-central-1,ap-south-1";;
-    aws-from-paris-17) echo "us-west-2,us-east-2,us-east-1,ca-central-1,eu-west-3,eu-west-2,eu-west-1,eu-south-2,eu-south-1,eu-north-1,eu-central-2,eu-central-1,il-central-1,me-south-1,me-central-1,ap-south-2,ap-south-1";;
+    aws-from-paris-17) echo "us-east-2,us-east-1,ca-central-1,mx-central-1,eu-west-3,eu-west-2,eu-west-1,eu-south-2,eu-south-1,eu-north-1,eu-central-2,eu-central-1,il-central-1,me-south-1,me-central-1,ap-south-2,ap-south-1";;
     aws-from-paris-19) echo "us-west-2,us-west-1,us-east-2,us-east-1,ca-central-1,mx-central-1,eu-west-3,eu-west-2,eu-west-1,eu-south-2,eu-south-1,eu-north-1,eu-central-2,eu-central-1,il-central-1,me-south-1,me-central-1,ap-south-2,ap-south-1";;
-    aws-from-paris-21) echo "us-west-2,us-west-1,us-east-2,us-east-1,ca-west-1,ca-central-1,mx-central-1,eu-west-3,eu-west-2,eu-west-1,eu-south-2,eu-south-1,eu-north-1,eu-central-2,eu-central-1,il-central-1,me-south-1,me-central-1,ap-south-2,ap-south-1,af-south-1";;
+    aws-from-paris-21) echo "us-west-2,us-west-1,us-east-2,us-east-1,ca-central-1,mx-central-1,eu-west-3,eu-west-2,eu-west-1,eu-south-2,eu-south-1,eu-north-1,eu-central-2,eu-central-1,il-central-1,me-south-1,me-central-1,ap-south-2,ap-south-1,ap-southeast-1,af-south-1";;
     aws-from-paris-23) echo "us-west-2,us-west-1,us-east-2,us-east-1,ca-west-1,ca-central-1,mx-central-1,eu-west-3,eu-west-2,eu-west-1,eu-south-2,eu-south-1,eu-north-1,eu-central-2,eu-central-1,il-central-1,me-south-1,me-central-1,ap-south-2,ap-south-1,ap-southeast-1,ap-southeast-5,af-south-1";;
     aws-from-paris-25) echo "us-west-2,us-west-1,us-east-2,us-east-1,ca-west-1,ca-central-1,mx-central-1,eu-west-3,eu-west-2,eu-west-1,eu-south-2,eu-south-1,eu-north-1,eu-central-2,eu-central-1,il-central-1,me-south-1,me-central-1,ap-south-2,ap-south-1,ap-southeast-1,ap-southeast-3,ap-southeast-7,ap-southeast-5,af-south-1";;
-    aws-from-paris-27) echo "us-west-2,us-west-1,us-east-2,us-east-1,ca-west-1,ca-central-1,mx-central-1,eu-west-3,eu-west-2,eu-west-1,eu-south-2,eu-south-1,eu-north-1,eu-central-2,eu-central-1,il-central-1,me-south-1,me-central-1,ap-south-2,ap-south-1,ap-southeast-1,ap-southeast-3,ap-southeast-7,ap-southeast-5,ap-northeast-1,ap-east-1,af-south-1";;
-    aws-from-paris-29) echo "us-west-2,us-west-1,us-east-2,us-east-1,ca-west-1,ca-central-1,mx-central-1,eu-west-3,eu-west-2,eu-west-1,eu-south-2,eu-south-1,eu-north-1,eu-central-2,eu-central-1,il-central-1,me-south-1,me-central-1,ap-south-2,ap-south-1,ap-southeast-1,ap-southeast-3,ap-southeast-7,ap-southeast-5,ap-northeast-3,ap-northeast-2,ap-northeast-1,ap-east-1,af-south-1";;
-    aws-from-paris-31) echo "us-west-2,us-west-1,us-east-2,us-east-1,ca-west-1,ca-central-1,mx-central-1,eu-west-3,eu-west-2,eu-west-1,eu-south-2,eu-south-1,eu-north-1,eu-central-2,eu-central-1,il-central-1,me-south-1,me-central-1,ap-south-2,ap-south-1,ap-southeast-1,ap-southeast-3,ap-southeast-7,ap-southeast-5,ap-northeast-3,ap-northeast-2,ap-southeast-2,ap-southeast-4,ap-northeast-1,ap-east-1,af-south-1";;
+    aws-from-paris-27) echo "us-west-2,us-west-1,us-east-2,us-east-1,ca-west-1,ca-central-1,mx-central-1,sa-east-1,eu-west-3,eu-west-2,eu-west-1,eu-south-2,eu-south-1,eu-north-1,eu-central-2,eu-central-1,il-central-1,me-south-1,me-central-1,ap-south-2,ap-south-1,ap-southeast-1,ap-southeast-3,ap-southeast-7,ap-southeast-5,ap-east-1,af-south-1";;
+    aws-from-paris-29) echo "us-west-2,us-west-1,us-east-2,us-east-1,ca-west-1,ca-central-1,mx-central-1,sa-east-1,eu-west-3,eu-west-2,eu-west-1,eu-south-2,eu-south-1,eu-north-1,eu-central-2,eu-central-1,il-central-1,me-south-1,me-central-1,ap-south-2,ap-south-1,ap-southeast-1,ap-southeast-3,ap-southeast-7,ap-southeast-5,ap-northeast-1,ap-east-1,ap-east-2,af-south-1";;
+    aws-from-paris-31) echo "us-west-2,us-west-1,us-east-2,us-east-1,ca-west-1,ca-central-1,mx-central-1,sa-east-1,eu-west-3,eu-west-2,eu-west-1,eu-south-2,eu-south-1,eu-north-1,eu-central-2,eu-central-1,il-central-1,me-south-1,me-central-1,ap-south-2,ap-south-1,ap-southeast-1,ap-southeast-3,ap-southeast-7,ap-southeast-5,ap-northeast-3,ap-northeast-2,ap-northeast-1,ap-east-1,ap-east-2,af-south-1";;
+    aws-from-paris-33) echo "us-west-2,us-west-1,us-east-2,us-east-1,ca-west-1,ca-central-1,mx-central-1,sa-east-1,eu-west-3,eu-west-2,eu-west-1,eu-south-2,eu-south-1,eu-north-1,eu-central-2,eu-central-1,il-central-1,me-south-1,me-central-1,ap-south-2,ap-south-1,ap-southeast-1,ap-southeast-3,ap-southeast-7,ap-southeast-5,ap-northeast-3,ap-northeast-2,ap-southeast-2,ap-southeast-4,ap-northeast-1,ap-east-1,ap-east-2,af-south-1";;
+    *) echo "";;
+  esac
+}
+
+get_nonvoting() {
+  local config=$1
+  local algo=$2
+  case "$config-$algo" in
+    aws-europe-8-kcensus) echo "3";;
+    aws-europe-8-epaxos) echo "5";;
+    aws-europe-8-multi-paxos-3p) echo "3";;
+    aws-europe-8-paxos) echo "5";;
+    aws-europe-8-weak-replication) echo "5";;
+
+    aws-ease-asia-9-kcensus) echo "2,8";;
+    aws-ease-asia-9-epaxos) echo "4,8";;
+    aws-ease-asia-9-multi-paxos-3p) echo "4,6";;
+    aws-ease-asia-9-paxos) echo "2,8";;
+    aws-ease-asia-9-weak-replication) echo "1,8";;
+
     *) echo "";;
   esac
 }
@@ -206,8 +242,7 @@ get_regions() {
 # exp-1 <=> 7.1
 function exp-1() {
   echo "--- Starting Experiment 1: Pure Latency ---"
-  for configName in "aws-europe-7" "aws-north-america-7" "aws-world-ring-13"; do
-
+  for configName in "aws-europe-8" "aws-north-america-7" "aws-east-asia-9"; do
     local EXPERIMENT_ID="exp-1-$configName"
     local varFile="${CONFIGS[$configName]}"
     provision "$varFile" "$EXPERIMENT_ID"
@@ -230,13 +265,13 @@ function exp-1() {
 function exp-2() {
   echo "--- Starting Experiment 2: Latency under load ---"
 
-  local configName="aws-world-ring-13"
+  local configName="aws-europe-8"
   local EXPERIMENT_ID="exp-2"
   local varFile="${CONFIGS[$configName]}"
   provision "$varFile" "$EXPERIMENT_ID"
   deploy "$EXPERIMENT_ID"
 
-  local LOADS=(100 500) # req/s per client
+  local LOADS=(100 500 1000 2000 4000) # total req/s
 
   for writes in 1; do
       for load in "${LOADS[@]}"; do
@@ -256,7 +291,7 @@ function exp-2() {
 function exp-4() {
   echo "--- Starting Experiment 4: Faults ---"
 
-  local configName="aws-world-ring-9"
+  local configName="aws-europe-8"
   local EXPERIMENT_ID="exp-4"
   local varFile="${CONFIGS[$configName]}"
   provision "$varFile" "$EXPERIMENT_ID"
@@ -264,11 +299,11 @@ function exp-4() {
 
   local writes=1
   local duration="1s"
-  local throughput=10
+  local throughput="$THROUGHPUT"
 
   for algo in "${REPLICATED_ALGOS[@]}"; do
-    for faults in "" $(all_faults "$(digits "$configName")"); do
-      run "$EXPERIMENT_ID" "$configName" "$algo" $writes $duration exponential $throughput "$faults"
+    for faults in "" $(all_faults "$(digits "$configName")" "$(get_nonvoting "$configName" "$algo")"); do
+      run "$EXPERIMENT_ID" "$configName" "$algo" $writes $DURATION exponential $throughput "$faults"
     done
   done
 
@@ -281,9 +316,10 @@ function exp-3-5() {
   echo "--- Starting Experiments 3 & 5: Scalability and Propagation ---"
 
   local EXPERIMENT_ID="exp-3-5"
-  local varFile="deployment/terraform/regions/aws-all-31.tfvars"
+  local varFile="deployment/terraform/regions/aws-all-33.tfvars"
   local tmpDir="$(pwd)/.tmp_configs_${EXPERIMENT_ID}"
   local masterConfigFile="${tmpDir}/master-config.json"
+  local duration="1s"
 
   # step 1: provision servers
   provision "$varFile" "$EXPERIMENT_ID"
@@ -300,10 +336,8 @@ function exp-3-5() {
   echo "--> Master config created at ${masterConfigFile}"
 
   # step 3: run stuff
-  local duration="1s"
-  local throughput=10
   for configs_type in aws-random aws-from-paris; do
-    for num_replicas in $(seq 3 2 31); do
+    for num_replicas in $(seq 3 2 33); do
       local configName="${configs_type}-${num_replicas}"
       local target_regions=$(get_regions "$configs_type" "$num_replicas")
 
@@ -329,18 +363,22 @@ function exp-3-5() {
       # step 3.3: run the scalability experiments
       for writes in 1; do
         for algo in "${ALGOS[@]}"; do
-            run_title="c=${configs_type}/${num_replicas}.toml/a=${algo}/w=${writes}/d=${duration}/i=exponential/t=${throughput}/s=${SPEEDUP}/f=/k=${KEYS}/skew=${SKEW}/shards=${SHARDS}"
+            run_title="c=${configs_type}/${num_replicas}.toml/a=${algo}/w=${writes}/d=${duration}/i=exponential/t=${THROUGHPUT}/s=${SPEEDUP}/f=/k=${KEYS}/skew=${SKEW}/shards=${SHARDS}"
             resultPath="${ABSOLUTE_BASE_LOG_DIR}/${run_title}"
             mkdir -p "$resultPath"
+
+            local per_proposer_throughput=$(($THROUGHPUT / $num_replicas))
             
             echo "--> RUNNING: ${run_title}"
             (
               cd deployment/ansible
-              ansible-playbook -i "${subInventoryFile}" 03-run-experiment.yml \
+              until ansible-playbook -i "${subInventoryFile}" 03-run-experiment.yml \
                 -e "algo=${algo}" -e "writes=${writes}" -e "duration=${duration}" \
-                -e "ingress=exponential" -e "throughput=${throughput}" -e "speedup=${SPEEDUP}" \
+                -e "ingress=exponential" -e "throughput=${per_proposer_throughput}" -e "speedup=${SPEEDUP}" \
                 -e "keys=${KEYS}" -e "skew=${SKEW}" -e "shards=${SHARDS}" \
-                -e "result_path=${resultPath}" -e "sub_config_file=${subConfigFile}"
+                -e "result_path=${resultPath}" -e "sub_config_file=${subConfigFile}"; do
+                echo "Experiment failed, retrying $algo on $configName..."
+              done
             )
         done
       done

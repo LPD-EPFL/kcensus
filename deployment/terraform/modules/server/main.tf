@@ -47,6 +47,8 @@ locals {
     "us-east-2" = "ami-0194140fd5922c8b1"
     "us-west-1" = "ami-045a822af43ef6e65"
     "us-west-2" = "ami-01222b0cc0ba99281"
+    "ap-east-2": "ami-025232a54426a0641"
+    "sa-east-1": "ami-00ace8e2c51a2ff53"
   }
 }
 

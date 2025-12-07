@@ -29,5 +29,7 @@ target_regions = [
     "ap-southeast-4",
     "ap-northeast-1",
     "ap-east-1",
-    "af-south-1"
+    "ap-east-2",
+    "af-south-1",
+    "sa-east-1"
 ]

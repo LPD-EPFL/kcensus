@@ -42,6 +42,10 @@ provider "aws" {
   alias  = "mx-central-1"
   region = "mx-central-1"
 }
+provider "aws" {
+  alias  = "sa-east-1"
+  region = "sa-east-1"
+}
 
 # Europe, Middle East & Africa (EMEA)
 provider "aws" {
@@ -97,6 +101,10 @@ provider "aws" {
 provider "aws" {
   alias  = "ap-east-1"
   region = "ap-east-1"
+}
+provider "aws" {
+  alias  = "ap-east-2"
+  region = "ap-east-2"
 }
 provider "aws" {
   alias  = "ap-south-1"

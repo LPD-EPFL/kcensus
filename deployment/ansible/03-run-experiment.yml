@@ -14,6 +14,7 @@
     keys: "100"
     skew: "0"
     shards: "100"
+    nonvoting: ""
     result_path: "./results_default"
 
   tasks:
@@ -25,7 +26,7 @@
     - name: Run kcensus
       ansible.builtin.shell:
         cmd: >
-          /usr/bin/time -f "[time] Memory(KB): %M"
+          RUST_BACKTRACE=1 timeout 30s /usr/bin/time -f "[time] Memory(KB): %M"
           ./kcensus --config config.toml -p {{ sub_exp_id }}
           -d 127.0.0.1:{{ cassandra_port }}
           -a "{{ algo }}"
@@ -37,6 +38,7 @@
           -k "{{ keys }}"
           --skew "{{ skew }}"
           --shards "{{ shards }}"
+          {{ "-v " + nonvoting if nonvoting else "" }}
           {{ "-f " + faults if faults else "" }}
         chdir: /home/ec2-user/kcensus_app
       register: job_result

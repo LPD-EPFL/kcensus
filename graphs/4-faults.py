@@ -10,14 +10,14 @@ from common import ALGORITHMS, args, serialized_args
 from logparser import *
 from prelude import lighten_color, plt
 
-algorithms = ["weak-replication", "kcensus", "epaxos", "multi-paxos", "paxos"]
+algorithms = ["weak-replication", "kcensus", "epaxos", "multi-paxos-3p", "paxos"]
 
 mpl.rcParams["hatch.linewidth"] = 0.5
 HATCHES = {
     "weak-replication": "",
     "kcensus": "xxxx",
     "epaxos": "\\\\\\\\\\",
-    "multi-paxos": "----",
+    "multi-paxos-3p": "----",
     "paxos": "////",
 }
 
