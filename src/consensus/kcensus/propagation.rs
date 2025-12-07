@@ -318,7 +318,11 @@ pub fn compute_propagation_graphs(
         paxos_committers[leader] = leader;
 
         let e_paxos_quorum = ((topology.nb_replicas * 3) / 4).max(maj_quorum);
-        epaxos_latencies[leader] = quorum_rtts[leader][e_paxos_quorum - 1];
+        if e_paxos_quorum <= topology.alive_replicas.len() {
+            epaxos_latencies[leader] = quorum_rtts[leader][e_paxos_quorum - 1];
+        } else {
+            epaxos_latencies[leader] = paxos_latencies[leader];
+        }
         epaxos_committers[leader] = leader;
 
         let multi_paxos_latency = (0..nb_processes)
