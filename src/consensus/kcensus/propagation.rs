@@ -916,10 +916,11 @@ pub fn compute_propagation_graphs(
                             debug_assert!(
                                 src_state.knowledge[i].is_subset(&src_state.knowledge[src])
                             );
-                            debug_assert!(
-                                state.knowledge[i].is_superset(&src_state.knowledge[i])
-                                    || state.knowledge[i].is_subset(&src_state.knowledge[i])
-                            );
+                            // TODO: the following would be true if we always re-propagated knowledge fully
+                            // debug_assert!(
+                            //     state.knowledge[i].is_superset(&src_state.knowledge[i])
+                            //         || state.knowledge[i].is_subset(&src_state.knowledge[i])
+                            // );
 
                             // Merge knowledge
                             state.knowledge[i].union_with(&src_state.knowledge[i]);
