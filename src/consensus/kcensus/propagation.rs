@@ -466,6 +466,7 @@ pub fn compute_propagation_graphs(
             leaders: &'a Vec<usize>,
             knowledge_levels: &'a Vec<Vec<Vec<KnowledgeLevel>>>,
             compatible_levels: Vec<Vec<Vec<usize>>>,
+            useful_levels: Vec<Vec<bool>>,
             max_levels: Vec<usize>,
             min_quorum: usize,
         }
@@ -500,7 +501,9 @@ pub fn compute_propagation_graphs(
             let pid_a = pids_done;
             let pids_done = pids_done + 1;
             'level_loop: for level_a in min_levels[pid_a]..=data.max_levels[pid_a] {
-                // TODO: skip levels that are useless
+                if !data.useful_levels[pid_a][level_a] {
+                    continue 'level_loop;
+                }
 
                 let mut levels = min_levels.to_owned();
                 levels[pid_a] = level_a;
@@ -568,6 +571,7 @@ pub fn compute_propagation_graphs(
                 leaders,
                 knowledge_levels,
                 compatible_levels: vec![Vec::new(); nb_processes],
+                useful_levels: vec![Vec::new(); nb_processes],
                 max_levels: vec![0usize; nb_processes],
                 min_quorum,
             };
@@ -585,11 +589,15 @@ pub fn compute_propagation_graphs(
             for a in 0..nb_processes {
                 let mut current_levels: Vec<usize> = data.max_levels.clone();
                 for a_level in 0..knowledge_levels[a][leaders[a]].len() {
+                    let mut compatibility_changed = false;
                     for (b, b_level) in current_levels.iter_mut().enumerate() {
                         while *b_level > 0 && data.are_compatible(a, a_level, b, *b_level - 1) {
                             *b_level -= 1;
+                            compatibility_changed = true;
                         }
                     }
+                    data.useful_levels[a]
+                        .push(data.compatible_levels[a].is_empty() || compatibility_changed);
                     data.compatible_levels[a].push(current_levels.clone());
                 }
             }
