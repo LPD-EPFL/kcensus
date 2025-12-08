@@ -377,7 +377,7 @@ impl Client {
             let no_response = self.client_response_rx.is_empty();
             select! {
                 // Handle sending the next request when its time arrives
-                res = &mut delay, if no_response && next_request.is_some() => {
+                res = &mut delay, if no_response && next_request.is_some() && self.client_request_tx.capacity() > 0 => {
                     res.expect("Delay failed");
 
                     let request = next_request.take().unwrap();
