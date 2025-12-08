@@ -1,10 +1,11 @@
 use bit_set::BitSet;
 use clap::Parser;
 use kcensus::consensus::kcensus::propagation::compute_propagation_graphs;
+use kcensus::eval;
 use kcensus::topology::Topology;
-use kcensus::{eval, init_logger};
 use log::info;
 use serde::Serialize;
+use std::io::Write;
 use std::time::{Duration, Instant};
 
 #[derive(Parser, Debug)]
@@ -23,7 +24,17 @@ struct Args {
 }
 
 fn main() {
-    init_logger();
+    env_logger::builder()
+        .format(|buf, record| {
+            let level = record.level();
+            let level_style = buf.default_level_style(level);
+            writeln!(
+                buf,
+                "{level_style}{level:<5}{level_style:#} {}",
+                record.args()
+            )
+        })
+        .init();
     let args = Args::parse();
     let base_topology = Topology::from_path(&args.config, args.non_voting, None);
     let nb_processes = base_topology.nb_processes;
