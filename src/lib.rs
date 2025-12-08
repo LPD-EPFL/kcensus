@@ -339,7 +339,7 @@ pub async fn run() -> io::Result<()> {
                     tokio::select! {
                         maybe_cmd = new_client_request_rx.recv() => {
                             if let Some(cmd) = maybe_cmd {
-                                if rtt.is_zero() {
+                                if rtt.is_zero() && committed_request_tx.capacity() > 0 {
                                     committed_request_tx
                                         .send(cmd)
                                         .await
@@ -391,7 +391,7 @@ pub async fn run() -> io::Result<()> {
                             let now = Instant::now();
                             // Complete all commands whose timer has expired
                             while let Some((_, completes_at)) = queue.front() {
-                                if *completes_at <= now {
+                                if *completes_at <= now && committed_request_tx.capacity() > 0 {
                                     let (cmd, _) = queue.pop_front().unwrap();
                                     committed_request_tx.send(cmd).await.expect(
                                         "Unreplicated or weakly replicated server failed to send committed request",

@@ -373,11 +373,11 @@ impl Client {
         // Set initial delay for first request
         scheduled_time = workload.interval.next(&scheduled_time);
         delay.as_mut().reset(scheduled_time);
-        while scheduled_time < warmdown_end || responses_received != current_request_id {
+        while next_request.is_some() || responses_received != current_request_id {
             let no_response = self.client_response_rx.is_empty();
             select! {
                 // Handle sending the next request when its time arrives
-                res = &mut delay, if no_response && next_request.is_some() => {
+                res = &mut delay, if no_response && next_request.is_some() && self.client_request_tx.capacity() > 0 => {
                     res.expect("Delay failed");
 
                     let request = next_request.take().unwrap();
