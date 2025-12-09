@@ -3,25 +3,9 @@ addresses = [
     ["127.0.0.1", 9877, ],
     ["127.0.0.1", 9878, ],
 ]
-regions = [
-    "eu-west-3",
-    "eu-west-2",
-    "eu-central-2",
-]
+regions = ['Europe Paris eu-west-3', 'Europe London eu-west-2', 'Europe Frankfurt eu-central-1']
 raw_latencies = [
-    [
-        0.0,
-        3.47,
-        4.78,
-    ],
-    [
-        3.47,
-        0.0,
-        8.46,
-    ],
-    [
-        4.79,
-        8.46,
-        0.0,
-    ],
+  [0, 3.42, 4.0475],
+  [3.42, 0, 6.225],
+  [4.0475, 6.225, 0]
 ]
