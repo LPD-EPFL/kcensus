@@ -421,7 +421,24 @@ impl Client {
                 }
             }
         }
+        let average_latency = total_latency / responses_received as u32;
+        let readable = format!(
+            "Issued {} requests in total (avg latency: {}ms) (including warmup+warmdown)",
+            responses_received,
+            average_latency.as_millis()
+        );
+        let event = ClientDoneEvent {
+            requests: responses_received,
+            average_latency: total_latency / responses_received as u32,
+        };
+        eval::log("client-done", &readable, &event);
     }
+}
+
+#[derive(Serialize)]
+struct ClientDoneEvent {
+    requests: usize,
+    average_latency: std::time::Duration,
 }
 
 #[derive(Serialize)]
