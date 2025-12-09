@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 
-REQUESTS=100
 SPEEDUP=1
 
 if ! command -v "/usr/bin/time" >/dev/null 2>&1
@@ -50,12 +49,15 @@ function plot-3() {
 }
 
 function plot-4() {
-  local config=aws-world-ring-9
+  local config=aws-europe-8
   local writes=1
-  local requests=10
+  local duration="10s"
+  local throughput=1000
+  local shards=10000
+  local keys=1000000
   (
     cd graphs &&
-    python3 4-faults.py -c "$config" -w "$writes" -r "$requests" -i round-robin -t 0 -s "$SPEEDUP" -g 1 > "./plots/4-faults.txt"
+    python3 4-faults.py -c "$config" --nonvoting_paxos "5" --nonvoting_epaxos "5" --nonvoting_kcensus "3" --nonvoting_multi_paxos_3p "3" --nonvoting_weak_replication "5" -w "$writes" --duration "$duration" -i exponential -t $throughput -s "$SPEEDUP" --shards $shards --keys $keys -g 1 > "./plots/4-faults.txt"
   )
 }
 
@@ -67,12 +69,17 @@ function plot-5() {
 }
 
 function plot-6() {
-  SPEEDUP=10000000
-  local requests=1000
+  local writes=1.0
+  local duration="10s"
+  local throughput=1000
+  local speedup=10
+  local keys=10000
+  local skew=0.0
+  local shards=10000
   (
     cd graphs &&
-    python3 6-network.py -r 1000 -c aws-random/@.toml -s 10000000 -w 1 -t=0 -g 1 > "./plots/6-network.txt" &&
-    python3 7-cpu-mem.py -r 1000 -c aws-random/@.toml -s 10000000 -w 1 -t=0 -g 1 > "./plots/7-cpu-mem.txt"
+    python3 6-network.py -c aws-random/@.toml -w "$writes" --duration "$duration" -i exponential -t $throughput -s "$speedup" --shards $shards --keys $keys --skew $skew -g 1 > "./plots/6-network.txt" &&
+    python3 7-cpu-mem.py -c aws-random/@.toml -w "$writes" --duration "$duration" -i exponential -t $throughput -s "$speedup" --shards $shards --keys $keys --skew $skew -g 1 > "./plots/7-cpu-mem.txt"
   )
 }
 

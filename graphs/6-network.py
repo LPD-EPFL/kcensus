@@ -34,16 +34,19 @@ for experiment in ALGORITHMS:
     ys_bytes = []
     ys_msgs = []
     for num_replicas in range(3, 33, 2):
-        req_per_replica = args.requests // num_replicas
         config = args.config.replace("@", str(num_replicas))
         logs = parse(
             algo=experiment,
             config=config,
             writes=args.writes,
-            requests=req_per_replica,
             ingress=args.ingress,
+            duration=args.duration,
             throughput=args.throughput,
+            faults=args.faults,
             speedup=args.speedup,
+            keys=args.keys,
+            skew=args.skew,
+            shards=args.shards
         )
         assert (
             len(logs["network-done"]) == num_replicas
@@ -55,11 +58,12 @@ for experiment in ALGORITHMS:
                 flattened_output[category].extend(items)
         logs = flattened_output
 
+        total_requests = sum(log["requests"] for log in logs["client-done"])
         total_bytes = sum(log["byte_count"] for log in logs["network-done"])
         total_msgs = sum(log["msg_count"] for log in logs["network-done"])
         xs.append(num_replicas)
-        ys_bytes.append(total_bytes / (req_per_replica * num_replicas))
-        ys_msgs.append(total_msgs / (req_per_replica * num_replicas))
+        ys_bytes.append(total_bytes / total_requests)
+        ys_msgs.append(total_msgs / total_requests)
         print(experiment, num_replicas, ys_bytes[-1], ys_msgs[-1])
     plots[0].plot(xs, ys_bytes, **ALGORITHMS[experiment], markevery=(1, 3))
     plots[1].plot(xs, ys_msgs, **ALGORITHMS[experiment], markevery=(1, 3))

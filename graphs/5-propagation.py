@@ -38,15 +38,15 @@ plot.tick_params(axis="both", which="major", pad=0.5)
 plot.tick_params(axis="both", which="minor", pad=0.5)
 plot.xaxis.set_major_locator(MultipleLocator(4, 3))
 plot.xaxis.set_minor_locator(MultipleLocator(2, 3))
-plot.yaxis.set_major_locator(MultipleLocator(0.5))
-plot.yaxis.set_minor_locator(MultipleLocator(0.1))
-plot.set_xlim(3, 31)
+# plot.yaxis.set_major_locator(MultipleLocator(0.5))
+# plot.yaxis.set_minor_locator(MultipleLocator(0.1))
+plot.set_xlim(3, 33)
 
 for config_list, cl_style in config_lists.items():
     xs = []
     ys = []
     # percentiles_ys = ([], [])
-    for num_replicas in range(3, 33, 2):
+    for num_replicas in range(3, 35, 2):
         config = config_list.replace("@", str(num_replicas))
         with open(f"../logs/c={config}/graph_bench.stdout") as file:
             logs = parse_file(file)["graph-generation"]

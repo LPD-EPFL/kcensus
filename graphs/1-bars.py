@@ -27,7 +27,8 @@ labels = []
 colors = []
 for i, experiment in enumerate(ALGORITHMS.keys()):
     logs = parse(algo=experiment, config=args.config, writes=args.writes, duration=args.duration, ingress=args.ingress,
-                 throughput=args.throughput, speedup=args.speedup, faults=args.faults)
+                 throughput=args.throughput, speedup=args.speedup, faults=args.faults, keys=args.keys, skew=args.skew,
+                 shards=args.shards)
     all_executed = []
     for pid_executed in logs["executed"].values():
         all_executed.extend(pid_executed)
