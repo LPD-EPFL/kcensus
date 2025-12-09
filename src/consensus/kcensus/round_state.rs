@@ -131,7 +131,7 @@ impl KCensusRoundState {
 
     #[inline]
     pub fn has_conflict(&self) -> bool {
-        self.proposers().len() > 1
+        self.proposers().len() > 1 || my_state!(self).get_paxos_accept_round().is_some()
     }
 
     #[inline]
