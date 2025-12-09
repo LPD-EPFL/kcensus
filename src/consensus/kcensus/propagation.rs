@@ -304,6 +304,7 @@ pub fn compute_propagation_graphs(
         .collect();
 
     let mut min_effort_latencies = vec![Duration::MAX; nb_processes];
+    let mut _min_effort_committers = vec![0usize; nb_processes];
     let mut paxos_latencies = vec![Duration::MAX; nb_processes];
     let mut paxos_committers = vec![0usize; nb_processes];
     let mut epaxos_latencies = vec![Duration::MAX; nb_processes];
@@ -314,6 +315,8 @@ pub fn compute_propagation_graphs(
 
     // Compute latency of e/multi-/paxos per leader
     for leader in topology.alive_replicas.iter() {
+        min_effort_latencies[leader] = quorum_rtts[leader][min_quorum - 1];
+        _min_effort_committers[leader] = leader;
         paxos_latencies[leader] = quorum_rtts[leader][maj_quorum - 1] * 2;
         paxos_committers[leader] = leader;
 
@@ -352,20 +355,25 @@ pub fn compute_propagation_graphs(
 
     // Compute latency of paxos/epaxos for non-replica processes
     for proposer in 0..nb_processes {
-        min_effort_latencies[proposer] = quorum_rtts[proposer][min_quorum - 1];
         if topology.alive_replicas.contains(proposer) {
             continue;
         }
-        for leader in topology.alive_replicas.iter() {
-            let paxos_latency = link_rtts[proposer][leader] + paxos_latencies[leader];
+        for committer in topology.alive_replicas.iter() {
+            let paxos_latency = link_rtts[proposer][committer] + paxos_latencies[committer];
             if paxos_latency < paxos_latencies[proposer] {
                 paxos_latencies[proposer] = paxos_latency;
-                paxos_committers[proposer] = leader;
+                paxos_committers[proposer] = committer;
             }
-            let epaxos_latency = link_rtts[proposer][leader] + epaxos_latencies[leader];
+            let epaxos_latency = link_rtts[proposer][committer] + epaxos_latencies[committer];
             if epaxos_latency < epaxos_latencies[proposer] {
                 epaxos_latencies[proposer] = epaxos_latency;
-                epaxos_committers[proposer] = leader;
+                epaxos_committers[proposer] = committer;
+            }
+            let min_effort_latency = quorum_3p_rtts[proposer][committer][min_quorum - 1]
+                + path_latencies[committer][proposer];
+            if min_effort_latency < min_effort_latencies[proposer] {
+                min_effort_latencies[proposer] = min_effort_latency;
+                _min_effort_committers[proposer] = committer;
             }
         }
     }

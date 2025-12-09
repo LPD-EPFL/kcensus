@@ -326,15 +326,9 @@ pub async fn run() -> io::Result<()> {
                         )
                     }
                     Algo::WeakReplication => {
-                        let mut rtts = topology
-                            .alive_replicas
-                            .iter()
-                            .map(|rep| propagation_graphs.path_rtts[my_pid][rep])
-                            .collect::<Vec<_>>();
-                        rtts.sort();
                         let majority = 1 + (topology.nb_replicas / 2);
                         let to_send = majority - topology.alive_replicas.contains(my_pid) as usize;
-                        (rtts[majority - 1] / args.speedup, to_send)
+                        (propagation_graphs.min_effort_latencies[my_pid], to_send)
                     }
                     _ => unreachable!("Algo::(No|Weak)Replication"),
                 };
@@ -370,6 +364,7 @@ pub async fn run() -> io::Result<()> {
                                     .expect("Local server failed to serialize command");
                                 read_buffer.resize(serialized.len(), 0);
 
+                                // TODO: this is for tput, but in latency we should only pay 1 send/recv
                                 for _ in 0..messages_to_send {
                                     writer
                                         .write_all(&serialized)
