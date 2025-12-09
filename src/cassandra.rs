@@ -393,6 +393,7 @@ impl Client {
                         .send(request)
                         .await
                         .expect("Client failed to queue request");
+                    // TODO: yield here for lower latency ?
 
                     current_request_id += 1;
 
