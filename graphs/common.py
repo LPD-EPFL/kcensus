@@ -87,10 +87,25 @@ parser.add_argument(
     "-k", "--keys", type=int, default=100, help="Key count"
 )
 parser.add_argument(
+    "--nonvoting_weak_replication", type=lambda x: list(map(int, x.split(","))), default=[], help="Non-voting processes for weak-replication"
+)
+parser.add_argument(
+    "--nonvoting_paxos", type=lambda x: list(map(int, x.split(","))), default=[], help="Non-voting processes for paxos"
+)
+parser.add_argument(
+    "--nonvoting_epaxos", type=lambda x: list(map(int, x.split(","))), default=[], help="Non-voting processes for epaxos"
+)
+parser.add_argument(
+    "--nonvoting_multi_paxos_3p", type=lambda x: list(map(int, x.split(","))), default=[], help="Non-voting processes for multi-paxos-3p"
+)
+parser.add_argument(
+    "--nonvoting_kcensus", type=lambda x: list(map(int, x.split(","))), default=[], help="Non-voting processes for kcensus"
+)
+parser.add_argument(
     "--skew", type=float, default=0, help="Zipfian skew"
 )
 parser.add_argument(
-    "--shards", type=float, default=100, help="Shard count"
+    "--shards", type=int, default=100, help="Shard count"
 )
 args = parser.parse_args()
 serialized_args = f'-c={args.config.replace("/", "-")}-w={args.writes:g}-d={args.duration}-i={args.ingress}-t={args.throughput:g}-s={args.speedup}-f={args.faults}-g={args.geo}-keys={args.keys}-skew={args.skew}-shards={args.shards}'
