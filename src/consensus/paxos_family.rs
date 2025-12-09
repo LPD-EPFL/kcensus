@@ -11,6 +11,7 @@ use bit_set::BitSet;
 use log::{debug, info, trace};
 use message::RoundV;
 use std::collections::HashMap;
+use std::fmt::{Debug, Formatter};
 use std::io;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -86,6 +87,24 @@ impl PaxosFamilyShard {
                 starting_round,
             ),
         }
+    }
+}
+
+impl Debug for PaxosFamilyShard {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "slot={}, last_v={:?}, round={:?}, my_v={:?}, accepted_at={:?}, is_prepared={}, can_commit={}, can_epaxos_commit={:?}, queued_commands={:?}",
+            self.slot,
+            self.last_v,
+            self.round_state.round,
+            self.get_my_v(),
+            self.round_state.get_last_accepted_round(),
+            self.round_state.is_prepared(),
+            self.round_state.paxos_can_commit(),
+            self.round_state.epaxos_can_commit(),
+            self.queued_commands,
+        )
     }
 }
 

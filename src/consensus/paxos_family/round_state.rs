@@ -191,8 +191,10 @@ impl PaxosFamilyRoundState {
 
     #[inline]
     pub fn epaxos_can_commit(&self) -> bool {
-        debug_assert!(self.epaxos_leader_to_v.contains_key(&self.my_pid));
-        self.epaxos_leader_to_v.len() == 1 && self.epaxos_preaccepted >= self.e_paxos_quorum
+        let out =
+            self.epaxos_leader_to_v.len() == 1 && self.epaxos_preaccepted >= self.e_paxos_quorum;
+        debug_assert!(!out || self.epaxos_leader_to_v.contains_key(&self.my_pid));
+        out
     }
 
     // Note: If I receive an answer from a leader, he will not commit (guaranteed)

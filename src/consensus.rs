@@ -9,11 +9,14 @@ use bit_set::BitSet;
 use command::Command;
 use log::{info, trace, warn};
 use std::collections::{HashMap, VecDeque};
+use std::fmt::Debug;
 use std::io;
 use std::sync::Arc;
-use tokio::select;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::Mutex;
+use tokio::{pin, select};
+use tokio_timerfd::Delay;
 
 pub(crate) mod command;
 pub mod kcensus;
@@ -72,13 +75,14 @@ pub(crate) trait ConsensusShardTrait {
 
 impl<AS, ARS> Consensus<AS, ARS>
 where
-    ConsensusShard<AS, ARS>: ConsensusShardTrait,
+    ConsensusShard<AS, ARS>: ConsensusShardTrait + Debug,
 {
     pub async fn run(
         &mut self,
         mut msg_rx: Receiver<MsgWithSource>,
         mut new_client_commands_rx: Receiver<Command>,
         committed_commands_tx: Sender<Command>,
+        deadlock_deadline: Duration,
     ) -> io::Result<()> {
         let mut count_done = 0usize;
         let mut done = false;
@@ -90,9 +94,25 @@ where
         let mut my_queued_commands: Vec<VecDeque<Command>> =
             vec![VecDeque::with_capacity(likely_queued); self.shards.len()];
 
+        let deadlock_deadline =
+            Delay::new(Instant::now() + deadlock_deadline).expect("should init timer");
+        pin!(deadlock_deadline);
+
         'main_loop: while count_done < self.process_count {
             // Read new messages and/or new local command
             let shard = select! {
+                res = &mut deadlock_deadline => {
+                    res.expect("should wait until deadlock_deadline");
+                    eprintln!("deadlock detected ! Checking all shards...");
+                    for (shard_id, shard) in self.shards.iter().enumerate() {
+                        if shard.ongoing() || shard.has_queued_commands() || !queued_messages[shard_id].is_empty() {
+                            eprintln!("shard={shard_id} is stuck. Shard state: {shard:?}");
+                            eprintln!("Queued messages for shard={shard_id}: {:?}", queued_messages[shard_id]);
+                        }
+                    }
+                    eprintln!("checked all shard.");
+                    panic!("deadlock detected, terminating.");
+                },
                 command = new_client_commands_rx.recv(), if !done => {
                     match command {
                         Some(command) =>  {

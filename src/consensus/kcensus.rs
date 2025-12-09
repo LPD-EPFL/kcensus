@@ -11,6 +11,7 @@ use crate::multi_sink::{MultiSink, ShardMultiSink};
 use bit_set::BitSet;
 use log::{debug, info, trace};
 use std::collections::HashMap;
+use std::fmt::{Debug, Formatter};
 use std::io;
 use std::sync::Arc;
 use std::time::Duration;
@@ -61,6 +62,26 @@ impl KCensusShard {
             },
             round_state: KCensusRoundState::new(process_count, majority, my_pid),
         }
+    }
+}
+
+impl Debug for KCensusShard {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "slot={}, last_v={:?}, prepared={:?}, my_v={:?}, accepted_at={:?}, could_adopt={}, can_start_accept={}, leaders={:?}, proposers={:?}, queued_commands={:?}",
+            self.slot,
+            self.last_v,
+            self.round_state.prepared_for(),
+            self.get_my_v(),
+            self.round_state.get_paxos_accept_round(),
+            self.round_state.could_adopt(&self.alive_replicas),
+            self.round_state
+                .can_start_paxos_accept(&self.alive_replicas),
+            self.round_state.leaders(),
+            self.round_state.proposers(),
+            self.queued_commands,
+        )
     }
 }
 

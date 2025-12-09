@@ -209,13 +209,16 @@ impl KCensusRoundState {
         prepared_count >= self.majority && self.get_paxos_accept_round() != Some(self.my_pid)
     }
 
-    pub fn can_adopt(&self) -> bool {
-        self.node_states.iter().filter(|x| x.is_frozen()).count() >= self.majority
+    pub fn could_adopt(&self, alive_replicas: &BitSet) -> bool {
+        self.node_states
+            .iter()
+            .enumerate()
+            .filter(|(id, state)| alive_replicas.contains(*id) && state.is_frozen())
+            .count()
+            >= self.majority
     }
 
     pub fn adopt(&self, graph: &PropagationGraphs) -> Option<usize> {
-        assert!(self.can_adopt());
-
         let mut highest_paxos_accept_round = None;
         let mut highest_paxos_accept_value = None;
 
@@ -305,7 +308,7 @@ impl fmt::Display for KCensusRoundState {
             if let Some(v) = state.get_v() {
                 write!(f, "\n  {}: leader={:?}, v={}, ", i, state.prepared_for(), v,)?;
                 if let Some(round) = state.get_paxos_accept_round() {
-                    write!(f, "paxos_accept_round={}", round)?;
+                    write!(f, "paxos_accept_round={round}")?;
                 } else if let Some(proposer) = state.get_proposer() {
                     write!(f, "proposer={}, state={:?}", proposer, state.get_state_id())?;
                 }

@@ -178,6 +178,9 @@ pub async fn run() -> io::Result<()> {
         },
     }));
 
+    let exp_length = args.warmup + args.duration + args.warmdown;
+    let deadlock_deadline = exp_length + (exp_length / 2).max(Duration::from_secs(5));
+
     match algo {
         Algo::KCensus => {
             println!(
@@ -196,8 +199,12 @@ pub async fn run() -> io::Result<()> {
                 propagation_graphs,
                 shards,
             );
-            let consensus =
-                consensus_obj.run(delayed_msg_rx, new_client_request_rx, committed_request_tx);
+            let consensus = consensus_obj.run(
+                delayed_msg_rx,
+                new_client_request_rx,
+                committed_request_tx,
+                deadlock_deadline,
+            );
             let _ = tokio::join!(app.run(), consensus);
         }
         Algo::Paxos => {
@@ -219,8 +226,12 @@ pub async fn run() -> io::Result<()> {
                 Mode::Paxos,
                 shards,
             );
-            let consensus =
-                consensus_obj.run(delayed_msg_rx, new_client_request_rx, committed_request_tx);
+            let consensus = consensus_obj.run(
+                delayed_msg_rx,
+                new_client_request_rx,
+                committed_request_tx,
+                deadlock_deadline,
+            );
             let _ = tokio::join!(app.run(), consensus);
         }
         Algo::EPaxos => {
@@ -242,8 +253,12 @@ pub async fn run() -> io::Result<()> {
                 Mode::EPaxos,
                 shards,
             );
-            let consensus =
-                consensus_obj.run(delayed_msg_rx, new_client_request_rx, committed_request_tx);
+            let consensus = consensus_obj.run(
+                delayed_msg_rx,
+                new_client_request_rx,
+                committed_request_tx,
+                deadlock_deadline,
+            );
             let _ = tokio::join!(app.run(), consensus);
         }
         Algo::MultiPaxos | Algo::MultiPaxos3P => {
@@ -281,8 +296,12 @@ pub async fn run() -> io::Result<()> {
                 },
                 shards,
             );
-            let consensus =
-                consensus_obj.run(delayed_msg_rx, new_client_request_rx, committed_request_tx);
+            let consensus = consensus_obj.run(
+                delayed_msg_rx,
+                new_client_request_rx,
+                committed_request_tx,
+                deadlock_deadline,
+            );
             let _ = tokio::join!(app.run(), consensus);
         }
         Algo::NoReplication | Algo::WeakReplication => {
