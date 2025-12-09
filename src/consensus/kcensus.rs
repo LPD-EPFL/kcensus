@@ -309,13 +309,14 @@ impl ConsensusShardTrait for KCensusShard {
     #[inline]
     fn commit_slot(&mut self, v: usize, from_commit_msg: bool) -> CommandBatch {
         let value = self.remove_command(v);
+        self.purge_batches(self.slot);
         if from_commit_msg {
             // "<#2FB82F>Commited \"{}\" in slot {}.</>"
-            trace!("Commited \"{:?}\" in slot {}.", value, self.slot);
+            trace!("Commited \"{:?}\" (v={v}) in slot {}.", value, self.slot);
         } else {
             // "<#2FB82F>Commited \"{}\" in slot {} (round {}) from state:</> <#B8E8B8>{}</>"
             trace!(
-                "Commited \"{:?}\" in slot {} (round {:?}) from state: {}",
+                "Commited \"{:?}\" (v={v}) in slot {} (round {:?}) from state: {}",
                 value,
                 self.slot,
                 self.round_state.get_round(),

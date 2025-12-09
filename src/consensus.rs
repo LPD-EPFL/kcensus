@@ -271,7 +271,8 @@ where
                 Some(v) => match self.queued_commands.get(&v) {
                     None => false,
                     Some(CommandBatch::Single(_)) => true,
-                    Some(CommandBatch::Batch(vs)) => {
+                    Some(CommandBatch::Batch { slot, vs }) => {
+                        assert_eq!(*slot, self.slot);
                         vs.iter().all(|v| self.queued_commands.contains_key(v))
                     }
                 },
@@ -339,7 +340,7 @@ where
                 CommandBatch::Single(command) => {
                     commit(command).await;
                 }
-                CommandBatch::Batch(vs) => {
+                CommandBatch::Batch { vs, .. } => {
                     for v in vs {
                         let command = self.remove_command(v);
                         if let CommandBatch::Single(command) = command {
@@ -377,6 +378,11 @@ where
     #[inline]
     fn store_remote_command(&mut self, v: usize, value: CommandBatch) {
         // TODO: Allow forwarding values ? (could the value already be there ?)
+        if let CommandBatch::Batch { slot, .. } = value {
+            if slot < self.slot {
+                return;
+            }
+        }
         let inserted = self.queued_commands.insert(v, value);
         debug_assert!(inserted.is_none());
     }
@@ -392,20 +398,35 @@ where
         }
         let mut vs: Vec<_> = self.queued_commands.keys().copied().collect();
         vs.retain(|v| matches!(self.queued_commands[v], CommandBatch::Single(_)));
-        Some(CommandBatch::Batch(vs))
+        if vs.len() <= 1 {
+            return None;
+        }
+        let slot = self.slot;
+        Some(CommandBatch::Batch { slot, vs })
     }
 
     #[inline]
     fn get_v_to_repropose(&self) -> usize {
-        *self.queued_commands.keys().min().unwrap()
+        *self
+            .queued_commands
+            .iter()
+            .filter_map(|(v, value)| match value {
+                CommandBatch::Single(_) => Some(v),
+                _ => None,
+            })
+            .min()
+            .unwrap()
+    }
+
+    fn purge_batches(&mut self, commited_slot: usize) {
+        self.queued_commands.retain(|_, value| match value {
+            CommandBatch::Single(_) => true,
+            CommandBatch::Batch { slot, .. } => commited_slot < *slot,
+        });
     }
 
     fn remove_command(&mut self, v: usize) -> CommandBatch {
         let out = self.queued_commands.remove(&v);
-        self.queued_commands.retain(|_, value| match value {
-            CommandBatch::Single(_) => true,
-            CommandBatch::Batch(vs) => !vs.contains(&v),
-        });
         out.expect("Removing command that does not exist")
     }
 

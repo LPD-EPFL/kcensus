@@ -32,7 +32,7 @@ pub struct ReadUid {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum CommandBatch {
     Single(Command),
-    Batch(Vec<usize>),
+    Batch { slot: usize, vs: Vec<usize> },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
