@@ -17,10 +17,10 @@ plots[1].set_ylabel("Memory (B)", labelpad=1)
 plots[1].yaxis.set_major_formatter(ki_formatter)
 plots[1].yaxis.set_minor_locator(MultipleLocator(512 * 1024))
 plots[1].yaxis.set_major_locator(MultipleLocator(1 * 1024 * 1024))
-if args.geo ==1:
-    plots[1].set_ylim(5.3 * 1024 * 1024, 10 * 1024 * 1024)
-else:
-    plots[1].set_ylim(7.2 * 1024 * 1024, 10.9 * 1024 * 1024)
+# if args.geo ==1:
+#     plots[1].set_ylim(5.3 * 1024 * 1024, 10 * 1024 * 1024)
+# else:
+#     plots[1].set_ylim(7.2 * 1024 * 1024, 10.9 * 1024 * 1024)
 plots[0].yaxis.set_minor_locator(MultipleLocator(2.5))
 plots[0].yaxis.set_major_locator(MultipleLocator(5))
 for plot in plots:
@@ -45,10 +45,14 @@ for experiment in ALGORITHMS:
             algo=experiment,
             config=config,
             writes=args.writes,
-            requests=args.requests // num_replicas,
             ingress=args.ingress,
+            duration=args.duration,
             throughput=args.throughput,
+            faults=args.faults,
             speedup=args.speedup,
+            keys=args.keys,
+            skew=args.skew,
+            shards=args.shards,
             std="err",
         )
         assert (

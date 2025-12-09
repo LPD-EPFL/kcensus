@@ -9,11 +9,14 @@ from prelude import plt
 # python3 3-scalability.py -c=aws-random/@.toml -w=1 -r=10 -i=round-robin -t=0
 # python3 3-scalability.py -c=aws-from-paris/@.toml -w=1 -r=10 -i=round-robin -t=0
 writes = 1.0
-requests = 10
-ingress = "round-robin"
-throughput = 0.0
+duration = "10s"
+ingress = "exponential"
+throughput = 1000
 speedup = 1
 faults = ""
+keys = 10000
+skew = 0.0
+shards = 10000
 
 fig, subplots = plt.subplots(2, 1, figsize=(3.155, 2.265), tight_layout=True)
 plt.tight_layout(pad=0, w_pad=0, h_pad=0)  # , rect=(0,0,.80,1))
@@ -57,10 +60,14 @@ for p in range(2):
                 algo=experiment,
                 config=config.replace("@", str(num_replicas)),
                 writes=writes,
-                requests=requests,
+                duration=duration,
                 ingress=ingress,
                 throughput=throughput,
                 speedup=speedup,
+                faults=faults,
+                keys=keys,
+                skew=skew,
+                shards=shards,
             )
 
             flattened_output = defaultdict(list)
@@ -68,7 +75,7 @@ for p in range(2):
                 for pid, items in pid_data.items():
                     flattened_output[category].extend(items)
             logs = flattened_output
-
+            print(experiment, num_replicas, config)
             average = compute_average(
                 logs["executed"], lambda log: duration_to_ms(log["latency"])
             )

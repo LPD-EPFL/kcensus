@@ -14,7 +14,7 @@ ingress = "exponential"
 throughput = 1000
 speedup = 1
 faults = ""
-keys = 1000000
+keys = 10000
 skew = 0.0
 shards = 10000
 

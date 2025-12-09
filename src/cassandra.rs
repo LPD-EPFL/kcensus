@@ -288,7 +288,7 @@ pub struct Client {
 
 impl Client {
     pub fn new(my_pid: usize, speedup: u32) -> (Self, Receiver<Command>, Sender<Response>) {
-        let (client_request_tx, client_request_rx) = mpsc::channel(1);
+        let (client_request_tx, client_request_rx) = mpsc::channel(100);
         let (client_response_tx, client_response_rx) = mpsc::channel(100);
         let client = Self {
             my_pid,
@@ -369,6 +369,7 @@ impl Client {
         let mut scheduled_time = Instant::now();
         let mut current_request_id = 0;
         let mut responses_received = 0;
+        let mut total_latency = std::time::Duration::ZERO;
 
         // Set initial delay for first request
         scheduled_time = workload.interval.next(&scheduled_time);
@@ -377,6 +378,10 @@ impl Client {
             let no_response = self.client_response_rx.is_empty();
             select! {
                 // Handle sending the next request when its time arrives
+                // We don't want to be stuck trying to push a new request, so we only do it when we
+                // have capacity. However, if the capacity is too low, successive requests might end
+                // up being queued, waiting for some request to complete... which might double their
+                // latency. We therefore make client_request_tx large.
                 res = &mut delay, if no_response && next_request.is_some() && self.client_request_tx.capacity() > 0 => {
                     res.expect("Delay failed");
 
@@ -417,11 +422,29 @@ impl Client {
                             self.log_executed_response(response, scheduled_time, issued_time);
                         }
                         responses_received += 1;
+                        total_latency += Instant::now().duration_since(scheduled_time) * self.speedup;
                     }
                 }
             }
         }
+        let average_latency = total_latency / responses_received as u32;
+        let readable = format!(
+            "Issued {} requests in total (avg latency: {}ms) (including warmup+warmdown)",
+            responses_received,
+            average_latency.as_millis()
+        );
+        let event = ClientDoneEvent {
+            requests: responses_received,
+            average_latency: total_latency / responses_received as u32,
+        };
+        eval::log("client-done", &readable, &event);
     }
+}
+
+#[derive(Serialize)]
+struct ClientDoneEvent {
+    requests: usize,
+    average_latency: std::time::Duration,
 }
 
 #[derive(Serialize)]
@@ -467,7 +490,7 @@ impl App {
         };
 
         let (client, client_request_rx, client_response_tx) = Client::new(my_pid, speedup);
-        let (committed_request_tx, committed_request_rx) = mpsc::channel::<Command>(1);
+        let (committed_request_tx, committed_request_rx) = mpsc::channel::<Command>(100);
         let app = Self {
             my_pid,
             parallel_executor,

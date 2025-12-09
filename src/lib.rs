@@ -403,6 +403,11 @@ pub async fn run() -> io::Result<()> {
                             // Reset the timer for the next command in the queue
                             if let Some((_, next_completion)) = queue.front() {
                                 timer.as_mut().reset(*next_completion);
+                                // We need to give the app the opportunity to process the request,
+                                // otherwise we might re-trigger the timer directly and prevent progress.
+                                if committed_request_tx.capacity() == 0 {
+                                    tokio::task::yield_now().await
+                                }
                             }
                         }
                     }

@@ -21,7 +21,7 @@ HATCHES = {
     "paxos": "////",
 }
 
-fig, plots = plt.subplots(1, 5, figsize=(3.22, 0.95), tight_layout=True)
+fig, plots = plt.subplots(1, 4, figsize=(3.22, 0.95), tight_layout=True)
 plt.tight_layout(pad=0, w_pad=0, h_pad=0)  # , rect=(0,0,.80,1))
 
 for num_faults, plot in enumerate(plots):
@@ -44,8 +44,8 @@ for num_faults, plot in enumerate(plots):
         )
     plot.xaxis.set_major_locator(NullLocator())
     plot.xaxis.set_minor_locator(NullLocator())
-    plot.yaxis.set_major_locator(MultipleLocator(400))
-    plot.yaxis.set_minor_locator(MultipleLocator(100))
+    plot.yaxis.set_major_locator(MultipleLocator(100))
+    plot.yaxis.set_minor_locator(MultipleLocator(25))
     plt.gca().xaxis.set_tick_params(pad=10)
     plot.set_axisbelow(True)
     plt.xticks(ha="center", va="center")
@@ -59,20 +59,31 @@ for num_faults, plot in enumerate(plots):
     hatches = []
     for i, experiment in enumerate(algorithms):
         all_executed_by_replica = defaultdict(list)
+        nonvoting = {
+            "paxos": args.nonvoting_paxos,
+            "epaxos": args.nonvoting_epaxos,
+            "multi-paxos-3p": args.nonvoting_multi_paxos_3p,
+            "kcensus": args.nonvoting_kcensus,
+            "weak-replication": args.nonvoting_weak_replication,
+        }[experiment]
         num_replicas = int("".join([char for char in args.config if char.isdigit()]))
+        voting = [p for p in range(num_replicas) if p not in nonvoting]
         all_faults = [
             ",".join(map(str, comb))
-            for comb in combinations(range(num_replicas), num_faults)
+            for comb in combinations(voting, num_faults)
         ]
         for faults in all_faults:
             logs = parse(
                 algo=experiment,
                 config=args.config,
                 writes=args.writes,
-                requests=args.requests,
+                duration=args.duration,
                 ingress=args.ingress,
                 throughput=args.throughput,
                 speedup=args.speedup,
+                keys=args.keys,
+                skew=args.skew,
+                shards=args.shards,
                 faults=faults,
             )
             for pid, pid_data in logs["executed"].items():
@@ -98,9 +109,7 @@ for num_faults, plot in enumerate(plots):
             (min_replica_avg, max_replica_avg),
             (percentiles[1], percentiles[5], percentiles[95], percentiles[99])
         )
-        regions = ["us-west-2", "ca-central-1", "eu-west-3", "eu-west-1",
-                   "me-south-1", "ap-south-2", "ap-southeast-1",
-                   "ap-northeast-1", "ap-east-1"]
+        regions = ["eu-west-3", "eu-west-2", "eu-west-1", "eu-south-2", "eu-south-1", "eu-north-1", "eu-central-2", "eu-central-1" ]
         regions.sort()
         for pid, region in enumerate(regions):
             if pid in logs["executed"] and logs["executed"][pid]:
@@ -129,7 +138,7 @@ for num_faults, plot in enumerate(plots):
 
 max_y = max(plot.get_ylim()[1] for plot in plots)
 for plot in plots:
-    plot.set_ylim(0, max_y * 1.1)
+    plot.set_ylim(0, max(max_y * 1.1, 100))
 fig.subplots_adjust(wspace=0, hspace=0)
 
 legends = [

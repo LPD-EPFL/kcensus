@@ -7,7 +7,7 @@ use crate::message::MsgWithSource;
 use crate::multi_sink::{MultiSink, ShardMultiSink};
 use bit_set::BitSet;
 use command::Command;
-use log::{debug, info, trace, warn};
+use log::{info, trace, warn};
 use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::sync::Arc;
