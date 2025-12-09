@@ -22,12 +22,12 @@
             printf "%s\n" "${nodes[@]}" |
             xargs -P 100 -I{} bash -c '
               n="$1"
-              val=$(sudo ping -c 100 -i 0.2 "$n" \
+              val=$(sudo ping -c 100 -i 0.3 "$n" \
                 | grep "icmp_seq" \
                 | grep -oP "time=\K[0-9.]+" \
                 | sort -n \
-                | head -n -10 \
-                | tail -n +11 \
+                | head -n -5 \
+                | tail -n +6 \
                 | awk "{ total += \$1; count++ } END { if (count>0) print total/count/2; else print \"9999\" }")
               printf "\"%s\": %s\n" "$n" "$val"
             ' _ {} | paste -sd "," -)
