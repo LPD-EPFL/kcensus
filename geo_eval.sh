@@ -6,11 +6,11 @@ BASE_LOG_DIR="./logs"
 REPLICATED_ALGOS=(kcensus weak-replication "multi-paxos-3p" epaxos paxos)
 ALGOS=(no-replication "${REPLICATED_ALGOS[@]}")
 DURATION=10s
-THROUGHPUT=1000 # 0.1 req / shard / sec total
+THROUGHPUT=1000 # 0.1 req /shard / sec total
 SPEEDUP=1
-KEYS=1000000
+KEYS=10000
 SKEW=0
-SHARDS=10000
+SHARDS=$KEYS
 
 declare -A CONFIGS
 CONFIGS["aws-north-america-7"]="deployment/terraform/regions/north-america-7.tfvars"
@@ -130,7 +130,7 @@ function run() {
       -e "shards=${shards}" \
       -e "nonvoting=${nonvoting}" \
       -e "result_path=${resultPath}"; do
-      echo "Experiment failed, retrying $algo on $configName..."
+      echo "Experiment failed, retrying $algo on $configName (faults=$faults)..."
     done
   )
   echo "--> COMPLETED. Logs are in ${resultPath}"
@@ -271,12 +271,10 @@ function exp-2() {
   provision "$varFile" "$EXPERIMENT_ID"
   deploy "$EXPERIMENT_ID"
 
-  local LOADS=(100 500 1000 2000 4000) # total req/s
-
   for writes in 1; do
-      for load in "${LOADS[@]}"; do
+      for skew in 0 1 2; do
         for algo in "${ALGOS[@]}"; do
-          run "$EXPERIMENT_ID" "$configName" "$algo" "$writes" "$DURATION" "exponential" "$load"
+          run "$EXPERIMENT_ID" "$configName" "$algo" "$writes" "$DURATION" "exponential" "$THROUGHPUT" "" "$KEYS" "$skew"
         done
       done
   done
@@ -298,12 +296,12 @@ function exp-4() {
   deploy "$EXPERIMENT_ID"
 
   local writes=1
-  local duration="1s"
+  local duration="10s"
   local throughput="$THROUGHPUT"
 
   for algo in "${REPLICATED_ALGOS[@]}"; do
     for faults in "" $(all_faults "$(digits "$configName")" "$(get_nonvoting "$configName" "$algo")"); do
-      run "$EXPERIMENT_ID" "$configName" "$algo" $writes $DURATION exponential $throughput "$faults"
+      run "$EXPERIMENT_ID" "$configName" "$algo" $writes $duration exponential $throughput "$faults"
     done
   done
 
@@ -319,7 +317,7 @@ function exp-3-5() {
   local varFile="deployment/terraform/regions/aws-all-33.tfvars"
   local tmpDir="$(pwd)/.tmp_configs_${EXPERIMENT_ID}"
   local masterConfigFile="${tmpDir}/master-config.json"
-  local duration="1s"
+  local duration="10s"
 
   # step 1: provision servers
   provision "$varFile" "$EXPERIMENT_ID"
