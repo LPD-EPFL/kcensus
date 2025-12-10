@@ -279,7 +279,7 @@ pub fn compute_propagation_graphs(
         })
         .collect();
 
-    let quorum_3p_rtts: Vec<Vec<_>> = (0..nb_processes)
+    let quorum_3p_path_rtts: Vec<Vec<_>> = (0..nb_processes)
         .map(|src| {
             (0..nb_processes)
                 .map(|dest| {
@@ -297,7 +297,32 @@ pub fn compute_propagation_graphs(
         })
         .collect();
 
-    let quorum_rtts: Vec<_> = quorum_3p_rtts
+    let quorum_3p_link_rtts: Vec<Vec<_>> = (0..nb_processes)
+        .map(|src| {
+            (0..nb_processes)
+                .map(|dest| {
+                    let mut replicas_3p_rtts: Vec<Duration> = topology
+                        .alive_replicas
+                        .iter()
+                        .map(|replicas| {
+                            topology.link_latency(src, replicas)
+                                + topology.link_latency(replicas, dest)
+                        })
+                        .collect();
+                    replicas_3p_rtts.sort();
+                    replicas_3p_rtts
+                })
+                .collect()
+        })
+        .collect();
+
+    let quorum_path_rtts: Vec<_> = quorum_3p_path_rtts
+        .iter()
+        .enumerate()
+        .map(|(src, quorum_3p_rtts_for_dest)| &quorum_3p_rtts_for_dest[src])
+        .collect();
+
+    let quorum_link_rtts: Vec<_> = quorum_3p_link_rtts
         .iter()
         .enumerate()
         .map(|(src, quorum_3p_rtts_for_dest)| &quorum_3p_rtts_for_dest[src])
@@ -315,21 +340,23 @@ pub fn compute_propagation_graphs(
 
     // Compute latency of e/multi-/paxos per leader
     for leader in topology.alive_replicas.iter() {
-        min_effort_latencies[leader] = quorum_rtts[leader][min_quorum - 1];
+        min_effort_latencies[leader] = quorum_path_rtts[leader][min_quorum - 1];
         _min_effort_committers[leader] = leader;
-        paxos_latencies[leader] = quorum_rtts[leader][maj_quorum - 1] * 2;
+        paxos_latencies[leader] = quorum_link_rtts[leader][maj_quorum - 1] * 2;
         paxos_committers[leader] = leader;
 
         let e_paxos_quorum = ((topology.nb_replicas * 3) / 4).max(maj_quorum);
         if e_paxos_quorum <= topology.alive_replicas.len() {
-            epaxos_latencies[leader] = quorum_rtts[leader][e_paxos_quorum - 1];
+            epaxos_latencies[leader] = quorum_link_rtts[leader][e_paxos_quorum - 1];
         } else {
             epaxos_latencies[leader] = paxos_latencies[leader];
         }
         epaxos_committers[leader] = leader;
 
         let multi_paxos_latency = (0..nb_processes)
-            .map(|requester| link_rtts[requester][leader] + quorum_rtts[leader][maj_quorum - 1])
+            .map(|requester| {
+                link_rtts[requester][leader] + quorum_link_rtts[leader][maj_quorum - 1]
+            })
             .collect();
         multi_paxos_latencies[leader] = multi_paxos_latency;
 
@@ -342,9 +369,9 @@ pub fn compute_propagation_graphs(
                 if is_replicas && commiter != requester {
                     continue;
                 }
-                let latency = path_latencies[requester][leader]
-                    + quorum_3p_rtts[leader][commiter][maj_quorum - 1]
-                    + path_latencies[commiter][requester];
+                let latency = topology.link_latency(requester, leader)
+                    + quorum_3p_link_rtts[leader][commiter][maj_quorum - 1]
+                    + topology.link_latency(commiter, requester);
                 if latency < *best_latency {
                     *best_latency = latency;
                     *best_commiter = commiter;
@@ -369,7 +396,7 @@ pub fn compute_propagation_graphs(
                 epaxos_latencies[proposer] = epaxos_latency;
                 epaxos_committers[proposer] = committer;
             }
-            let min_effort_latency = quorum_3p_rtts[proposer][committer][min_quorum - 1]
+            let min_effort_latency = quorum_3p_path_rtts[proposer][committer][min_quorum - 1]
                 + topology.link_latency(committer, proposer);
             if min_effort_latency < min_effort_latencies[proposer] {
                 min_effort_latencies[proposer] = min_effort_latency;
@@ -433,8 +460,8 @@ pub fn compute_propagation_graphs(
                 triangular_paths[proposer][leader].sort_by_key(triangle_latency);
 
                 // TODO: maybe double-check if this max_lat is good if we start playing with quorums
-                let min_lat = quorum_3p_rtts[proposer][leader][min_quorum - 1];
-                let max_lat = min_lat + quorum_rtts[leader][max_quorum - 1];
+                let min_lat = quorum_3p_path_rtts[proposer][leader][min_quorum - 1];
+                let max_lat = min_lat + quorum_path_rtts[leader][max_quorum - 1];
 
                 // Simulate propagation of knowledge (from best to worst possible strategy)
                 let mut knowledges: Vec<Knowledge> =
@@ -698,12 +725,12 @@ pub fn compute_propagation_graphs(
             let mut min_proposer_latency = Duration::MAX;
             let mut max_proposer_latency = Duration::MAX;
             for leader in topology.alive_replicas.iter() {
-                let lat = quorum_3p_rtts[proposer][leader][min_quorum - 1]
+                let lat = quorum_3p_path_rtts[proposer][leader][min_quorum - 1]
                     + topology.link_latency(leader, proposer);
                 if lat < min_proposer_latency {
                     min_proposer_latency = lat;
                 }
-                let lat = lat + quorum_rtts[leader][max_quorum - 1];
+                let lat = lat + quorum_path_rtts[leader][max_quorum - 1];
                 if lat < max_proposer_latency {
                     max_proposer_latency = lat;
                 }
