@@ -460,6 +460,9 @@ impl KCensusShard {
     }
 
     async fn graph_spread_value_only(&self, prev_msg_id: MessageId, v: usize) -> io::Result<()> {
+        if !self.queued_commands.contains_key(&v) {
+            return Ok(());
+        }
         let proposer = prev_msg_id.proposer;
         let state_id = self.settings.graphs.msg_arrival_state_id(prev_msg_id);
         self.inner_spread(v, proposer, state_id, true, true).await
