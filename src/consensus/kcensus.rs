@@ -203,9 +203,23 @@ impl ConsensusShardTrait for KCensusShard {
                 if final_state && leader == self.my_pid && !conflict {
                     assert!(self.round_state.can_commit(&self.settings.graphs));
                     let v = my_v.unwrap();
-                    self.sinks
-                        .broadcast(Commit { slot, v }, None, self.last_v)
-                        .await?;
+                    if let Some(requester) = self.get_requester(v) {
+                        self.sinks
+                            .send(Commit { slot, v }, None, requester, self.last_v)
+                            .await?;
+                        for i in 0..self.process_count {
+                            if i == self.my_pid || i == requester {
+                                continue;
+                            }
+                            self.sinks
+                                .send(Commit { slot, v }, None, i, self.last_v)
+                                .await?;
+                        }
+                    } else {
+                        self.sinks
+                            .broadcast(Commit { slot, v }, None, self.last_v)
+                            .await?;
+                    }
                     info!(
                         "Commit via kcensus: shard={} slot={slot} v={v}",
                         self.sinks.shard_id
