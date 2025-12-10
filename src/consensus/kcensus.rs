@@ -204,9 +204,11 @@ impl ConsensusShardTrait for KCensusShard {
                     assert!(self.round_state.can_commit(&self.settings.graphs));
                     let v = my_v.unwrap();
                     if let Some(requester) = self.get_requester(v) {
-                        self.sinks
-                            .send(Commit { slot, v }, None, requester, self.last_v)
-                            .await?;
+                        if requester != self.my_pid {
+                            self.sinks
+                                .send(Commit { slot, v }, None, requester, self.last_v)
+                                .await?;
+                        }
                         for i in 0..self.process_count {
                             if i == self.my_pid || i == requester {
                                 continue;
