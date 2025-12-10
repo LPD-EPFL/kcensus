@@ -370,7 +370,7 @@ pub fn compute_propagation_graphs(
                 epaxos_committers[proposer] = committer;
             }
             let min_effort_latency = quorum_3p_rtts[proposer][committer][min_quorum - 1]
-                + path_latencies[committer][proposer];
+                + topology.link_latency(committer, proposer);
             if min_effort_latency < min_effort_latencies[proposer] {
                 min_effort_latencies[proposer] = min_effort_latency;
                 _min_effort_committers[proposer] = committer;
@@ -708,6 +708,7 @@ pub fn compute_propagation_graphs(
                     max_proposer_latency = lat;
                 }
             }
+            assert_eq!(min_effort_latencies[proposer], min_proposer_latency);
             info!(
                 "  levels best ({} / {}): {proposer_latency:?} ({:.4}x min, {:.1}% min-max) min: {min_proposer_latency:?}, max: {max_proposer_latency:?}",
                 best.levels[proposer],
