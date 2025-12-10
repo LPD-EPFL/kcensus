@@ -206,7 +206,7 @@ impl KCensusRoundState {
                 alive_replicas.contains(*id) && state.prepared_for() == Some(self.my_pid)
             })
             .count();
-        prepared_count >= self.majority && self.get_paxos_accept_round() != Some(self.my_pid)
+        prepared_count >= self.majority && self.get_paxos_accept_round() < Some(self.my_pid)
     }
 
     pub fn could_adopt(&self, alive_replicas: &BitSet) -> bool {
@@ -284,16 +284,15 @@ impl KCensusRoundState {
     }
 
     pub fn paxos_accept(&mut self, leader: usize, v: usize) {
-        my_state!(self).paxos_accept(leader, v);
-        if leader == self.my_pid {
+        if my_state!(self).paxos_accept(leader, v) && leader == self.my_pid {
             self.paxos_accept_count += 1;
         }
     }
 
     pub fn recv_paxos_accept(&mut self, src: usize, v: usize) {
-        self.node_states[src].freeze_and_prepare(self.my_pid);
-        self.node_states[src].paxos_accept(self.my_pid, v);
-        self.paxos_accept_count += 1;
+        if self.node_states[src].paxos_accept(self.my_pid, v) {
+            self.paxos_accept_count += 1;
+        }
     }
 
     pub fn can_paxos_commit(&self) -> bool {

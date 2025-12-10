@@ -121,13 +121,16 @@ impl NodeState {
         }
     }
 
-    pub fn paxos_accept(&mut self, leader: usize, v: usize) {
-        assert_eq!(self.frozen_and_prepared, Some(leader));
-        assert!(self.paxos_accept_round < Some(leader));
-        self.v = Some(v);
-        self.paxos_accept_round = Some(leader);
+    pub fn paxos_accept(&mut self, leader: usize, v: usize) -> bool {
+        self.freeze_and_prepare(leader);
+        if self.frozen_and_prepared == Some(leader) && self.paxos_accept_round < Some(leader) {
+            self.v = Some(v);
+            self.paxos_accept_round = Some(leader);
 
-        self.v_proposer = None;
-        self.v_state_nanos = 0;
+            self.v_proposer = None;
+            self.v_state_nanos = 0;
+            return true;
+        }
+        false
     }
 }
