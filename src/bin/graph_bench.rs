@@ -76,7 +76,7 @@ fn main() {
                         / durations.len() as f64
                 };
                 info!(
-                    "Averages: min-effort: {:.2}ms kcensus: {:.2}ms paxos: {:.2} epaxos: {:.2}ms multi-paxos: {:.2}ms multi-paxos-3p: {:.2}ms",
+                    "Averages: min-effort: {:.2}ms kcensus: {:.2}ms paxos: {:.2}ms epaxos: {:.2}ms multi-paxos: {:.2}ms multi-paxos-3p: {:.2}ms",
                     avg_millis(&graph.min_effort_latencies),
                     avg_millis(&graph.kcensus_latencies),
                     avg_millis(&graph.paxos_latencies),
