@@ -54,7 +54,7 @@ function plot-4() {
   local duration="10s"
   local throughput=1000
   local shards=10000
-  local keys=1000000
+  local keys=10000
   (
     cd graphs &&
     python3 4-faults.py -c "$config" --nonvoting_paxos "2" --nonvoting_epaxos "2" --nonvoting_kcensus "4" --nonvoting_multi_paxos_3p "4" --nonvoting_weak_replication "4" -w "$writes" --duration "$duration" -i exponential -t $throughput -s "$SPEEDUP" --shards $shards --keys $keys -g 1 > "./plots/4-faults.txt"
