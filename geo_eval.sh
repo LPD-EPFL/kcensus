@@ -220,16 +220,16 @@ get_nonvoting() {
   local config=$1
   local algo=$2
   case "$config-$algo" in
-    aws-europe-8-kcensus) echo "3";;
-    aws-europe-8-epaxos) echo "5";;
-    aws-europe-8-multi-paxos-3p) echo "3";;
-    aws-europe-8-paxos) echo "5";;
-    aws-europe-8-weak-replication) echo "5";;
+    aws-europe-8-kcensus) echo "4";;
+    aws-europe-8-epaxos) echo "2";;
+    aws-europe-8-multi-paxos-3p) echo "4";;
+    aws-europe-8-paxos) echo "2";;
+    aws-europe-8-weak-replication) echo "4";;
 
-    aws-ease-asia-9-kcensus) echo "2,8";;
-    aws-ease-asia-9-epaxos) echo "4,8";;
-    aws-ease-asia-9-multi-paxos-3p) echo "4,6";;
-    aws-ease-asia-9-paxos) echo "2,8";;
+    aws-ease-asia-9-kcensus) echo "1,8";;
+    aws-ease-asia-9-epaxos) echo "1,4";;
+    aws-ease-asia-9-multi-paxos-3p) echo "2,4";;
+    aws-ease-asia-9-paxos) echo "1,8";;
     aws-ease-asia-9-weak-replication) echo "1,8";;
 
     *) echo "";;
