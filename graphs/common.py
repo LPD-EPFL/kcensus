@@ -6,14 +6,14 @@ orange = "#a95c30"
 red = "#811d27"
 
 ALGORITHMS = {
-    "no-replication": {
-        "label": "No Rep.",
-        "color": lavanda,
-        "lw": 0.7,
-        "linestyle": "--",
-        "marker": "",
-        "markersize": 3.5,
-    },
+    # "no-replication": {
+    #     "label": "No Rep.",
+    #     "color": lavanda,
+    #     "lw": 0.7,
+    #     "linestyle": "--",
+    #     "marker": "",
+    #     "markersize": 3.5,
+    # },
     "weak-replication": {
         "label": "Min. Effort",
         "color": blue,
