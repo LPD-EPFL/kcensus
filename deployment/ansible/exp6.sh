@@ -6,7 +6,7 @@ BASE_LOG_DIR="./logs"
 REPLICATED_ALGOS=(kcensus epaxos multi-paxos-3p paxos weak-replication)
 ALGOS=(no-replication ${REPLICATED_ALGOS[@]})
 WRITES=(1)
-SPEEDUP=1 # latency precision does not matter
+SPEEDUP=2 # latency precision does not matter
 
 if ! command -v "/usr/bin/time" >/dev/null 2>&1
 then

@@ -72,7 +72,7 @@ function plot-6() {
   local writes=1.0
   local duration="10s"
   local throughput=1000
-  local speedup=10
+  local speedup=2
   local keys=10000
   local skew=0.0
   local shards=10000
