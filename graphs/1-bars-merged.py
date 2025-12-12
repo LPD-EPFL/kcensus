@@ -49,10 +49,33 @@ for c in range(3):
     plot.grid(axis="y", which="minor", linestyle=":", linewidth="0.25")
     plot.tick_params(axis="both", which="major", pad=0.5)
     plot.tick_params(axis="both", which="minor", pad=0.5)
-    plot.yaxis.set_major_locator(MultipleLocator([400, 50, 100][c]))
-    plot.yaxis.set_minor_locator(MultipleLocator([100, 25, 50][c]))
+    plot.yaxis.set_major_locator(MultipleLocator([40, 20, 40][c]))
+    plot.yaxis.set_minor_locator(MultipleLocator([20, 10, 20][c]))
     plot.xaxis.set_tick_params(pad=10)
     plot.set_axisbelow(True)
+
+    # Min. effort average latency
+    def compute_wr_latency():
+        logs = parse(
+            algo="weak-replication",
+            config=config,
+            writes=writes,
+            duration=duration,
+            ingress=ingress,
+            throughput=throughput,
+            speedup=speedup,
+            faults=faults,
+            keys=keys,
+            skew=skew,
+            shards=shards,
+        )
+        all_executed = []
+        for pid_data in logs["executed"].values():
+            all_executed.extend(pid_data)
+        return compute_average(all_executed, lambda log: duration_to_ms(log["latency"]))
+    wr_latency = compute_wr_latency()
+    wr_style=ALGORITHMS["weak-replication"]
+    plot.axhline(y=wr_latency, linestyle="--", color=wr_style["color"], linewidth=1, zorder=2)
 
     xs = []
     ys = []
@@ -60,7 +83,7 @@ for c in range(3):
     delta_ys_bottom = []
     labels = []
     colors = []
-    for i, experiment in enumerate(ALGORITHMS.keys()):
+    for i, experiment in enumerate(e for e in ALGORITHMS.keys() if e != "weak-replication"):
         logs = parse(
             algo=experiment,
             config=config,
@@ -120,7 +143,15 @@ for c in range(3):
             ALGORITHMS[experiment]["label"].replace(" ", "\n").replace("-", "-\n")
         )
         colors.append(lighten_color(ALGORITHMS[experiment]["color"]))
-        text_y = max_replica_avg  # average / 2
+        # text_y = max_replica_avg  # average / 2
+        # plot.text(
+        #     i,
+        #     text_y,
+        #     f"{round(average)}\N{THIN SPACE}ms",
+        #     horizontalalignment="center",
+        #     verticalalignment="bottom",
+        # )
+        text_y = 0 # min(average / 2, min_replica_avg, wr_latency)
         plot.text(
             i,
             text_y,
@@ -145,7 +176,8 @@ for c in range(3):
 
     # For the average text to fit
     ymin, ymax = plot.get_ylim()
-    plot.set_ylim(ymin, ymax * 1.3)
+    ymax = [105, 40, 100][c]
+    plot.set_ylim(ymin, ymax)
 plt.xticks(ha="center", va="center")
 pdf_path = f"plots/1-bars.pdf"
 plt.savefig(pdf_path, format="pdf", bbox_inches="tight", pad_inches=0.01)

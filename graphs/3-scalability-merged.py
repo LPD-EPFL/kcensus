@@ -28,8 +28,8 @@ fig.subplots_adjust(
 
 for p in range(2):
     config = [
-        "aws-random/@.toml",
-        "aws-from-paris/@.toml",
+        "aws-random-old/@.toml",
+        "aws-from-paris-old/@.toml",
     ][p]
     plot = subplots[p]
 
@@ -46,16 +46,19 @@ for p in range(2):
     plot.tick_params(axis="both", which="minor", pad=0.5)
     plot.xaxis.set_major_locator(MultipleLocator(4, 3))
     plot.xaxis.set_minor_locator(MultipleLocator(2, 3))
-    plot.set_yscale("log")
+    if p == 0:
+        plot.yaxis.set_minor_locator(MultipleLocator(25))
+    else:
+        plot.yaxis.set_minor_locator(MultipleLocator(50))
     plot.yaxis.set_major_formatter(ScalarFormatter())
-    plot.set_xlim(3, 31)
+    plot.set_xlim(3, 19)
 
     min_y = 1000
     for experiment in ALGORITHMS:
         xs = []
         ys = []
         # percentiles_ys = ([], [])
-        for num_replicas in range(3, 33, 2):
+        for num_replicas in range(3, 19+2, 2):
             logs = parse(
                 algo=experiment,
                 config=config.replace("@", str(num_replicas)),
@@ -99,17 +102,18 @@ for p in range(2):
         # for ys in percentiles_ys:
         #     plot.plot(xs, ys, color=ALGORITHMS[experiment]['color'], linestyle="--")
 
-    plot.set_ylim(min_y, 1000)
+    # if p == 1:
+    #     plot.set_ylim(min_y, 1000)
 
 legends = [Line2D([0], [0], **algo) for algo in ALGORITHMS.values()]
 
 fig.legend(
     handles=legends,
-    bbox_to_anchor=(0.14, 1.12, 0.75, 0.01),
+    bbox_to_anchor=(0, 1.12, 1, 0.01),
     loc="center",
     edgecolor="black",
     borderaxespad=0,
-    ncols=3,
+    ncols=5,
     borderpad=0.3,
     labelspacing=0.1,
     mode="expand",
@@ -119,7 +123,7 @@ fig.legend(
 plt.axes(frameon=False)
 plt.xticks([])
 plt.yticks([])
-plt.ylabel("Latency (ms, log)", labelpad=20)
+plt.ylabel("Latency (ms)", labelpad=20)
 pdf_path = f"plots/3-scalability.pdf"
 plt.savefig(pdf_path, format="pdf", bbox_inches="tight", pad_inches=0.01)
 print(pdf_path)

@@ -9,7 +9,7 @@ from prelude import plt
 fig, plot = plt.subplots(figsize=(2.975, 0.8), tight_layout=True)
 plt.tight_layout(pad=0, w_pad=0, h_pad=0)  # , rect=(0,0,.80,1))
 plot.set_title("Average Latency", pad=0)
-plot.set_ylabel('Latency (ms, log)', labelpad=1)
+plot.set_ylabel('Latency (ms)', labelpad=1)
 plot.set_xlabel('Number of Replicas', labelpad=1)
 plot.grid(axis='y', which='major', linestyle='--', linewidth='0.5')
 plot.grid(axis='y', which='minor', linestyle=':', linewidth='0.25')
@@ -19,14 +19,14 @@ plot.xaxis.set_major_locator(MultipleLocator(4, 3))
 plot.xaxis.set_minor_locator(MultipleLocator(2, 3))
 plot.set_yscale("log")
 plot.yaxis.set_major_formatter(ScalarFormatter())
-plot.set_xlim(3, 31)
+plot.set_xlim(3, 19)
 
 min_y = 1000
 for experiment in ALGORITHMS:
     xs = []
     ys = []
     # percentiles_ys = ([], [])
-    for num_replicas in range(3, 33, 2):
+    for num_replicas in range(3, 19+2, 2):
         config = args.config.replace('@', str(num_replicas))
         logs = parse(algo=experiment, config=config, writes=args.writes, requests=args.requests,
                      ingress=args.ingress, throughput=args.throughput, speedup=args.speedup)

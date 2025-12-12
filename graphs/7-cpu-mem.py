@@ -13,16 +13,16 @@ plots[0].set_ylabel("CPU time (s)", labelpad=1)
 # plots[0].yaxis.set_major_locator(MultipleLocator(10))
 # plots[0].yaxis.set_major_formatter(k_formatter)
 plots[1].set_title("Average Memory", pad=0)
-plots[1].set_ylabel("Memory (B)", labelpad=1)
+plots[1].set_ylabel("Memory (MiB)", labelpad=1)
 plots[1].yaxis.set_major_formatter(ki_formatter)
-plots[1].yaxis.set_minor_locator(MultipleLocator(512 * 1024))
-plots[1].yaxis.set_major_locator(MultipleLocator(1 * 1024 * 1024))
+plots[1].yaxis.set_minor_locator(MultipleLocator(12.5))
+plots[1].yaxis.set_major_locator(MultipleLocator(25))
 # if args.geo ==1:
 #     plots[1].set_ylim(5.3 * 1024 * 1024, 10 * 1024 * 1024)
 # else:
 #     plots[1].set_ylim(7.2 * 1024 * 1024, 10.9 * 1024 * 1024)
-plots[0].yaxis.set_minor_locator(MultipleLocator(2.5))
-plots[0].yaxis.set_major_locator(MultipleLocator(5))
+plots[0].yaxis.set_minor_locator(MultipleLocator(25))
+plots[0].yaxis.set_major_locator(MultipleLocator(50))
 for plot in plots:
     plot.set_xlabel("Number of Servers", labelpad=1)
     plot.grid(axis="y", which="major", linestyle="--", linewidth="0.5")
@@ -33,13 +33,14 @@ for plot in plots:
     plot.tick_params(axis="both", which="minor", pad=0.5)
     plot.xaxis.set_major_locator(MultipleLocator(4, 3))
     # plot.xaxis.set_minor_locator(MultipleLocator(3, 3))
-    plot.set_xlim(3, 31)
+    plot.set_xlim(3, 19)
 
 for experiment in ALGORITHMS:
+    if experiment == "weak-replication": continue
     xs = []
     ys_cpu = []
     ys_mem = []
-    for num_replicas in range(3, 33, 2):
+    for num_replicas in range(3, 19+2, 2):
         config = args.config.replace("@", str(num_replicas))
         logs = parse(
             algo=experiment,
@@ -70,22 +71,22 @@ for experiment in ALGORITHMS:
         mem = compute_average(logs["time"], lambda log: log["memory"] * 1024)
         xs.append(num_replicas)
         ys_cpu.append(cpu)
-        ys_mem.append(mem)
+        ys_mem.append(mem / (1024 * 1024))
         print(experiment, num_replicas, ys_cpu[-1], ys_mem[-1])
     plots[0].plot(xs, ys_cpu, **ALGORITHMS[experiment], markevery=(1, 3))
     plots[1].plot(xs, ys_mem, **ALGORITHMS[experiment], markevery=(1, 3))
 
 fig.subplots_adjust(wspace=0.4, hspace=0)
 
-legends = [Line2D([0], [0], **algo) for algo in ALGORITHMS.values()]
+legends = [Line2D([0], [0], **algo) for (k, algo) in ALGORITHMS.items() if k != "weak-replication"]
 
 fig.legend(
     handles=legends,
-    bbox_to_anchor=(0.14, 1.29, 0.75, 0.01),
+    bbox_to_anchor=(0, 1.29, 1, 0.01),
     loc="center",
     edgecolor="black",
     borderaxespad=0,
-    ncols=3,
+    ncols=5,
     borderpad=0.3,
     labelspacing=0.1,
     mode="expand",

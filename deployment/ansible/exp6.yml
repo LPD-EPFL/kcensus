@@ -55,7 +55,7 @@
         src: "{{ local_configs_path }}"
         dest: "{{ remote_work_dir }}/configs"
 
-    - name: Run the experiment script (takes ~10min)
+    - name: Run the experiment script (takes ~30min)
       ansible.builtin.shell:
         cmd: "./exp6.sh"
         chdir: "{{ remote_work_dir }}"

@@ -7,14 +7,14 @@ from logparser import *
 from prelude import plt
 
 config_lists = {
-    "aws-random/@.toml": {
+    "aws-random-old/@.toml": {
         "label": "Random Deployments",
         "marker": "o",
         "markersize": 3.2,
         "color": "#808078",
         "linewidth": 1.2,
     },
-    "aws-from-paris/@.toml": {
+    "aws-from-paris-old/@.toml": {
         "label": "Parisian Deployments",
         "marker": "x",
         "markersize": 4.4,
@@ -27,7 +27,7 @@ config_lists = {
 
 fig, plot = plt.subplots(figsize=(3.235, 0.75), tight_layout=True)
 plt.tight_layout(pad=0, w_pad=0, h_pad=0)  # , rect=(0,0,.80,1))
-plot.set_title("Knowledge Spread Optimization", pad=0)
+plot.set_title("Computing Optimal Requirements", pad=0)
 plot.set_ylabel("Duration (ms)", labelpad=1)
 plot.set_xlabel("Number of Replicas", labelpad=1)
 plot.grid(axis="y", which="major", linestyle="--", linewidth="0.5")
@@ -38,15 +38,15 @@ plot.tick_params(axis="both", which="major", pad=0.5)
 plot.tick_params(axis="both", which="minor", pad=0.5)
 plot.xaxis.set_major_locator(MultipleLocator(4, 3))
 plot.xaxis.set_minor_locator(MultipleLocator(2, 3))
-# plot.yaxis.set_major_locator(MultipleLocator(0.5))
-# plot.yaxis.set_minor_locator(MultipleLocator(0.1))
-plot.set_xlim(3, 33)
+plot.yaxis.set_major_locator(MultipleLocator(20))
+plot.yaxis.set_minor_locator(MultipleLocator(10))
+plot.set_xlim(3, 19)
 
 for config_list, cl_style in config_lists.items():
     xs = []
     ys = []
     # percentiles_ys = ([], [])
-    for num_replicas in range(3, 35, 2):
+    for num_replicas in range(3, 19+2, 2):
         config = config_list.replace("@", str(num_replicas))
         with open(f"../logs/c={config}/graph_bench.stdout") as file:
             logs = parse_file(file)["graph-generation"]

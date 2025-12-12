@@ -9,11 +9,11 @@ from prelude import plt
 fig, plots = plt.subplots(1, 2, figsize=(3.2, 0.95), tight_layout=True)
 plt.tight_layout(pad=0, w_pad=0, h_pad=0)  # , rect=(0,0,.80,1))
 plots[0].set_title("Traffic", pad=0)
-plots[0].set_ylabel("Bytes per Req. (log)", labelpad=1)
-plots[0].set_yscale("log")
+plots[0].set_ylabel("Bytes per App Req.", labelpad=1)
+# plots[0].set_yscale("log")
 plots[0].yaxis.set_major_formatter(k_formatter)
 plots[1].set_title("Communication", pad=0)
-plots[1].set_ylabel("Msg. per Req.", labelpad=1)
+plots[1].set_ylabel("Msg. per App Req.", labelpad=1)
 plots[1].yaxis.set_major_formatter(k_formatter)
 plots[1].yaxis.set_major_locator(MultipleLocator(50))
 plots[1].yaxis.set_minor_locator(MultipleLocator(25))
@@ -27,13 +27,14 @@ for plot in plots:
     plot.tick_params(axis="both", which="minor", pad=0.5)
     plot.xaxis.set_major_locator(MultipleLocator(4, 3))
     # plot.xaxis.set_minor_locator(MultipleLocator(3, 3))
-    plot.set_xlim(3, 31)
+    plot.set_xlim(3, 19)
 
 for experiment in ALGORITHMS:
+    if experiment == "weak-replication": continue
     xs = []
     ys_bytes = []
     ys_msgs = []
-    for num_replicas in range(3, 33, 2):
+    for num_replicas in range(3, 19+2, 2):
         config = args.config.replace("@", str(num_replicas))
         logs = parse(
             algo=experiment,
@@ -70,15 +71,15 @@ for experiment in ALGORITHMS:
 
 fig.subplots_adjust(wspace=0.4, hspace=0)
 
-legends = [Line2D([0], [0], **algo) for algo in ALGORITHMS.values()]
+legends = [Line2D([0], [0], **algo) for (k, algo) in ALGORITHMS.items() if k != "weak-replication"]
 
 fig.legend(
     handles=legends,
-    bbox_to_anchor=(0.14, 1.29, 0.75, 0.01),
+    bbox_to_anchor=(0, 1.29, 1, 0.01),
     loc="center",
     edgecolor="black",
     borderaxespad=0,
-    ncols=3,
+    ncols=5,
     borderpad=0.3,
     labelspacing=0.1,
     mode="expand",

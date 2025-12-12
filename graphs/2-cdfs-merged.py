@@ -18,7 +18,7 @@ ingress = "exponential"
 throughput = 1000
 speedup = 1
 faults = ""
-keys = 1000000
+keys = 10000
 skew = 0.0
 shards = 10000
 
@@ -31,11 +31,10 @@ fig.subplots_adjust(
 )
 
 for p in range(3):
-    throughput = [500, 1000, 2000][p] if args.geo == 1 else [500, 1000, 2000][p]
-    ingress = "exponential" if throughput > 0 else "round-robin"
+    skew = [0.5, 1, 2][p] if args.geo == 1 else [0, 0.5, 1][p]
     plot = subplots[p]
 
-    title = "Request Latency CDF Under " + ["Little", "Moderate", "High"][p] + " Contention"
+    title = "Request Latency CDF With " + ["Few", "Many", "Extremely Many"][p] + " Conflicts"
     plot.set_title(title, pad=0)
     print(
         "##################################################################################"
@@ -54,11 +53,11 @@ for p in range(3):
     plot.yaxis.set_minor_locator(MultipleLocator(25))
     plot.yaxis.set_major_locator(MultipleLocator(50))
     if args.geo == 1:
-        plot.xaxis.set_minor_locator(MultipleLocator(25))
-        plot.xaxis.set_major_locator(MultipleLocator(100))
+        plot.xaxis.set_minor_locator(MultipleLocator(10))
+        plot.xaxis.set_major_locator(MultipleLocator(20))
     else:
-        plot.xaxis.set_minor_locator(MultipleLocator(50))
-        plot.xaxis.set_major_locator(MultipleLocator(200))
+        plot.xaxis.set_minor_locator(MultipleLocator(10))
+        plot.xaxis.set_major_locator(MultipleLocator(20))
     plot.set_axisbelow(True)
 
     max_x = 0
@@ -102,9 +101,9 @@ for p in range(3):
             plot.set_xlim(0, percentiles[-1])
 
         if args.geo == 1:
-            plot.set_xlim(0, 100)
+            plot.set_xlim(0, 80)
         else:
-            plot.sex_xlim(0, 100)
+            plot.sex_xlim(0, 80)
 
 
 logs_a = parse(
@@ -162,11 +161,11 @@ legends = [Line2D([0], [0], **algo) for algo in ALGORITHMS.values()]
 
 fig.legend(
     handles=legends,
-    bbox_to_anchor=(0.14, 1.09, 0.75, 0.01),
+    bbox_to_anchor=(0, 1.09, 1, 0.01),
     loc="center",
     edgecolor="black",
     borderaxespad=0,
-    ncols=3,
+    ncols=5,
     borderpad=0.3,
     labelspacing=0.1,
     mode="expand",
