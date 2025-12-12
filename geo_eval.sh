@@ -270,7 +270,7 @@ function exp-2() {
   deploy "$EXPERIMENT_ID"
 
   for writes in 1; do
-      for skew in 0 1 2; do
+      for skew in 0.5 1 2; do # 0 will have run before
         for algo in "${ALGOS[@]}"; do
           run "$EXPERIMENT_ID" "$configName" "$algo" "$writes" "$DURATION" "exponential" "$THROUGHPUT" "" "$KEYS" "$skew"
         done
@@ -332,8 +332,8 @@ function exp-3-5() {
   echo "--> Master config created at ${masterConfigFile}"
 
   # step 3: run stuff
-  for configs_type in aws-random aws-from-paris; do
-    for num_replicas in $(seq 3 2 31); do
+  for configs_type in aws-from-paris aws-random; do 
+    for num_replicas in $(seq 31 -2 3); do
       local configName="${configs_type}-${num_replicas}"
       local target_regions=$(get_regions "$configs_type" "$num_replicas")
 
