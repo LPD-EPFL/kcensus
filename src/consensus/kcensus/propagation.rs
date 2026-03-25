@@ -1,4 +1,4 @@
-use crate::consensus::kcensus::node_state::Knowledge;
+use crate::consensus::kcensus::node_state::{Knowledge, NodeState};
 use crate::topology::{Topology, FAULTY_LATENCY};
 use bit_set::BitSet;
 use log::{debug, info, trace};
@@ -116,8 +116,17 @@ impl PropagationGraphs {
     }
 
     #[inline]
-    pub fn get_remote_states(&self, msg: MessageId) -> &[Duration] {
-        &self.graphs[msg.proposer].states[msg.src][&msg.time].remote_states
+    pub fn build_remote_states(&self, v: usize, msg_id: MessageId) -> Vec<NodeState> {
+        let prop_graph = &self.graphs[msg_id.proposer];
+        let process_count = prop_graph.states.len();
+        let remote_state_ids = &prop_graph.states[msg_id.src][&msg_id.time].remote_states;
+        let mut remote_states: Vec<_> = (0..process_count).map(NodeState::new).collect();
+        for i in 0..process_count {
+            if remote_state_ids[i] != Duration::ZERO || i == msg_id.proposer {
+                remote_states[i].accept_with_state(v, msg_id.proposer, remote_state_ids[i], self)
+            }
+        }
+        remote_states
     }
 
     #[inline]

@@ -1,6 +1,5 @@
 use crate::consensus::kcensus::message::KCensusMsg;
 use crate::consensus::kcensus::message::KCensusMsg::{PaxosAccept, Spread, SpreadValueOnly};
-use crate::consensus::kcensus::node_state::NodeState;
 use crate::consensus::kcensus::propagation::{MessageId, PropagationGraphs};
 use crate::consensus::kcensus::round_state::KCensusRoundState;
 use crate::consensus::message::ConsensusMsg::{Commit, KCensusM};
@@ -132,25 +131,8 @@ impl ConsensusShardTrait for KCensusShard {
                 let proposer = msg_id.proposer;
                 let leader = self.settings.graphs.get_leader(proposer);
                 let explicit_remote_states = remote_states.is_some();
-                let remote_states = match remote_states {
-                    Some(x) => x,
-                    None => {
-                        let remote_state_ids = self.settings.graphs.get_remote_states(msg_id);
-                        let mut remote_states: Vec<_> =
-                            (0..self.process_count).map(NodeState::new).collect();
-                        for i in 0..self.process_count {
-                            if remote_state_ids[i] != Duration::ZERO || i == msg_id.proposer {
-                                remote_states[i].accept_with_state(
-                                    v,
-                                    msg_id.proposer,
-                                    remote_state_ids[i],
-                                    &self.settings.graphs,
-                                )
-                            }
-                        }
-                        remote_states
-                    }
-                };
+                let remote_states = remote_states
+                    .unwrap_or_else(|| self.settings.graphs.build_remote_states(v, msg_id));
                 assert!(
                     remote_states[proposer].get_v() == Some(v)
                         || remote_states[proposer].get_paxos_accept_round().is_some()
