@@ -637,6 +637,15 @@ pub fn compute_propagation_graphs(
                 }
             }
 
+            trace!("searching with leaders: {:?}", data.leaders);
+            trace!(
+                "useful levels: {:?}",
+                data.useful_levels
+                    .iter()
+                    .map(|list| list.iter().filter(|x| **x).count())
+                    .collect::<Vec<usize>>()
+            );
+
             // Use recursive search to compute the best solution for the given leaders
             best_avg_search_inner(best, 0, &vec![0usize; nb_processes], partial_latency, &data);
         }
