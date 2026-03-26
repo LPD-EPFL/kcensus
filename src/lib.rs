@@ -1,4 +1,3 @@
-use crate::connector::connect_all;
 use crate::consensus::command::Command;
 use crate::consensus::kcensus::propagation::compute_propagation_graphs;
 use crate::consensus::kcensus::KCensus;
@@ -145,7 +144,7 @@ pub async fn run() -> io::Result<()> {
     let process_count = topology.regions.len();
 
     let (consensus_msg_sinks, consensus_msg_streams) =
-        connect_all(my_pid, topology.nb_processes, topology.addresses.clone()).await;
+        connector::connect_all(my_pid, topology.clone()).await;
     let (delayer, delayed_msg_rx) = Delayer::new();
     let delayer_task = tokio::task::spawn(delayer.run(
         topology.clone(),

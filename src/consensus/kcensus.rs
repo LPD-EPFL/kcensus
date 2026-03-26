@@ -86,12 +86,14 @@ impl Debug for KCensusShard {
 
 impl ConsensusShardTrait for KCensusShard {
     async fn process_message(&mut self, msg: ConsensusMessage) -> io::Result<Option<CommandBatch>> {
+        let graphs = &self.settings.graphs;
         let src = msg.src;
         let msg = match msg.msg {
             KCensusM(msg) => msg,
             x => panic!("Unexpected message type: {x:?}"),
         };
 
+        // Don't log SpreadValueOnly messages in debug mode
         if !matches!(msg, SpreadValueOnly { .. }) {
             debug!(
                 "Processing kcensus msg from {src} (shard={}): {msg:?}",
@@ -104,8 +106,8 @@ impl ConsensusShardTrait for KCensusShard {
             );
         }
 
-        // TODO: Ignore some messages if max_seen_slot > slot ?
-        // TODO: Handle dead nodes / packet loss ?
+        // TODO (optimization): Ignore some messages if slot < max_seen_slot ?
+        // TODO (not evaluated): Handle (new) dead nodes / packet loss ?
         match msg {
             Spread {
                 slot,
@@ -115,115 +117,93 @@ impl ConsensusShardTrait for KCensusShard {
                 with_value,
                 new_value,
             } => {
+                // Skip older messages (just propagate values).
                 if slot < self.slot {
-                    // TODO: maybe also enter here if paxos-accept ? (only if higher-prio leader ?)
                     if with_value {
                         assert!(new_value);
                         self.graph_spread_value_only(msg_id, v).await?;
                     }
                     return Ok(None);
                 }
+                assert_eq!(slot, self.slot);
 
-                debug_assert_eq!(slot, self.slot);
+                // Save initial state
                 let old_leader_count = self.round_state.leaders().len();
-                let no_v_before = self.round_state.get_my_v().is_none();
-                // let had_conflict = self.round_state.has_conflict();
-                let proposer = msg_id.proposer;
-                let leader = self.settings.graphs.get_leader(proposer);
                 let explicit_remote_states = remote_states.is_some();
-                let remote_states = remote_states
-                    .unwrap_or_else(|| self.settings.graphs.build_remote_states(v, msg_id));
-                assert!(
-                    remote_states[proposer].get_v() == Some(v)
-                        || remote_states[proposer].get_paxos_accept_round().is_some()
-                );
-                let _remote_change = self
+
+                // Update remote states if newer
+                let _remote_change =
+                    self.round_state
+                        .update_remote_states(v, msg_id, &remote_states, graphs);
+
+                // Accept first value seen (if no conflict)
+                if self
                     .round_state
-                    .store_remote_states(&remote_states, &self.settings.graphs);
-                let conflict = self.round_state.has_conflict();
-                assert!(!explicit_remote_states || conflict);
-
-                if no_v_before && !conflict {
+                    .kcensus_try_accept(v, msg_id.proposer, graphs)
+                {
                     assert_eq!(old_leader_count, 0);
-                    assert!(!self.round_state.am_i_frozen());
-                    self.round_state.accept_with_state(
-                        v,
-                        proposer,
-                        Duration::ZERO,
-                        &self.settings.graphs,
-                    );
                 }
-                let my_v = self.round_state.get_my_v();
 
-                assert!(!self.round_state.am_i_frozen() || conflict);
+                // Freeze if conflict
+                let conflict = self.round_state.has_conflict();
                 if conflict {
-                    self.round_state.freeze_and_prepare_leaders();
+                    self.round_state.freeze_and_prepare_for_leaders();
+                } else {
+                    assert!(!explicit_remote_states && !self.round_state.am_i_frozen());
                 }
 
-                // Update propagation state (/v state) and continue propagation
+                // Update state and propagate
                 self.round_state.receive_msg(msg_id);
-                let final_state = loop {
-                    if let Some((next_state, dependencies)) = self.settings.graphs.next_state(
-                        proposer,
+                let reached_final_k_state = loop {
+                    if let Some((next_state, dependencies)) = graphs.next_state(
+                        msg_id.proposer,
                         self.my_pid,
-                        self.round_state.get_propagation_state(proposer),
+                        self.round_state.get_propagation_state(msg_id.proposer),
                     ) {
                         if !self.round_state.has_received(dependencies) {
                             break false;
                         }
-                        self.round_state.set_propagation_state(proposer, next_state);
+                        // Always update propagation state
+                        self.round_state
+                            .set_propagation_state(msg_id.proposer, next_state);
+                        // but only update knowledge state when there's no conflict (= non-frozen)
                         if !conflict {
-                            self.round_state
-                                .update_v_state(next_state, &self.settings.graphs)
+                            self.round_state.update_k_state(next_state, graphs)
                         }
-                        self.spread(v, proposer, next_state, new_value).await?;
+                        self.spread(v, msg_id.proposer, next_state, new_value)
+                            .await?;
                     } else {
-                        break true;
+                        break !conflict;
                     }
                 };
 
-                if final_state && leader == self.my_pid && !conflict {
-                    assert!(self.round_state.can_commit(&self.settings.graphs));
-                    let v = my_v.unwrap();
-                    if let Some(requester) = self.get_requester(v) {
-                        if requester != self.my_pid {
-                            self.sinks
-                                .send(Commit { slot, v }, None, requester, self.last_v)
-                                .await?;
-                        }
-                        for i in 0..self.process_count {
-                            if i == self.my_pid || i == requester {
-                                continue;
-                            }
-                            self.sinks
-                                .send(Commit { slot, v }, None, i, self.last_v)
-                                .await?;
-                        }
-                    } else {
-                        self.sinks
-                            .broadcast(Commit { slot, v }, None, self.last_v)
-                            .await?;
-                    }
+                // A leader reaching final knowledge state can fast-commit
+                let leading = graphs.get_leader(msg_id.proposer) == self.my_pid;
+                if leading && reached_final_k_state {
+                    // Fast-commiting
+                    debug_assert!(self.round_state.can_kcensus_commit(graphs));
+                    let value = self.commit_and_broadcast(v).await?;
                     info!(
                         "Commit via kcensus: shard={} slot={slot} v={v}",
                         self.sinks.shard_id
                     );
-                    let value = self.commit_slot(v, false);
                     return Ok(Some(value));
                 }
+
+                // Try switching to paxos if I'm leading and there are conflicts.
                 if self.round_state.prepared_for() == Some(self.my_pid) {
-                    assert!(conflict);
+                    assert!(conflict, "no-conflict: should have fast committed!?");
                     assert!(self.replica);
                     if self
                         .round_state
                         .can_start_paxos_accept(&self.alive_replicas)
                     {
-                        let adopted_v = self.round_state.adopt(&self.settings.graphs);
-                        let (new_value, adopted_v) = match adopted_v {
-                            Some(adopted_v) => (false, adopted_v),
+                        let adopted_v = self.round_state.adopt(graphs);
+                        let (adopted_v, new_value) = match adopted_v {
+                            Some(adopted_v) => (adopted_v, false),
                             None => match self.get_new_batch_to_propose() {
-                                Some(batch) => (true, self.store_new_command(batch)),
-                                None => (false, v),
+                                Some(batch) => (self.store_new_command(batch), true),
+                                None => (v, false),
                             },
                         };
                         self.broadcast_paxos_accept(adopted_v, new_value).await?;
@@ -243,10 +223,12 @@ impl ConsensusShardTrait for KCensusShard {
                 slot, leader, v, ..
             } => {
                 if slot < self.slot || !self.replica {
+                    // Note: we use simple broadcast for new PaxosAccept values
+                    // so no need to propagate like with Spread/SpreadValueOnly.
                     return Ok(None);
                 }
 
-                self.round_state.freeze_and_prepare(leader);
+                self.round_state.freeze_and_prepare_for(leader);
                 if self.round_state.prepared_for() != Some(leader) {
                     return Ok(None);
                 }
@@ -265,17 +247,13 @@ impl ConsensusShardTrait for KCensusShard {
                     )
                     .await?;
                 } else {
-                    assert_eq!(v, self.get_my_v().unwrap());
                     self.round_state.recv_paxos_accept(src, v);
                     if self.round_state.can_paxos_commit() {
-                        self.sinks
-                            .broadcast(Commit { slot, v }, None, self.last_v)
-                            .await?;
+                        let value = self.commit_and_broadcast(v).await?;
                         info!(
                             "Commit via paxos: shard={} slot={slot} v={v}",
                             self.sinks.shard_id
                         );
-                        let value = self.commit_slot(v, false);
                         return Ok(Some(value));
                     }
                 }
@@ -341,6 +319,7 @@ impl ConsensusShardTrait for KCensusShard {
         self.my_pid == self.leader_priority[0]
     }
 
+    #[inline]
     fn can_propose(&self) -> bool {
         true
     }
@@ -358,24 +337,31 @@ impl KCensusShard {
     }
 
     #[inline]
-    async fn broadcast(&self, msg: KCensusMsg) -> io::Result<()> {
+    async fn commit_and_broadcast(&mut self, v: usize) -> io::Result<CommandBatch> {
+        let slot = self.slot;
+        assert_eq!(Some(v), self.get_my_v());
+        self.sinks
+            .priority_broadcast(Commit { slot, v }, None, self.last_v, self.get_requester(v))
+            .await?;
+        Ok(self.commit_slot(v, false))
+    }
+
+    #[inline]
+    async fn broadcast_paxos_accept(&self, v: usize, new_value: bool) -> io::Result<()> {
+        let msg = PaxosAccept {
+            slot: self.slot,
+            leader: self.my_pid,
+            v,
+            new_value,
+        };
         let value = self.value_for_msg(&msg);
+        // TODO (small optimization): if not a new value, broadcast to closest majority only ?
         self.sinks
             .broadcast(KCensusM(msg), value, self.last_v)
             .await
     }
 
-    async fn broadcast_paxos_accept(&self, v: usize, new_value: bool) -> io::Result<()> {
-        // TODO: if not a new value, broadcast to closest majority only ? (small optim.)
-        self.broadcast(PaxosAccept {
-            slot: self.slot,
-            leader: self.my_pid,
-            v,
-            new_value,
-        })
-        .await
-    }
-
+    #[inline]
     async fn send_to(&self, msg: KCensusMsg, dest: usize) -> io::Result<()> {
         let value = self.value_for_msg(&msg);
         self.sinks
@@ -408,15 +394,16 @@ impl KCensusShard {
             let dest = msg_id.dest;
 
             if !value_only {
-                let remote_states = if self.round_state.has_conflict() {
+                let remote_states = if !self.round_state.has_conflict() {
+                    // state is implicit when there's no conflict
+                    None
+                } else {
                     let node_states = self.round_state.clone_node_states();
                     assert!(
                         node_states[proposer].get_v() == Some(v)
                             || node_states[proposer].get_paxos_accept_round().is_some()
                     );
                     Some(node_states)
-                } else {
-                    None
                 };
 
                 let msg = Spread {
@@ -436,6 +423,7 @@ impl KCensusShard {
         Ok(())
     }
 
+    #[inline]
     async fn spread(
         &self,
         v: usize,
@@ -447,16 +435,17 @@ impl KCensusShard {
             .await
     }
 
+    #[inline]
     async fn propose_and_spread(&mut self, v: usize, new_value: bool) -> io::Result<()> {
-        let me = self.my_pid;
-        let state_id = Duration::ZERO;
-        self.round_state
-            .accept_with_state(v, me, state_id, &self.settings.graphs);
+        let accepted = self
+            .round_state
+            .kcensus_try_accept(v, self.my_pid, &self.settings.graphs);
+        assert!(accepted);
 
-        assert!(!self.round_state.has_conflict());
-        self.spread(v, me, state_id, new_value).await
+        self.spread(v, self.my_pid, Duration::ZERO, new_value).await
     }
 
+    #[inline]
     async fn graph_spread_value_only(&self, prev_msg_id: MessageId, v: usize) -> io::Result<()> {
         if !self.queued_commands.contains_key(&v) {
             return Ok(());
@@ -466,6 +455,7 @@ impl KCensusShard {
         self.inner_spread(v, proposer, state_id, true, true).await
     }
 
+    #[inline]
     async fn graph_spread_new_value_only(&self, v: usize) -> io::Result<()> {
         let me = self.my_pid;
         let state_id = Duration::ZERO;

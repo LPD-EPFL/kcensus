@@ -240,11 +240,18 @@ impl ConsensusShardTrait for PaxosFamilyShard {
     }
 
     async fn propose_start(&mut self, value: CommandBatch, contention: bool) -> io::Result<()> {
-        let v = self.store_new_command(value);
-
         if !self.can_propose() || contention || (self.is_multi_paxos() && !self.should_lead()) {
-            self.broadcast(ForwardRequest { v }, true).await
+            let v = self.store_new_command(value.clone());
+            self.sinks
+                .priority_broadcast(
+                    PaxosM(ForwardRequest { v }),
+                    Some(value),
+                    self.last_v,
+                    Some(self.get_leader()),
+                )
+                .await
         } else {
+            let v = self.store_new_command(value);
             self.propose(v, true).await
         }
     }
@@ -279,34 +286,18 @@ impl ConsensusShardTrait for PaxosFamilyShard {
         self.round_state.get_v()
     }
 
+    #[inline]
     fn ongoing(&self) -> bool {
         self.get_my_v().is_some()
     }
 
     #[inline]
     fn should_lead(&self) -> bool {
-        let leader = if matches!(self.settings.mode, MultiPaxos | MultiPaxos3P) {
-            self.leader_priority[0]
-        } else {
-            self.leader_priority
-                .iter()
-                .copied()
-                .find(|leader| {
-                    self.alive_replicas.contains(*leader)
-                        && self
-                            .queued_commands
-                            .keys()
-                            .any(|v| self.get_committer(*v) == Some(*leader))
-                })
-                .unwrap_or(self.leader_priority[0])
-        };
-        if !self.can_propose() {
-            assert_ne!(
-                self.my_pid, leader,
-                "A non-replica should not have to lead."
-            );
-            return false;
-        }
+        let leader = self.get_leader();
+        assert!(
+            self.my_pid != leader || self.can_propose(),
+            "A non-replica should not have to lead."
+        );
         self.my_pid == leader
     }
 
@@ -403,6 +394,7 @@ impl PaxosFamilyShard {
         self.broadcast(msg, with_value).await
     }
 
+    #[inline]
     async fn answer_prepare(&self, src: usize) -> io::Result<()> {
         let msg = Prepare {
             slot: self.slot,
@@ -412,6 +404,7 @@ impl PaxosFamilyShard {
         self.send(msg, src).await
     }
 
+    #[inline]
     async fn broadcast_accept(&self) -> io::Result<()> {
         // TODO: Only send to fastest majority/quorum ?
         let msg = Accept {
@@ -422,6 +415,7 @@ impl PaxosFamilyShard {
         self.broadcast(msg, false).await
     }
 
+    #[inline]
     async fn answer_accept(&self) -> io::Result<()> {
         let src = self.round_state.round.unwrap().leader;
         let v = self.round_state.get_v().unwrap();
@@ -445,13 +439,14 @@ impl PaxosFamilyShard {
     }
 
     async fn broadcast_commit(&self) -> io::Result<()> {
-        let msg = Commit {
-            slot: self.slot,
-            v: self.round_state.get_v().unwrap(),
-        };
-        self.sinks.broadcast(msg, None, self.last_v).await
+        let slot = self.slot;
+        let v = self.round_state.get_v().unwrap();
+        self.sinks
+            .priority_broadcast(Commit { slot, v }, None, self.last_v, self.get_requester(v))
+            .await
     }
 
+    #[inline]
     fn is_multi_paxos(&self) -> bool {
         matches!(self.settings.mode, MultiPaxos | MultiPaxos3P)
     }
@@ -461,6 +456,25 @@ impl PaxosFamilyShard {
             self.get_requester(v).map(|proposer| committers[proposer])
         } else {
             None
+        }
+    }
+
+    #[inline]
+    fn get_leader(&self) -> usize {
+        if matches!(self.settings.mode, MultiPaxos | MultiPaxos3P) {
+            self.leader_priority[0]
+        } else {
+            self.leader_priority
+                .iter()
+                .copied()
+                .find(|leader| {
+                    self.alive_replicas.contains(*leader)
+                        && self
+                            .queued_commands
+                            .keys()
+                            .any(|v| self.get_committer(*v) == Some(*leader))
+                })
+                .unwrap_or(self.leader_priority[0])
         }
     }
 }

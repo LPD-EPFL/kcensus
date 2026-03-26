@@ -134,7 +134,7 @@ where
                         None => {
                             debug_assert!(my_queued_commands.iter().all(|x| x.is_empty()));
                             done = true;
-                            self.sinks.lock().await.broadcast(Done).await?;
+                            self.sinks.lock().await.broadcast(Done, None).await?;
                             count_done += 1;
                             continue 'main_loop;
                         }

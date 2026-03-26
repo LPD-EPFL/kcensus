@@ -1,6 +1,8 @@
 use crate::connector::WrappedSink;
+use crate::consensus::kcensus::message::KCensusMsg;
 use crate::consensus::message::{CommandBatch, ConsensusMessage, ConsensusMsg};
 use crate::message::Message;
+use crate::message::Message::ConsensusM;
 use bincode::Options;
 use bit_set::BitSet;
 use futures::SinkExt;
@@ -16,7 +18,7 @@ pub struct MultiSink {
     my_pid: usize,
     nb_nodes: usize,
     sinks: HashMap<usize, WrappedSink>,
-    pub faults: BitSet,
+    pub alive_replicas: BitSet,
     pub stats: Stats,
 }
 
@@ -39,12 +41,12 @@ pub fn encode(msg: &Message) -> Bytes {
 }
 
 impl MultiSink {
-    pub fn new(my_pid: usize, nb_nodes: usize) -> Self {
+    pub fn new(my_pid: usize, nb_nodes: usize, alive_replicas: BitSet) -> Self {
         Self {
             my_pid,
             nb_nodes,
             sinks: HashMap::with_capacity(nb_nodes - 1),
-            faults: BitSet::new(),
+            alive_replicas,
             stats: Stats::default(),
         }
     }
@@ -57,16 +59,33 @@ impl MultiSink {
     }
 
     #[inline]
-    pub async fn broadcast(&mut self, msg: Message) -> io::Result<()> {
+    pub async fn broadcast(&mut self, msg: Message, priority: Option<usize>) -> io::Result<()> {
         trace!("Broadcasting {msg:?}");
+        let replica_only = should_only_send_to_replicas(&msg);
         let bytes = encode(&msg);
+        if let Some(priority_dest) = priority
+            && priority_dest != self.my_pid
+        {
+            assert!(!replica_only || self.alive_replicas.contains(priority_dest));
+            self.sinks
+                .get_mut(&priority_dest)
+                .unwrap()
+                .send(bytes.clone())
+                .await?;
+        }
         for (dest, sink) in self.sinks.iter_mut() {
+            if replica_only && !self.alive_replicas.contains(*dest) {
+                continue;
+            }
+
             if msg.is_consensus_msg() {
-                if self.faults.contains(*dest) {
-                    continue;
-                }
                 self.stats.msg_count += 1;
                 self.stats.byte_count += bytes.len();
+            }
+
+            if Some(*dest) == priority {
+                // Already sent
+                continue;
             }
 
             sink.send(bytes.clone()).await?;
@@ -75,10 +94,10 @@ impl MultiSink {
     }
 
     #[inline]
-    pub async fn send(&mut self, msg: Message, pid: usize) -> io::Result<()> {
-        trace!("Sending to {pid}: {msg:?}");
-        debug_assert!(pid != self.my_pid);
-        if msg.is_consensus_msg() && self.faults.contains(pid) {
+    pub async fn send(&mut self, msg: Message, dest: usize) -> io::Result<()> {
+        trace!("Sending to {dest}: {msg:?}");
+        debug_assert!(dest != self.my_pid);
+        if should_only_send_to_replicas(&msg) && !self.alive_replicas.contains(dest) {
             return Ok(());
         }
         let bytes = encode(&msg);
@@ -86,22 +105,50 @@ impl MultiSink {
             self.stats.msg_count += 1;
             self.stats.byte_count += bytes.len();
         }
-        let sink = self.sinks.get_mut(&pid).unwrap();
+        let sink = self.sinks.get_mut(&dest).unwrap();
         sink.send(bytes).await
+    }
+}
+
+fn should_only_send_to_replicas(msg: &Message) -> bool {
+    if let ConsensusM { msg, value, .. } = msg {
+        match &msg.msg {
+            ConsensusMsg::Commit { .. } => false,
+            ConsensusMsg::ReadRequest { .. } => true,
+            ConsensusMsg::ReadResponse { .. } => false,
+            ConsensusMsg::KCensusM(msg) => match msg {
+                KCensusMsg::Spread { .. } => false,
+                KCensusMsg::SpreadValueOnly { .. } => false,
+                KCensusMsg::PaxosAccept { .. } => value.is_none(),
+            },
+            ConsensusMsg::PaxosM(_) => value.is_none(),
+        }
+    } else {
+        false
     }
 }
 
 impl ShardMultiSink {
     #[inline]
+    pub async fn priority_broadcast(
+        &self,
+        msg: ConsensusMsg,
+        value: Option<CommandBatch>,
+        last_v: Option<usize>,
+        priority: Option<usize>,
+    ) -> io::Result<()> {
+        let mut multi_sink = self.multi_sink.lock().await;
+        let msg = self.build_msg(msg, value, multi_sink.my_pid, last_v);
+        multi_sink.broadcast(msg, priority).await
+    }
+
     pub async fn broadcast(
         &self,
         msg: ConsensusMsg,
         value: Option<CommandBatch>,
         last_v: Option<usize>,
     ) -> io::Result<()> {
-        let mut multi_sink = self.multi_sink.lock().await;
-        let msg = self.build_msg(msg, value, multi_sink.my_pid, last_v);
-        multi_sink.broadcast(msg).await
+        self.priority_broadcast(msg, value, last_v, None).await
     }
 
     #[inline]

@@ -38,7 +38,6 @@ pub struct KnowledgeState {
     remote_states: Vec<Duration>,
     dependencies: HashSet<MessageId>,
     needed_by: Vec<MessageId>,
-    frozen: BitSet,
 }
 
 #[derive(Debug)]
@@ -88,10 +87,8 @@ impl PropagationGraphs {
     }
 
     #[inline]
-    pub fn get_frozen(&self, proposer: ProcId, node: ProcId, state_id: Duration) -> bool {
-        self.find_state(proposer, node, state_id)
-            .frozen
-            .contains(node)
+    pub fn final_state(&self, proposer: ProcId, node: ProcId, state_id: Duration) -> bool {
+        *self.graphs[proposer].states[node].iter().last().unwrap().0 == state_id
     }
 
     #[inline]
@@ -116,17 +113,16 @@ impl PropagationGraphs {
     }
 
     #[inline]
-    pub fn build_remote_states(&self, v: usize, msg_id: MessageId) -> Vec<NodeState> {
-        let prop_graph = &self.graphs[msg_id.proposer];
-        let process_count = prop_graph.states.len();
-        let remote_state_ids = &prop_graph.states[msg_id.src][&msg_id.time].remote_states;
-        let mut remote_states: Vec<_> = (0..process_count).map(NodeState::new).collect();
-        for i in 0..process_count {
-            if remote_state_ids[i] != Duration::ZERO || i == msg_id.proposer {
-                remote_states[i].accept_with_state(v, msg_id.proposer, remote_state_ids[i], self)
-            }
+    pub fn build_remote_state(&self, v: usize, msg_id: MessageId, pid: usize) -> NodeState {
+        let mut remote_state = NodeState::new(pid);
+
+        let remote_state_id =
+            self.graphs[msg_id.proposer].states[msg_id.src][&msg_id.time].remote_states[pid];
+        if remote_state_id != Duration::ZERO || pid == msg_id.proposer {
+            remote_state.accept_with_k_state(v, msg_id.proposer, remote_state_id, self)
         }
-        remote_states
+
+        remote_state
     }
 
     #[inline]
@@ -800,7 +796,6 @@ pub fn compute_propagation_graphs(
                         remote_states: vec![Duration::ZERO; nb_processes],
                         dependencies: HashSet::new(),
                         needed_by: vec![],
-                        frozen: BitSet::new(),
                     },
                 );
             }
@@ -957,7 +952,6 @@ pub fn compute_propagation_graphs(
                                 remote_states, // same
                                 dependencies: HashSet::with_capacity(1),
                                 needed_by: vec![],
-                                frozen: BitSet::new(),
                             };
                             let inserted = states[current].insert(current_time, state).is_none();
                             assert!(inserted);
@@ -1015,19 +1009,6 @@ pub fn compute_propagation_graphs(
                 }
             }
             // Finished adding messages.
-
-            // Set frozen tags
-            for node in 0..nb_processes {
-                let final_node_state = states[node].iter_mut().last().expect("should have state");
-                let final_node_time = *final_node_state.0;
-                for other_state in states.iter_mut() {
-                    for (_, state) in other_state.iter_mut() {
-                        if state.remote_states[node] == final_node_time {
-                            state.frozen.insert(node);
-                        }
-                    }
-                }
-            }
 
             // Sanity checks:
             assert_eq!(should_include_value.len(), nb_processes - 1);

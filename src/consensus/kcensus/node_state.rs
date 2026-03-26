@@ -10,9 +10,9 @@ pub type Knowledge = BitSet;
 pub struct NodeState {
     id: usize,
     v: Option<usize>,
-    v_proposer: Option<usize>,
-    v_state_nanos: u64,
-    frozen_and_prepared: Option<usize>,
+    k_proposer: Option<usize>,
+    k_state_nanos: u64,
+    prepared_for: Option<usize>,
     paxos_accept_round: Option<usize>,
 }
 
@@ -20,15 +20,17 @@ impl PartialOrd<Self> for NodeState {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         assert_eq!(self.id, other.id);
         let accept_ord = self.paxos_accept_round.cmp(&other.paxos_accept_round);
-        let prepare_ord = self.prepared_for().cmp(&other.prepared_for());
+        let prepare_ord = self.prepared_for.cmp(&other.prepared_for);
         if accept_ord != Ordering::Equal {
             assert!(prepare_ord == accept_ord || prepare_ord == Ordering::Equal);
             return Some(accept_ord);
-        } else if prepare_ord != Ordering::Equal {
+        }
+
+        if prepare_ord != Ordering::Equal {
             return Some(prepare_ord);
         }
 
-        let state_ord = self.v_state_nanos.cmp(&other.v_state_nanos);
+        let state_ord = self.k_state_nanos.cmp(&other.k_state_nanos);
         if state_ord != Ordering::Equal {
             return Some(state_ord);
         }
@@ -39,7 +41,7 @@ impl PartialOrd<Self> for NodeState {
         }
 
         let v_ord = self.v.is_some().cmp(&other.v.is_some());
-        let prop_ord = self.v_proposer.is_some().cmp(&other.v_proposer.is_some());
+        let prop_ord = self.k_proposer.is_some().cmp(&other.k_proposer.is_some());
         assert_eq!(v_ord, prop_ord);
         Some(v_ord)
     }
@@ -51,9 +53,9 @@ impl NodeState {
         Self {
             id,
             v: None,
-            v_proposer: None,
-            v_state_nanos: 0,
-            frozen_and_prepared: None,
+            k_proposer: None,
+            k_state_nanos: 0,
+            prepared_for: None,
             paxos_accept_round: None,
         }
     }
@@ -61,37 +63,44 @@ impl NodeState {
     #[inline]
     pub fn clear(&mut self) {
         self.v = None;
-        self.v_proposer = None;
-        self.v_state_nanos = 0;
-        self.frozen_and_prepared = None;
+        self.k_proposer = None;
+        self.k_state_nanos = 0;
+        self.prepared_for = None;
         self.paxos_accept_round = None;
     }
 
+    #[inline]
     pub fn get_v(&self) -> Option<usize> {
         self.v
     }
 
-    pub fn get_proposer(&self) -> Option<usize> {
-        self.v_proposer
+    #[inline]
+    pub fn get_k_proposer(&self) -> Option<usize> {
+        self.k_proposer
     }
 
-    pub fn get_state_id(&self) -> Duration {
-        Duration::from_nanos(self.v_state_nanos)
+    #[inline]
+    pub fn get_k_state_id(&self) -> Duration {
+        Duration::from_nanos(self.k_state_nanos)
     }
 
+    #[inline]
     pub fn is_frozen(&self) -> bool {
-        self.frozen_and_prepared.is_some()
+        self.prepared_for.is_some()
     }
 
-    pub fn prepared_for(&self) -> Option<usize> {
-        self.frozen_and_prepared
+    #[inline]
+    pub fn get_prepared_for(&self) -> Option<usize> {
+        self.prepared_for
     }
 
+    #[inline]
     pub fn get_paxos_accept_round(&self) -> Option<usize> {
         self.paxos_accept_round
     }
 
-    pub fn accept_with_state(
+    #[inline]
+    pub fn accept_with_k_state(
         &mut self,
         v: usize,
         proposer: usize,
@@ -99,36 +108,39 @@ impl NodeState {
         graph: &PropagationGraphs,
     ) {
         assert!(self.v.is_none());
-        assert!(self.v_proposer.is_none());
-        assert_eq!(self.v_state_nanos, 0);
+        assert!(self.k_proposer.is_none());
+        assert_eq!(self.k_state_nanos, 0);
         self.v = Some(v);
-        self.v_proposer = Some(proposer);
-        self.update_state(duration, graph);
+        self.k_proposer = Some(proposer);
+        self.update_k_state(duration, graph);
     }
 
-    pub fn update_state(&mut self, duration: Duration, graph: &PropagationGraphs) {
+    #[inline]
+    pub fn update_k_state(&mut self, duration: Duration, graph: &PropagationGraphs) {
         assert!(!self.is_frozen());
-        self.v_state_nanos = duration.as_nanos() as u64;
-        let proposer = self.v_proposer.unwrap();
-        if graph.get_frozen(proposer, self.id, duration) {
-            self.frozen_and_prepared = Some(graph.get_leader(proposer));
+        self.k_state_nanos = duration.as_nanos() as u64;
+        let proposer = self.k_proposer.unwrap();
+        if graph.final_state(proposer, self.id, duration) {
+            self.prepared_for = Some(graph.get_leader(proposer));
         }
     }
 
-    pub fn freeze_and_prepare(&mut self, leader: usize) {
-        if self.frozen_and_prepared < Some(leader) {
-            self.frozen_and_prepared = Some(leader);
+    #[inline]
+    pub fn prepare_for(&mut self, leader: usize) {
+        if self.prepared_for < Some(leader) {
+            self.prepared_for = Some(leader);
         }
     }
 
+    #[inline]
     pub fn paxos_accept(&mut self, leader: usize, v: usize) -> bool {
-        self.freeze_and_prepare(leader);
-        if self.frozen_and_prepared == Some(leader) && self.paxos_accept_round < Some(leader) {
+        self.prepare_for(leader);
+        if self.prepared_for == Some(leader) && self.paxos_accept_round < Some(leader) {
             self.v = Some(v);
             self.paxos_accept_round = Some(leader);
 
-            self.v_proposer = None;
-            self.v_state_nanos = 0;
+            self.k_proposer = None;
+            self.k_state_nanos = 0;
             return true;
         }
         false

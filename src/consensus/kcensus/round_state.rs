@@ -63,20 +63,23 @@ impl KCensusRoundState {
         my_state!(self).get_v()
     }
 
+    #[inline]
     pub fn get_round(&self) -> Option<usize> {
-        my_state!(self).prepared_for()
+        my_state!(self).get_prepared_for()
     }
 
     #[inline]
-    pub fn accept_with_state(
+    pub fn kcensus_try_accept(
         &mut self,
         v: usize,
         proposer: usize,
-        time: Duration,
         graph: &PropagationGraphs,
-    ) {
-        assert!(self.get_my_v().is_none());
-        my_state!(self).accept_with_state(v, proposer, time, graph);
+    ) -> bool {
+        if self.get_my_v().is_some() || self.has_conflict() {
+            return false;
+        }
+        assert!(!self.am_i_frozen());
+        my_state!(self).accept_with_k_state(v, proposer, Duration::ZERO, graph);
         if self.proposers.is_empty() {
             assert!(self.leaders.is_empty());
             self.proposers.push(proposer);
@@ -87,11 +90,13 @@ impl KCensusRoundState {
             assert_eq!(self.proposers[0], proposer);
             assert_eq!(self.leaders[0], graph.get_leader(proposer));
         }
+        true
     }
 
-    pub fn update_v_state(&mut self, time: Duration, graph: &PropagationGraphs) {
+    #[inline]
+    pub fn update_k_state(&mut self, time: Duration, graph: &PropagationGraphs) {
         assert!(self.get_my_v().is_some());
-        my_state!(self).update_state(time, graph);
+        my_state!(self).update_k_state(time, graph);
     }
 
     #[inline]
@@ -100,18 +105,20 @@ impl KCensusRoundState {
     }
 
     #[inline]
-    pub fn freeze_and_prepare(&mut self, leader: usize) {
-        my_state!(self).freeze_and_prepare(leader);
+    pub fn freeze_and_prepare_for(&mut self, leader: usize) {
+        my_state!(self).prepare_for(leader);
     }
 
-    pub fn freeze_and_prepare_leaders(&mut self) {
+    #[inline]
+    pub fn freeze_and_prepare_for_leaders(&mut self) {
         for leader in self.leaders.iter() {
-            my_state!(self).freeze_and_prepare(*leader);
+            my_state!(self).prepare_for(*leader);
         }
     }
 
+    #[inline]
     pub fn prepared_for(&self) -> Option<usize> {
-        my_state!(self).prepared_for()
+        my_state!(self).get_prepared_for()
     }
 
     #[inline]
@@ -145,28 +152,46 @@ impl KCensusRoundState {
         self.received_msgs.is_superset(dependencies)
     }
 
+    /**
+     * This method simply saves new remote states while keeping proposers/leaders lists up to date.
+     */
     #[inline]
-    pub fn store_remote_states(
+    pub fn update_remote_states(
         &mut self,
-        remote_states: &[NodeState],
+        v: usize,
+        msg_id: MessageId,
+        remote_states: &Option<Vec<NodeState>>,
         graph: &PropagationGraphs,
     ) -> bool {
         let mut changed = false;
-        let my_proposer = my_state!(self).get_proposer();
-        for (pid, remote_node_state) in remote_states.iter().enumerate() {
+        let my_proposer = my_state!(self).get_k_proposer();
+        let process_count = self.node_states.len();
+        for pid in 0..process_count {
+            // Retrieve local and remote states
             let local_node_state = &mut self.node_states[pid];
-            if remote_node_state < local_node_state {
+            let remote_node_state = match remote_states {
+                Some(remote_states) => &remote_states[pid],
+                None => &graph.build_remote_state(v, msg_id, pid),
+            };
+
+            // Skip remote states if not newer
+            if remote_node_state <= local_node_state {
                 continue;
             }
+            assert_ne!(pid, self.my_pid);
 
-            let proposer = remote_node_state.get_proposer();
-            if remote_node_state.get_paxos_accept_round().is_none()
-                && remote_node_state.get_v().is_some()
-                && proposer != my_proposer
-            {
-                let proposer = proposer.unwrap();
-                // This node is still in KCensus phase (fast-path).expect("Should have proposer if in a KCensus round");
+            // Update local copy
+            *local_node_state = remote_node_state.clone();
+            changed = true;
+
+            // Update lists of proposers and leaders
+            if let Some(proposer) = remote_node_state.get_k_proposer() {
+                // This node is still in KCensus phase (fast-path)
+                assert!(remote_node_state.get_paxos_accept_round().is_none());
+                assert!(remote_node_state.get_v().is_some());
+
                 if !self.proposers.contains(&proposer) {
+                    assert_ne!(Some(proposer), my_proposer);
                     self.proposers.push(proposer);
                     let leader = graph.get_leader(proposer);
                     if !self.leaders.contains(&leader) {
@@ -174,39 +199,46 @@ impl KCensusRoundState {
                     }
                 }
             }
-
-            *local_node_state = remote_node_state.clone();
-            changed = true;
         }
         changed
     }
 
+    #[inline]
     pub fn get_propagation_state(&self, proposer: usize) -> Duration {
         self.propagation_states[proposer]
     }
 
+    #[inline]
     pub fn set_propagation_state(&mut self, proposer: usize, state_id: Duration) {
         self.propagation_states[proposer] = state_id;
     }
 
+    #[inline]
     pub fn get_node_states(&self) -> &Vec<NodeState> {
         &self.node_states
     }
 
+    #[inline]
     pub fn get_paxos_accept_round(&self) -> Option<usize> {
         my_state!(self).get_paxos_accept_round()
     }
 
+    #[inline]
     pub fn can_start_paxos_accept(&self, alive_replicas: &BitSet) -> bool {
+        if self.prepared_for() != Some(self.my_pid)
+            || Some(self.my_pid) <= self.get_paxos_accept_round()
+        {
+            return false;
+        };
         let prepared_count = self
             .node_states
             .iter()
             .enumerate()
             .filter(|(id, state)| {
-                alive_replicas.contains(*id) && state.prepared_for() == Some(self.my_pid)
+                alive_replicas.contains(*id) && state.get_prepared_for() == Some(self.my_pid)
             })
             .count();
-        prepared_count >= self.majority && self.get_paxos_accept_round() < Some(self.my_pid)
+        prepared_count >= self.majority
     }
 
     pub fn could_adopt(&self, alive_replicas: &BitSet) -> bool {
@@ -246,11 +278,11 @@ impl KCensusRoundState {
                     continue;
                 }
 
-                if node.get_proposer() != Some(proposer) {
+                if node.get_k_proposer() != Some(proposer) {
                     // Node rooting for something else. Check for conflict with v_quorum.
-                    let conflict = match node.get_proposer() {
+                    let conflict = match node.get_k_proposer() {
                         Some(proposer) => !graph
-                            .get_knowledge(proposer, pid, node.get_state_id())
+                            .get_knowledge(proposer, pid, node.get_k_state_id())
                             .is_disjoint(v_quorum),
                         None => v_quorum.contains(pid),
                     };
@@ -259,7 +291,7 @@ impl KCensusRoundState {
                     }
                 } else {
                     // Node rooting for v. Check that it reached the required knowledge.
-                    if graph.get_final_state_id(proposer, pid) != node.get_state_id() {
+                    if graph.get_final_state_id(proposer, pid) != node.get_k_state_id() {
                         continue 'proposer_loop;
                     }
                 }
@@ -271,11 +303,12 @@ impl KCensusRoundState {
         None // Means nothing was commited, thus we can batch
     }
 
-    pub fn can_commit(&self, graph: &PropagationGraphs) -> bool {
-        if let Some(proposer) = my_state!(self).get_proposer() {
+    #[inline]
+    pub fn can_kcensus_commit(&self, graph: &PropagationGraphs) -> bool {
+        if let Some(proposer) = my_state!(self).get_k_proposer() {
             if graph.get_leader(proposer) == self.my_pid
                 && graph.get_final_state_id(proposer, self.my_pid)
-                    == self.node_states[self.my_pid].get_state_id()
+                    == self.node_states[self.my_pid].get_k_state_id()
             {
                 return true;
             }
@@ -283,18 +316,21 @@ impl KCensusRoundState {
         false
     }
 
+    #[inline]
     pub fn paxos_accept(&mut self, leader: usize, v: usize) {
         if my_state!(self).paxos_accept(leader, v) && leader == self.my_pid {
             self.paxos_accept_count += 1;
         }
     }
 
+    #[inline]
     pub fn recv_paxos_accept(&mut self, src: usize, v: usize) {
         if self.node_states[src].paxos_accept(self.my_pid, v) {
             self.paxos_accept_count += 1;
         }
     }
 
+    #[inline]
     pub fn can_paxos_commit(&self) -> bool {
         self.paxos_accept_count >= self.majority
     }
@@ -305,11 +341,22 @@ impl fmt::Display for KCensusRoundState {
         // write!(f, "[")?;
         for (i, state) in self.node_states.iter().enumerate() {
             if let Some(v) = state.get_v() {
-                write!(f, "\n  {}: leader={:?}, v={}, ", i, state.prepared_for(), v,)?;
+                write!(
+                    f,
+                    "\n  {}: leader={:?}, v={}, ",
+                    i,
+                    state.get_prepared_for(),
+                    v,
+                )?;
                 if let Some(round) = state.get_paxos_accept_round() {
                     write!(f, "paxos_accept_round={round}")?;
-                } else if let Some(proposer) = state.get_proposer() {
-                    write!(f, "proposer={}, state={:?}", proposer, state.get_state_id())?;
+                } else if let Some(proposer) = state.get_k_proposer() {
+                    write!(
+                        f,
+                        "proposer={}, state={:?}",
+                        proposer,
+                        state.get_k_state_id()
+                    )?;
                 }
             }
         }

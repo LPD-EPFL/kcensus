@@ -1,6 +1,7 @@
 use crate::message::Message::Hello;
 use crate::message::{Message, MsgWithSource};
 use crate::multi_sink::MultiSink;
+use crate::topology::Topology;
 use futures::stream::select_all;
 use futures::{Stream, TryStreamExt};
 use log::debug;
@@ -60,20 +61,20 @@ fn wrap_stream(stream: TcpStream) -> (SerStream, WrappedSink) {
     (stream, sink)
 }
 
+#[inline]
 pub async fn connect_all(
     my_pid: usize,
-    nb_nodes: usize,
-    addresses: Vec<(String, u16)>,
+    topology: Topology,
 ) -> (
     MultiSink,
     impl Stream<Item = Result<MsgWithSource, io::Error>>,
 ) {
-    let mut sinks = MultiSink::new(my_pid, nb_nodes);
-    let mut streams = Vec::with_capacity(nb_nodes);
+    let mut sinks = MultiSink::new(my_pid, topology.nb_processes, topology.alive_replicas);
+    let mut streams = Vec::with_capacity(topology.nb_processes);
 
     let wrap_with_source_pid = |pid: usize| move |m: Message| m.with_source(pid);
 
-    let connector = Connector::new(my_pid, addresses.clone())
+    let connector = Connector::new(my_pid, topology.addresses)
         .await
         .expect("Connector failed to init");
     for pid in 0..my_pid {
@@ -85,7 +86,7 @@ pub async fn connect_all(
             .expect("Should send hello msg");
         streams.push(stream.map_ok(wrap_with_source_pid(pid)))
     }
-    for _ in (my_pid + 1)..nb_nodes {
+    for _ in (my_pid + 1)..topology.nb_processes {
         'retry: loop {
             let (mut stream, sink) = connector
                 .accept_connection()
