@@ -189,9 +189,7 @@ pub async fn run() -> io::Result<()> {
             let mut leader_prio: Vec<_> = (0..process_count).collect();
             leader_prio.sort_by_key(|pid| propagation_graphs.kcensus_latencies[*pid]);
             let mut consensus_obj = KCensus::new(
-                process_count,
-                topology.alive_replicas.len(),
-                &topology.alive_replicas,
+                &topology,
                 my_pid,
                 consensus_msg_sinks,
                 leader_prio,
@@ -215,9 +213,7 @@ pub async fn run() -> io::Result<()> {
             );
             let committers = propagation_graphs.paxos_committers;
             let mut consensus_obj = PaxosFamily::new(
-                process_count,
-                topology.nb_replicas,
-                &topology.alive_replicas,
+                &topology,
                 my_pid,
                 consensus_msg_sinks,
                 leader_prio,
@@ -242,9 +238,7 @@ pub async fn run() -> io::Result<()> {
             );
             let committers = propagation_graphs.epaxos_committers;
             let mut consensus_obj = PaxosFamily::new(
-                process_count,
-                topology.nb_replicas,
-                &topology.alive_replicas,
+                &topology,
                 my_pid,
                 consensus_msg_sinks,
                 leader_prio,
@@ -281,9 +275,7 @@ pub async fn run() -> io::Result<()> {
                 leader, multi_paxos_latencies[leader][my_pid]
             );
             let mut consensus_obj = PaxosFamily::new(
-                process_count,
-                topology.nb_replicas,
-                &topology.alive_replicas,
+                &topology,
                 my_pid,
                 consensus_msg_sinks,
                 leader_prio,

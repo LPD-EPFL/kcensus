@@ -369,7 +369,7 @@ impl Client {
         let mut scheduled_time = Instant::now();
         let mut current_request_id = 0;
         let mut responses_received = 0;
-        let mut total_latency = std::time::Duration::ZERO;
+        let mut total_latency = Duration::ZERO;
 
         // Set initial delay for first request
         scheduled_time = workload.interval.next(&scheduled_time);
@@ -445,7 +445,7 @@ impl Client {
 #[derive(Serialize)]
 struct ClientDoneEvent {
     requests: usize,
-    average_latency: std::time::Duration,
+    average_latency: Duration,
 }
 
 #[derive(Serialize)]

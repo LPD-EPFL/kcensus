@@ -172,7 +172,7 @@ impl ShardMultiSink {
         my_pid: usize,
         last_v: Option<usize>,
     ) -> Message {
-        Message::ConsensusM {
+        ConsensusM {
             shard: self.shard_id,
             msg: ConsensusMessage {
                 msg,

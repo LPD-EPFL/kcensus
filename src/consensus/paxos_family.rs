@@ -7,7 +7,7 @@ use crate::consensus::paxos_family::Mode::{EPaxos, MultiPaxos, MultiPaxos3P, Pax
 use crate::consensus::read_tracker::ReadTracker;
 use crate::consensus::{Consensus, ConsensusShard, ConsensusShardTrait};
 use crate::multi_sink::{MultiSink, ShardMultiSink};
-use bit_set::BitSet;
+use crate::topology::Topology;
 use log::{debug, info, trace};
 use message::RoundV;
 use std::collections::HashMap;
@@ -38,15 +38,15 @@ pub enum Mode {
 
 impl PaxosFamilyShard {
     pub fn new(
-        process_count: usize,
-        replica_count: usize,
-        alive_replicas: BitSet,
+        topology: &Topology,
         my_pid: usize,
         sinks: ShardMultiSink,
         leader_priority: Vec<usize>,
         committers: Option<Vec<usize>>,
         mode: Mode,
     ) -> Self {
+        let process_count = topology.nb_processes;
+        let replica_count = topology.nb_replicas;
         assert!(my_pid < process_count);
         let majority = 1 + (replica_count / 2);
         let starting_round = match mode {
@@ -56,10 +56,10 @@ impl PaxosFamilyShard {
             }
             EPaxos => None,
         };
-        let replica = alive_replicas.contains(my_pid);
+        let replica = topology.alive_replicas.contains(my_pid);
         Self {
             process_count,
-            alive_replicas,
+            alive_replicas: topology.alive_replicas.clone(),
             replica,
             leader_priority,
             my_pid,
@@ -483,9 +483,7 @@ pub(crate) type PaxosFamily = Consensus<PaxosFamilySettings, PaxosFamilyRoundSta
 
 impl PaxosFamily {
     pub fn new(
-        process_count: usize,
-        replica_count: usize,
-        alive_replicas: &BitSet,
+        topology: &Topology,
         my_pid: usize,
         sinks: MultiSink,
         leader_priority: Vec<usize>,
@@ -496,13 +494,11 @@ impl PaxosFamily {
         let sinks = Arc::new(Mutex::new(sinks));
 
         Self {
-            process_count,
+            process_count: topology.nb_processes,
             shards: (0..shard_count)
                 .map(|id| {
                     PaxosFamilyShard::new(
-                        process_count,
-                        replica_count,
-                        alive_replicas.clone(),
+                        topology,
                         my_pid,
                         ShardMultiSink {
                             shard_id: id,

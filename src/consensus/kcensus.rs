@@ -7,7 +7,7 @@ use crate::consensus::message::{CommandBatch, ConsensusMessage};
 use crate::consensus::read_tracker::ReadTracker;
 use crate::consensus::{Consensus, ConsensusShard, ConsensusShardTrait};
 use crate::multi_sink::{MultiSink, ShardMultiSink};
-use bit_set::BitSet;
+use crate::topology::Topology;
 use log::{debug, info, trace};
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
@@ -29,20 +29,20 @@ pub(crate) type KCensusShard = ConsensusShard<KCensusSettings, KCensusRoundState
 
 impl KCensusShard {
     pub fn new(
-        process_count: usize,
-        replica_count: usize,
-        alive_replicas: BitSet,
+        topology: &Topology,
         my_pid: usize,
         sinks: ShardMultiSink,
         leader_priority: Vec<usize>,
         propagation_graphs: Arc<PropagationGraphs>,
     ) -> Self {
+        let process_count = topology.nb_processes;
+        let replica_count = topology.nb_replicas;
         assert!(my_pid < process_count);
         let majority = 1 + (replica_count / 2);
-        let replica = alive_replicas.contains(my_pid);
+        let replica = topology.alive_replicas.contains(my_pid);
         Self {
             process_count,
-            alive_replicas,
+            alive_replicas: topology.alive_replicas.clone(),
             replica,
             leader_priority,
             my_pid,
@@ -467,9 +467,7 @@ pub(crate) type KCensus = Consensus<KCensusSettings, KCensusRoundState>;
 
 impl KCensus {
     pub fn new(
-        process_count: usize,
-        replica_count: usize,
-        alive_replicas: &BitSet,
+        topology: &Topology,
         my_pid: usize,
         sinks: MultiSink,
         leader_priority: Vec<usize>,
@@ -479,13 +477,11 @@ impl KCensus {
         let sinks = Arc::new(Mutex::new(sinks));
         let propagation_graphs = Arc::new(propagation_graphs);
         Self {
-            process_count,
+            process_count: topology.nb_processes,
             shards: (0..shard_count)
                 .map(|shard_id| {
                     KCensusShard::new(
-                        process_count,
-                        replica_count,
-                        alive_replicas.clone(),
+                        topology,
                         my_pid,
                         ShardMultiSink {
                             shard_id,
