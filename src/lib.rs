@@ -36,10 +36,10 @@ struct Args {
     algo: Algo,
     #[arg(long, value_parser = humantime::parse_duration, default_value = "10s", value_name = "EXP_DURATION")]
     duration: Duration,
-    #[arg(long, value_parser = humantime::parse_duration, default_value = "2s", value_name = "WARMUP")]
-    warmup: Duration,
-    #[arg(long, value_parser = humantime::parse_duration, default_value = "2s", value_name = "WARMDOWN")]
-    warmdown: Duration,
+    #[arg(long, value_parser = humantime::parse_duration, value_name = "WARMUP")]
+    warmup: Option<Duration>,
+    #[arg(long, value_parser = humantime::parse_duration, value_name = "WARMDOWN")]
+    warmdown: Option<Duration>,
     #[arg(short, long, default_value_t = Ingress::Exponential, value_enum)]
     ingress: Ingress,
     #[arg(short, long, default_value_t = 10f32, value_name = "TARGET_REQ/S")]
@@ -143,6 +143,9 @@ pub async fn run() -> io::Result<()> {
     println!("Computed propagation graphs in {:?}", start.elapsed());
     let process_count = topology.regions.len();
 
+    let ((client, mut new_client_request_rx), (app, committed_request_tx)) =
+        cassandra::App::new(args.db, args.speedup, my_pid, shards).await;
+
     let (consensus_msg_sinks, consensus_msg_streams) =
         connector::connect_all(my_pid, topology.clone()).await;
     let (delayer, delayed_msg_rx) = Delayer::new();
@@ -154,8 +157,10 @@ pub async fn run() -> io::Result<()> {
         delay_mode,
     ));
 
-    let ((client, mut new_client_request_rx), (app, committed_request_tx)) =
-        cassandra::App::new(args.db, args.speedup, my_pid, shards).await;
+    let duration = args.duration;
+    let warmup = args.warmup.unwrap_or(args.duration / 2);
+    let warmdown = args.warmdown.unwrap_or(args.duration / 4);
+    let exp_length = warmup + duration + warmdown;
 
     let start = Instant::now();
 
@@ -163,9 +168,9 @@ pub async fn run() -> io::Result<()> {
         key_distribution:
             rand_distr::Zipf::new(args.keys as f64, args.skew).expect("Incorrect skew"),
         shards,
-        duration: args.duration,
-        warmup: args.warmup,
-        warmdown: args.warmdown,
+        duration,
+        warmup,
+        warmdown,
         rw_ratio: args.writes,
         interval: match args.ingress {
             Ingress::Exponential => {
@@ -177,7 +182,6 @@ pub async fn run() -> io::Result<()> {
         },
     }));
 
-    let exp_length = args.warmup + args.duration + args.warmdown;
     let deadlock_deadline = exp_length + (exp_length / 2).max(Duration::from_secs(5));
 
     match algo {
