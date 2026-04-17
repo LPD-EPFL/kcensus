@@ -1,9 +1,9 @@
-use crate::message::Message::Hello;
+use crate::message::Message::{Hello, Ready};
 use crate::message::{Message, MsgWithSource};
 use crate::multi_sink::MultiSink;
 use crate::topology::Topology;
 use futures::stream::select_all;
-use futures::{Stream, TryStreamExt};
+use futures::TryStreamExt;
 use log::debug;
 use std::time::Duration;
 use tokio::io;
@@ -11,7 +11,7 @@ use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_serde::formats::Bincode;
 use tokio_serde::Framed;
-use tokio_stream::StreamExt;
+use tokio_stream::{Stream, StreamExt};
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 
 pub struct Connector {
@@ -101,6 +101,20 @@ pub async fn connect_all(
             streams.push(stream.map_ok(wrap_with_source_pid(pid)));
             break;
         }
+    }
+
+    sinks
+        .broadcast(Ready, None)
+        .await
+        .expect("should broadcast Ready");
+    for stream in streams.iter_mut() {
+        let ready_msg = stream
+            .next()
+            .await
+            .expect("stream should not close before sending Ready")
+            .expect("should successfully read Ready message")
+            .msg;
+        assert!(matches!(ready_msg, Ready), "second message should be Ready");
     }
 
     let streams = select_all(streams);

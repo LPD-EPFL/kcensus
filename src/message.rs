@@ -12,6 +12,7 @@ pub enum Message {
         msg: ConsensusMessage,
         value: Option<CommandBatch>,
     },
+    Ready,
     Done,
 }
 
