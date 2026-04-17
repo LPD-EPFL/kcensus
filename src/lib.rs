@@ -149,6 +149,7 @@ pub async fn run() -> io::Result<()> {
     let (consensus_msg_sinks, consensus_msg_streams) =
         connector::connect_all(my_pid, topology.clone()).await;
     let (delayer, delayed_msg_rx) = Delayer::new();
+
     let delayer_task = tokio::task::spawn(delayer.run(
         topology.clone(),
         args.speedup,
@@ -158,15 +159,14 @@ pub async fn run() -> io::Result<()> {
     ));
 
     let duration = args.duration;
-    let warmup = args.warmup.unwrap_or(args.duration / 2);
+    let warmup = args.warmup.unwrap_or(args.duration / 4);
     let warmdown = args.warmdown.unwrap_or(args.duration / 4);
     let exp_length = warmup + duration + warmdown;
+    let deadlock_deadline = exp_length + (exp_length / 2).max(Duration::from_secs(5));
 
-    let start = Instant::now();
-
-    let client_task = tokio::task::spawn(client.run(cassandra::Workload {
-        key_distribution:
-            rand_distr::Zipf::new(args.keys as f64, args.skew).expect("Incorrect skew"),
+    let workload = cassandra::Workload {
+        key_distribution: rand_distr::Zipf::new(args.keys as f64, args.skew)
+            .expect("Incorrect skew"),
         shards,
         duration,
         warmup,
@@ -180,9 +180,9 @@ pub async fn run() -> io::Result<()> {
                 reqs_per_second: args.throughput * args.speedup as f32,
             },
         },
-    }));
+    };
 
-    let deadlock_deadline = exp_length + (exp_length / 2).max(Duration::from_secs(5));
+    let start = Instant::now();
 
     match algo {
         Algo::KCensus => {
@@ -206,7 +206,7 @@ pub async fn run() -> io::Result<()> {
                 committed_request_tx,
                 deadlock_deadline,
             );
-            let _ = tokio::join!(app.run(), consensus);
+            let _ = tokio::join!(app.run(), client.run(workload), consensus);
         }
         Algo::Paxos => {
             let mut leader_prio: Vec<_> = topology.alive_replicas.iter().collect();
@@ -231,7 +231,7 @@ pub async fn run() -> io::Result<()> {
                 committed_request_tx,
                 deadlock_deadline,
             );
-            let _ = tokio::join!(app.run(), consensus);
+            let _ = tokio::join!(app.run(), client.run(workload), consensus);
         }
         Algo::EPaxos => {
             let mut leader_prio: Vec<_> = topology.alive_replicas.iter().collect();
@@ -256,7 +256,7 @@ pub async fn run() -> io::Result<()> {
                 committed_request_tx,
                 deadlock_deadline,
             );
-            let _ = tokio::join!(app.run(), consensus);
+            let _ = tokio::join!(app.run(), client.run(workload), consensus);
         }
         Algo::MultiPaxos | Algo::MultiPaxos3P => {
             let is_3p = algo == Algo::MultiPaxos3P;
@@ -297,7 +297,7 @@ pub async fn run() -> io::Result<()> {
                 committed_request_tx,
                 deadlock_deadline,
             );
-            let _ = tokio::join!(app.run(), consensus);
+            let _ = tokio::join!(app.run(), client.run(workload), consensus);
         }
         Algo::NoReplication | Algo::WeakReplication => {
             let latency_mock = async {
@@ -432,13 +432,12 @@ pub async fn run() -> io::Result<()> {
                 drop(committed_request_tx); // So the app stops
                 drop(delayed_msg_rx); // So the delayer stops
             };
-            let _ = tokio::join!(app.run(), latency_mock);
+            let _ = tokio::join!(app.run(), client.run(workload), latency_mock);
         }
     };
 
     println!("Total duration: {:?}", start.elapsed());
 
-    client_task.await?;
     delayer_task.await?;
     Ok(())
 }
