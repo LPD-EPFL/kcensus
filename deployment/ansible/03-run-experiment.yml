@@ -26,7 +26,7 @@
     - name: Run kcensus
       ansible.builtin.shell:
         cmd: >
-          RUST_BACKTRACE=1 timeout 30s /usr/bin/time -f "[time] Memory(KB): %M"
+          RUST_BACKTRACE=1 timeout 60s /usr/bin/time -f "[time] Memory(KB): %M"
           ./kcensus --config config.toml -p {{ sub_exp_id }}
           -d 127.0.0.1:{{ cassandra_port }}
           -a "{{ algo }}"
