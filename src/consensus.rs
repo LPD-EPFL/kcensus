@@ -396,8 +396,14 @@ where
         if self.queued_commands.len() <= 1 {
             return None;
         }
-        let mut vs: Vec<_> = self.queued_commands.keys().copied().collect();
-        vs.retain(|v| matches!(self.queued_commands[v], CommandBatch::Single(_)));
+        let vs: Vec<_> = self
+            .queued_commands
+            .iter()
+            .filter_map(|(v, cmd)| match cmd {
+                CommandBatch::Single(_) => Some(*v),
+                _ => None,
+            })
+            .collect();
         if vs.len() <= 1 {
             return None;
         }

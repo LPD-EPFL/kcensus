@@ -390,7 +390,9 @@ pub async fn run() -> io::Result<()> {
                                 }
                                 let completes_at = Instant::now() + rtt;
                                 queue.push_back((cmd, completes_at));
-                                timer.as_mut().reset(queue.front().unwrap().1);
+                                if queue.len() == 1 {
+                                    timer.as_mut().reset(queue.front().unwrap().1);
+                                }
                             } else { // The client is done, exit.
                                 break;
                             }
