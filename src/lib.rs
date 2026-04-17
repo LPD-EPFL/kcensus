@@ -38,8 +38,8 @@ struct Args {
     duration: Duration,
     #[arg(long, value_parser = humantime::parse_duration, value_name = "WARMUP")]
     warmup: Option<Duration>,
-    #[arg(long, value_parser = humantime::parse_duration, value_name = "WARMDOWN")]
-    warmdown: Option<Duration>,
+    #[arg(long, value_parser = humantime::parse_duration, value_name = "SUSTAIN")]
+    sustain: Option<Duration>,
     #[arg(short, long, default_value_t = Ingress::Exponential, value_enum)]
     ingress: Ingress,
     #[arg(short, long, default_value_t = 10f32, value_name = "TARGET_REQ/S")]
@@ -160,9 +160,9 @@ pub async fn run() -> io::Result<()> {
 
     let duration = args.duration;
     let warmup = args.warmup.unwrap_or(args.duration / 4);
-    let warmdown = args.warmdown.unwrap_or(args.duration / 4);
-    let exp_length = warmup + duration + warmdown;
-    let deadlock_deadline = exp_length + (exp_length / 2).max(Duration::from_secs(5));
+    let sustain = args.sustain.unwrap_or((warmup * 3) / 4);
+    let exp_length = warmup + duration + sustain;
+    let deadlock_deadline = ((exp_length * 3) / 2).max(Duration::from_secs(5));
 
     let workload = cassandra::Workload {
         key_distribution: rand_distr::Zipf::new(args.keys as f64, args.skew)
@@ -170,7 +170,7 @@ pub async fn run() -> io::Result<()> {
         shards,
         duration,
         warmup,
-        warmdown,
+        sustain,
         rw_ratio: args.writes,
         interval: match args.ingress {
             Ingress::Exponential => {

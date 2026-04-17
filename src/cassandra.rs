@@ -265,7 +265,7 @@ impl RequestInterval {
 pub struct Workload {
     pub duration: Duration,
     pub warmup: Duration,
-    pub warmdown: Duration,
+    pub sustain: Duration,
     pub rw_ratio: f32, // 0 = 100% reads, 1 = 100 %writes
     pub interval: RequestInterval,
     pub key_distribution: rand_distr::Zipf<f64>,
@@ -353,8 +353,8 @@ impl Client {
     pub async fn run(mut self, mut workload: Workload) {
         let warmup_start = Instant::now();
         let warmup_end = warmup_start + workload.warmup;
-        let warmdown_start = warmup_end + workload.duration;
-        let warmdown_end = warmdown_start + workload.warmdown;
+        let sustain_start = warmup_end + workload.duration;
+        let sustain_end = sustain_start + workload.sustain;
 
         // Track scheduled_time and issued_time for each request_id
         let mut request_timings: HashMap<u64, (Instant, Instant)> = HashMap::new();
@@ -397,8 +397,8 @@ impl Client {
 
                     current_request_id += 1;
 
-                    // Prepare next request, while we haven't reached the end of the warmdown
-                    if Instant::now() < warmdown_end {
+                    // Prepare next request, while we haven't reached the end of the sustain phase
+                    if Instant::now() < sustain_end {
                         next_request = Some(
                             self.generate_request(&workload, current_request_id as u64)
                         );
@@ -419,7 +419,7 @@ impl Client {
                         let (scheduled_time, issued_time) = request_timings
                             .remove(&request_id)
                             .expect("Response received for an unknown request_id");
-                        if (warmup_end..warmdown_start).contains(&scheduled_time) {
+                        if (warmup_end..sustain_start).contains(&scheduled_time) {
                             self.log_executed_response(response, scheduled_time, issued_time);
                         }
                         responses_received += 1;
@@ -430,7 +430,7 @@ impl Client {
         }
         let average_latency = total_latency / responses_received as u32;
         let readable = format!(
-            "Issued {} requests in total (avg latency: {}ms) (including warmup+warmdown)",
+            "Issued {} requests in total (avg latency: {}ms) (including warmup+sustain)",
             responses_received,
             average_latency.as_millis()
         );
