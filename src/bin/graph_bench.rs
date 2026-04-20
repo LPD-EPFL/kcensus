@@ -27,10 +27,10 @@ fn main() {
     env_logger::builder()
         .format(|buf, record| {
             let level = record.level();
-            let level_style = buf.default_level_style(level);
+            let _level_style = buf.default_level_style(level);
             writeln!(
                 buf,
-                "{level_style}{level:<5}{level_style:#} {}",
+                "{_level_style}{level:<5}{_level_style:#} {}",
                 record.args()
             )
         })

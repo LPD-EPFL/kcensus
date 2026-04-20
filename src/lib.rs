@@ -95,14 +95,14 @@ enum Ingress {
 pub fn init_logger() {
     env_logger::builder()
         .format(|buf, record| {
-            let time = Utc::now();
+            let _time = Utc::now();
             let level = record.level();
-            let level_style = buf.default_level_style(level);
-            let header_style = style::AnsiColor::BrightBlack.on_default();
+            let _level_style = buf.default_level_style(level);
+            let _header_style = style::AnsiColor::BrightBlack.on_default();
             writeln!(
                 buf,
-                "{header_style}{}{header_style:#} {level_style}{level:<5}{level_style:#} {}",
-                time.format("%M:%S%.6f"),
+                "{_header_style}{}{_header_style:#} {_level_style}{level:<5}{_level_style:#} {}",
+                _time.format("%M:%S%.6f"),
                 record.args()
             )
         })
