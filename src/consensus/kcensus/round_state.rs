@@ -300,7 +300,7 @@ impl KCensusRoundState {
             return Some(v);
         }
 
-        None // Means nothing was commited, thus we can batch
+        None // Means nothing was committed; thus we can batch
     }
 
     #[inline]

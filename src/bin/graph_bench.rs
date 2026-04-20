@@ -119,10 +119,10 @@ fn next_combination(faults: &mut [usize], nb_nodes: usize) -> bool {
     debug_assert!(faults.len() < nb_nodes);
     let len = faults.len();
 
-    // Optimisation: Skip combinations that only change the unused nodes
+    // Optimization: Skip combinations that only change the unused nodes
     for suffix_size in 1..=len {
         let suffix_start = len - suffix_size;
-        // Can we move the last "suffix_size" positions ?
+        // Can we move the last "suffix_size" positions?
         if faults[suffix_start] + suffix_size < nb_nodes {
             // Yes: Move them and return
             let new_pos = faults[suffix_start] + 1;

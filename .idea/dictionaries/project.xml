@@ -4,8 +4,10 @@
       <w>kcensus</w>
       <w>knowledges</w>
       <w>mpaxos</w>
+      <w>paxos</w>
       <w>rtt</w>
       <w>rtts</w>
+      <w>tput</w>
     </words>
   </dictionary>
 </component>

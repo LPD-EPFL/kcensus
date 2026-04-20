@@ -561,17 +561,17 @@ pub fn compute_propagation_graphs(
                 }
 
                 if best.sum_of_latencies <= new_min_total_time {
-                    // We can not find a better solution with higher level_a
+                    // We cannot find a better solution with higher level_a
                     break 'level_loop;
                 }
                 if best.sum_of_latencies <= new_curr_total_time {
-                    // We can not find a better solution with current level_a
+                    // We cannot find a better solution with current level_a
                     continue 'level_loop;
                 }
 
                 assert!(partial_total_time < best.sum_of_latencies);
                 if pids_done == nb_processes {
-                    // Found a complete solution that is better !
+                    // Found a complete solution that is better!
                     best.levels = levels;
                     best.sum_of_latencies = partial_total_time;
                     best.leaders = data.leaders.clone();
@@ -596,7 +596,7 @@ pub fn compute_propagation_graphs(
                 .map(|(proposer, leader)| topology.link_latency(*leader, proposer))
                 .sum();
 
-            // Early exit if it can not be better than previous solutions
+            // Early exit if it cannot be better than previous solutions
             let mut min_latency = partial_latency;
             for pid in 0..nb_processes {
                 min_latency += knowledge_levels[pid][leaders[pid]][0].time;

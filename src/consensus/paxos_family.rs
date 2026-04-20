@@ -318,8 +318,8 @@ impl PaxosFamilyShard {
                 .next_leader_round(self.my_pid)
         {
             debug!(
-                // "<#FF4F4F>Can not commit in round {} from state:</> <#EFBFBF>{}</>"
-                "Can not commit in round {:?}",
+                // "<#FF4F4F>Cannot commit in round {} from state:</> <#EFBFBF>{}</>"
+                "Cannot commit in round {:?}",
                 self.round_state.round,
             );
             if round.unwrap_or_default().round_group
