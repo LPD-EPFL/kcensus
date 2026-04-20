@@ -103,7 +103,7 @@ function run() {
   local skew="${10:-${SKEW}}"
   local shards="${11:-${SHARDS}}"
 
-  local nonvoting="$(get_nonvoting $configName $algo)"
+  local nonvoting="$(get_nonvoting "$configName" "$algo")"
 
   local inventoryFile="inventory-${expId}.ini"
   local title="c=${configName}/a=${algo}/w=${writes}/d=${duration}/i=${ingress}/t=${throughput}/s=${SPEEDUP}/f=${faults}/k=${keys}/skew=${skew}/shards=${shards}"
@@ -113,7 +113,7 @@ function run() {
   echo "--> RUNNING: ${title} (Exp ID: ${expId})"
 
   local proposer_count="$(digits "$configName")"
-  local per_proposer_throughput=$(($throughput / $proposer_count))
+  local per_proposer_throughput=$((throughput / proposer_count))
 
   (
     cd deployment/ansible
@@ -363,7 +363,7 @@ function exp-3-5() {
             resultPath="${ABSOLUTE_BASE_LOG_DIR}/${run_title}"
             mkdir -p "$resultPath"
 
-            local per_proposer_throughput=$(($THROUGHPUT / $num_replicas))
+            local per_proposer_throughput=$((THROUGHPUT / num_replicas))
             
             echo "--> RUNNING: ${run_title}"
             (
