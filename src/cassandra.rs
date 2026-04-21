@@ -432,7 +432,7 @@ impl Client {
         let readable = format!(
             "Issued {} requests in total (avg latency: {}ms) (including warmup+sustain)",
             responses_received,
-            average_latency.as_millis()
+            average_latency.as_micros() as f64 / 1000f64
         );
         let event = ClientDoneEvent {
             requests: responses_received,

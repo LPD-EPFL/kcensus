@@ -187,14 +187,11 @@ pub async fn run() -> io::Result<()> {
 
     let start = Instant::now();
 
-    match algo {
+    let expected_latency = match algo {
         Algo::KCensus => {
-            println!(
-                "Expected local latency (no-contention): {:?}",
-                propagation_graphs.kcensus_latencies[my_pid]
-            );
             let mut leader_prio: Vec<_> = (0..process_count).collect();
             leader_prio.sort_by_key(|pid| propagation_graphs.kcensus_latencies[*pid]);
+            let expected_latency = propagation_graphs.kcensus_latencies[my_pid];
             let mut consensus_obj = KCensus::new(
                 &topology,
                 my_pid,
@@ -210,14 +207,11 @@ pub async fn run() -> io::Result<()> {
                 deadlock_deadline,
             );
             let _ = tokio::join!(app.run(), client.run(workload), consensus);
+            expected_latency
         }
         Algo::Paxos => {
             let mut leader_prio: Vec<_> = topology.alive_replicas.iter().collect();
             leader_prio.sort_by_key(|pid| propagation_graphs.paxos_latencies[*pid]);
-            println!(
-                "Expected local latency (no-contention): {:?}",
-                propagation_graphs.paxos_latencies[my_pid]
-            );
             let committers = propagation_graphs.paxos_committers;
             let mut consensus_obj = PaxosFamily::new(
                 &topology,
@@ -235,14 +229,11 @@ pub async fn run() -> io::Result<()> {
                 deadlock_deadline,
             );
             let _ = tokio::join!(app.run(), client.run(workload), consensus);
+            propagation_graphs.paxos_latencies[my_pid]
         }
         Algo::Pando => {
             let mut leader_prio: Vec<_> = topology.alive_replicas.iter().collect();
             leader_prio.sort_by_key(|pid| propagation_graphs.pando_latencies[*pid]);
-            println!(
-                "Expected local latency (no-contention): {:?}",
-                propagation_graphs.pando_latencies[my_pid]
-            );
             let committers = propagation_graphs.pando_committers;
             let mut consensus_obj = PaxosFamily::new(
                 &topology,
@@ -262,14 +253,11 @@ pub async fn run() -> io::Result<()> {
                 deadlock_deadline,
             );
             let _ = tokio::join!(app.run(), client.run(workload), consensus);
+            propagation_graphs.pando_latencies[my_pid]
         }
         Algo::EPaxos => {
             let mut leader_prio: Vec<_> = topology.alive_replicas.iter().collect();
             leader_prio.sort_by_key(|pid| propagation_graphs.epaxos_latencies[*pid]);
-            println!(
-                "Expected local latency (no-contention): {:?}",
-                propagation_graphs.epaxos_latencies[my_pid]
-            );
             let committers = propagation_graphs.epaxos_committers;
             let mut consensus_obj = PaxosFamily::new(
                 &topology,
@@ -287,6 +275,7 @@ pub async fn run() -> io::Result<()> {
                 deadlock_deadline,
             );
             let _ = tokio::join!(app.run(), client.run(workload), consensus);
+            propagation_graphs.epaxos_latencies[my_pid]
         }
         Algo::MultiPaxos | Algo::MultiPaxos3P => {
             let is_3p = algo == Algo::MultiPaxos3P;
@@ -304,10 +293,6 @@ pub async fn run() -> io::Result<()> {
             let leader = leader_prio[0];
             let committers = Some(propagation_graphs.multi_paxos_3p_committers[leader].clone())
                 .take_if(|_| is_3p);
-            println!(
-                "Expected local latency with leader {} (no-contention): {:?}",
-                leader, multi_paxos_latencies[leader][my_pid]
-            );
             let mut consensus_obj = PaxosFamily::new(
                 &topology,
                 my_pid,
@@ -328,35 +313,39 @@ pub async fn run() -> io::Result<()> {
                 deadlock_deadline,
             );
             let _ = tokio::join!(app.run(), client.run(workload), consensus);
+            println!("Leader: {leader}");
+            multi_paxos_latencies[leader][my_pid]
         }
         Algo::NoReplication | Algo::WeakReplication => {
+            let (rtt, messages_to_send, leader) = match algo {
+                Algo::NoReplication => {
+                    // The leader is the node with the lowest average ping.
+                    let leader = topology
+                        .alive_replicas
+                        .iter()
+                        .min_by_key(|&potential_leader| {
+                            propagation_graphs.link_rtts[potential_leader]
+                                .iter()
+                                .sum::<Duration>()
+                        })
+                        .expect("There should be a leader");
+                    (
+                        propagation_graphs.link_rtts[leader][my_pid] / args.speedup,
+                        (leader != my_pid) as usize,
+                        Some(leader)
+                    )
+                }
+                Algo::WeakReplication => {
+                    let majority = 1 + (topology.nb_replicas / 2);
+                    let to_send = majority - topology.alive_replicas.contains(my_pid) as usize;
+                    (propagation_graphs.min_effort_latencies[my_pid], to_send, None)
+                }
+                _ => unreachable!("Algo::(No|Weak)Replication"),
+            };
+
             let latency_mock = async {
                 // For simplicity, requests will be executed locally after a ping delay.
                 // This is a lower bound as this consumes no network + compute is sharded.
-                let (rtt, messages_to_send) = match algo {
-                    Algo::NoReplication => {
-                        // The leader is the node with the lowest average ping.
-                        let leader = topology
-                            .alive_replicas
-                            .iter()
-                            .min_by_key(|&potential_leader| {
-                                propagation_graphs.link_rtts[potential_leader]
-                                    .iter()
-                                    .sum::<Duration>()
-                            })
-                            .expect("There should be a leader");
-                        (
-                            propagation_graphs.link_rtts[leader][my_pid] / args.speedup,
-                            (leader != my_pid) as usize,
-                        )
-                    }
-                    Algo::WeakReplication => {
-                        let majority = 1 + (topology.nb_replicas / 2);
-                        let to_send = majority - topology.alive_replicas.contains(my_pid) as usize;
-                        (propagation_graphs.min_effort_latencies[my_pid], to_send)
-                    }
-                    _ => unreachable!("Algo::(No|Weak)Replication"),
-                };
                 let mut network_stats = multi_sink::Stats::default();
                 let serializer = bincode::DefaultOptions::new();
 
@@ -465,9 +454,16 @@ pub async fn run() -> io::Result<()> {
                 drop(delayed_msg_rx); // So the delayer stops
             };
             let _ = tokio::join!(app.run(), client.run(workload), latency_mock);
+            if let Some(leader) = leader {
+                println!("Leader: {leader}");
+            }
+            rtt
         }
     };
 
+    println!(
+        "Expected local latency (no-contention): {expected_latency:?}",
+    );
     println!("Total duration: {:?}", start.elapsed());
 
     delayer_task.await?;
