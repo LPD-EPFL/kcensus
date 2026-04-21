@@ -113,42 +113,43 @@ impl PaxosFamilyRoundState {
             self.max_rv = Some(rv);
         }
 
-        if src != self.my_pid || self.replica {
-            let inserted = self.prepared_set.insert(src);
-            debug_assert!(inserted);
+        if src != self.my_pid && self.prepared_set.insert(src) {
             self.prepared += 1;
         }
+        if self.replica && self.prepared_set.insert(self.my_pid) {
+            self.prepared += 1;
+        }
+        debug_assert_eq!(self.prepared_set.len(), self.prepared);
     }
 
     pub fn adopt_from_epaxos(&mut self, round: PaxosRound, v: usize) {
         self.max_rv = Some(RoundV::new_paxos_v(None, v));
-        self.self_accept_v(round);
+        self.self_accept(round);
     }
 
     #[inline]
-    pub fn self_accept_v(&mut self, round: PaxosRound) {
+    pub fn self_accept(&mut self, round: PaxosRound) {
         assert_eq!(self.accepted, 0);
         debug_assert!(self.accepted_set.is_empty());
-        self.accept_v(self.my_pid, round, self.get_v().unwrap());
+        self.receive_accept(self.my_pid, round, self.get_v().unwrap());
     }
 
     #[inline]
-    pub fn accept_v(&mut self, src: usize, round: PaxosRound, v: usize) {
+    pub fn receive_accept(&mut self, src: usize, round: PaxosRound, v: usize) {
         let rv = Some(RoundV::new_paxos_v(Some(round), v));
         if self.get_last_accepted_round() < Some(round) {
             self.max_rv = rv;
-            self.receive_accepted(self.my_pid);
         } else {
             assert_eq!(self.max_rv, rv);
         }
-        self.receive_accepted(src);
-    }
 
-    #[inline]
-    pub fn receive_accepted(&mut self, src: usize) {
-        if (src != self.my_pid || self.replica) && self.accepted_set.insert(src) {
+        if src != self.my_pid && self.accepted_set.insert(src) {
             self.accepted += 1;
         }
+        if self.replica && self.accepted_set.insert(self.my_pid) {
+            self.accepted += 1;
+        }
+        debug_assert_eq!(self.accepted_set.len(), self.accepted);
     }
 
     #[inline]

@@ -61,13 +61,14 @@ fn main() {
                     let min_effort = graph.min_effort_latencies[proposer];
                     let kcensus = graph.kcensus_latencies[proposer];
                     let paxos = graph.paxos_latencies[proposer];
+                    let pando = graph.pando_latencies[proposer];
                     let epaxos = graph.epaxos_latencies[proposer];
                     let mpaxos = graph.multi_paxos_latencies[leader][proposer];
                     let mpaxos_3p = graph.multi_paxos_3p_latencies[leader_3p][proposer];
                     let committer_3p = graph.multi_paxos_3p_committers[leader_3p][proposer];
                     info!("proposer {proposer} ({})", base_topology.regions[proposer],);
                     info!(
-                        "  min-effort: {min_effort:?}, kcensus: {kcensus:?}, paxos: {paxos:?}, epaxos: {epaxos:?}, multi-paxos: {mpaxos:?}, multi-paxos-3p: {mpaxos_3p:?} (committer {committer_3p})"
+                        "  min-effort: {min_effort:?}, kcensus: {kcensus:?}, paxos: {paxos:?}, pando: {pando:?}, epaxos: {epaxos:?}, multi-paxos: {mpaxos:?}, multi-paxos-3p: {mpaxos_3p:?} (committer {committer_3p})"
                     );
                 }
 

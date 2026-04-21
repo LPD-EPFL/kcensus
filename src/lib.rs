@@ -1,7 +1,7 @@
 use crate::consensus::command::Command;
 use crate::consensus::kcensus::propagation::compute_propagation_graphs;
 use crate::consensus::kcensus::KCensus;
-use crate::consensus::paxos_family::{Mode, PaxosFamily};
+use crate::consensus::paxos_family::{PFModeSetting, PaxosFamily};
 use crate::delayer::Delayer;
 use crate::topology::Topology;
 use bincode::Options;
@@ -12,6 +12,7 @@ use log::debug;
 use std::collections::VecDeque;
 use std::io;
 use std::io::Write;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 mod cassandra;
@@ -74,6 +75,8 @@ enum Algo {
     KCensus,
     #[value(name = "paxos", alias = "Paxos")]
     Paxos,
+    #[value(name = "pando", alias = "Pando")]
+    Pando,
     #[value(name = "epaxos", alias = "EPaxos")]
     EPaxos,
     #[value(name = "multi-paxos", alias = "Multi-Paxos")]
@@ -222,7 +225,34 @@ pub async fn run() -> io::Result<()> {
                 consensus_msg_sinks,
                 leader_prio,
                 Some(committers),
-                Mode::Paxos,
+                PFModeSetting::Paxos,
+                shards,
+            );
+            let consensus = consensus_obj.run(
+                delayed_msg_rx,
+                new_client_request_rx,
+                committed_request_tx,
+                deadlock_deadline,
+            );
+            let _ = tokio::join!(app.run(), client.run(workload), consensus);
+        }
+        Algo::Pando => {
+            let mut leader_prio: Vec<_> = topology.alive_replicas.iter().collect();
+            leader_prio.sort_by_key(|pid| propagation_graphs.pando_latencies[*pid]);
+            println!(
+                "Expected local latency (no-contention): {:?}",
+                propagation_graphs.pando_latencies[my_pid]
+            );
+            let committers = propagation_graphs.pando_committers;
+            let mut consensus_obj = PaxosFamily::new(
+                &topology,
+                my_pid,
+                consensus_msg_sinks,
+                leader_prio,
+                Some(committers),
+                PFModeSetting::Pando {
+                    delegates: Arc::new(propagation_graphs.pando_delegates.clone()),
+                },
                 shards,
             );
             let consensus = consensus_obj.run(
@@ -247,7 +277,7 @@ pub async fn run() -> io::Result<()> {
                 consensus_msg_sinks,
                 leader_prio,
                 Some(committers),
-                Mode::EPaxos,
+                PFModeSetting::EPaxos,
                 shards,
             );
             let consensus = consensus_obj.run(
@@ -285,9 +315,9 @@ pub async fn run() -> io::Result<()> {
                 leader_prio,
                 committers,
                 if is_3p {
-                    Mode::MultiPaxos3P
+                    PFModeSetting::MultiPaxos3P
                 } else {
-                    Mode::MultiPaxos
+                    PFModeSetting::MultiPaxos
                 },
                 shards,
             );

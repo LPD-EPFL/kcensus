@@ -57,6 +57,9 @@ pub struct PropagationGraphs {
     pub kcensus_latencies: Vec<Duration>,
     pub paxos_latencies: Vec<Duration>,
     pub paxos_committers: Vec<ProcId>,
+    pub pando_latencies: Vec<Duration>,
+    pub pando_committers: Vec<ProcId>,
+    pub pando_delegates: Vec<ProcId>,
     pub epaxos_latencies: Vec<Duration>,
     pub epaxos_committers: Vec<ProcId>,
     pub multi_paxos_latencies: Vec<Vec<Duration>>,
@@ -337,18 +340,32 @@ pub fn compute_propagation_graphs(
     let mut _min_effort_committers = vec![0usize; nb_processes];
     let mut paxos_latencies = vec![Duration::MAX; nb_processes];
     let mut paxos_committers = vec![0usize; nb_processes];
+    let mut pando_latencies = vec![Duration::MAX; nb_processes];
+    let mut pando_committers = vec![0usize; nb_processes];
+    let mut pando_delegates = vec![0usize; nb_processes];
     let mut epaxos_latencies = vec![Duration::MAX; nb_processes];
     let mut epaxos_committers = vec![0usize; nb_processes];
     let mut multi_paxos_latencies = vec![vec![Duration::MAX; nb_processes]; nb_processes];
     let mut multi_paxos_3p_latencies = vec![vec![Duration::MAX; nb_processes]; nb_processes];
     let mut multi_paxos_3p_committers = vec![vec![0; nb_processes]; nb_processes];
 
-    // Compute latency of e/multi-/paxos per leader
+    // Compute latency of e/multi-/paxos & pando per leader
     for leader in topology.alive_replicas.iter() {
         min_effort_latencies[leader] = quorum_path_rtts[leader][min_quorum - 1];
         _min_effort_committers[leader] = leader;
+
         paxos_latencies[leader] = quorum_link_rtts[leader][maj_quorum - 1] * 2;
         paxos_committers[leader] = leader;
+
+        pando_committers[leader] = leader;
+        for delegate in 0..nb_processes {
+            let latency = quorum_3p_link_rtts[leader][delegate][maj_quorum - 1]
+                + quorum_3p_link_rtts[delegate][leader][maj_quorum - 1];
+            if latency < pando_latencies[leader] {
+                pando_latencies[leader] = latency;
+                pando_delegates[leader] = delegate;
+            }
+        }
 
         let e_paxos_quorum = ((topology.nb_replicas * 3) / 4).max(maj_quorum);
         if e_paxos_quorum <= topology.alive_replicas.len() {
@@ -396,11 +413,20 @@ pub fn compute_propagation_graphs(
                 paxos_latencies[proposer] = paxos_latency;
                 paxos_committers[proposer] = committer;
             }
+
+            let pando_latency = link_rtts[proposer][committer] + pando_latencies[committer];
+            if pando_latency < pando_latencies[proposer] {
+                pando_latencies[proposer] = pando_latency;
+                pando_committers[proposer] = committer;
+                pando_delegates[proposer] = pando_delegates[committer];
+            }
+
             let epaxos_latency = link_rtts[proposer][committer] + epaxos_latencies[committer];
             if epaxos_latency < epaxos_latencies[proposer] {
                 epaxos_latencies[proposer] = epaxos_latency;
                 epaxos_committers[proposer] = committer;
             }
+
             let min_effort_latency = quorum_3p_path_rtts[proposer][committer][min_quorum - 1]
                 + topology.link_latency(committer, proposer);
             if min_effort_latency < min_effort_latencies[proposer] {
@@ -1047,6 +1073,9 @@ pub fn compute_propagation_graphs(
         kcensus_latencies,
         paxos_latencies,
         paxos_committers,
+        pando_latencies,
+        pando_committers,
+        pando_delegates,
         epaxos_latencies,
         epaxos_committers,
         multi_paxos_latencies,
