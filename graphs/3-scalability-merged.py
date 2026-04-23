@@ -28,8 +28,8 @@ fig.subplots_adjust(
 
 for p in range(2):
     config = [
-        "aws-random-old/@.toml",
-        "aws-from-paris-old/@.toml",
+        "aws-random/@.toml",
+        "aws-from-paris/@.toml",
     ][p]
     plot = subplots[p]
 

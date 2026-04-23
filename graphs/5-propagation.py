@@ -7,14 +7,14 @@ from logparser import *
 from prelude import plt
 
 config_lists = {
-    "aws-random-old/@.toml": {
+    "aws-random/@.toml": {
         "label": "Random Deployments",
         "marker": "o",
         "markersize": 3.2,
         "color": "#808078",
         "linewidth": 1.2,
     },
-    "aws-from-paris-old/@.toml": {
+    "aws-from-paris/@.toml": {
         "label": "Parisian Deployments",
         "marker": "x",
         "markersize": 4.4,
