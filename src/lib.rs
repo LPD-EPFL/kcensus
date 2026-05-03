@@ -75,14 +75,16 @@ enum Algo {
     KCensus,
     #[value(name = "paxos", alias = "Paxos")]
     Paxos,
-    #[value(name = "pando", alias = "Pando")]
-    Pando,
     #[value(name = "epaxos", alias = "EPaxos")]
     EPaxos,
     #[value(name = "multi-paxos", alias = "Multi-Paxos")]
     MultiPaxos,
     #[value(name = "multi-paxos-3p", alias = "Multi-Paxos-3P")]
     MultiPaxos3P,
+    #[value(name = "pando", alias = "Pando")]
+    Pando,
+    #[value(name = "swift-paxos", alias = "SwiftPaxos")]
+    SwiftPaxos,
     #[value(name = "no-replication", alias = "NoReplication")]
     NoReplication,
     #[value(name = "weak-replication", alias = "WeakReplication")]
@@ -150,7 +152,7 @@ pub async fn run() -> io::Result<()> {
         cassandra::App::new(args.db, args.speedup, my_pid, shards).await;
 
     let (consensus_msg_sinks, consensus_msg_streams) =
-        connector::connect_all(my_pid, topology.clone()).await;
+        connector::connect_all(my_pid, topology.clone(), matches!(algo, Algo::SwiftPaxos)).await;
     let (delayer, delayed_msg_rx) = Delayer::new();
 
     let delayer_task = tokio::task::spawn(delayer.run(
@@ -277,6 +279,39 @@ pub async fn run() -> io::Result<()> {
             let _ = tokio::join!(app.run(), client.run(workload), consensus);
             propagation_graphs.epaxos_latencies[my_pid]
         }
+        Algo::SwiftPaxos => {
+            let mut consensus_obj = PaxosFamily::new(
+                &topology,
+                my_pid,
+                consensus_msg_sinks,
+                vec![propagation_graphs.swift_paxos_leader],
+                None,
+                PFModeSetting::SwiftPaxos {
+                    quorum: Arc::new(propagation_graphs.swift_paxos_fixed_fast_quorum.clone()),
+                },
+                shards,
+            );
+            let consensus = consensus_obj.run(
+                delayed_msg_rx,
+                new_client_request_rx,
+                committed_request_tx,
+                deadlock_deadline,
+            );
+            let _ = tokio::join!(app.run(), client.run(workload), consensus);
+            println!(
+                "SwiftPaxos fixed quorum: {:?}",
+                propagation_graphs.swift_paxos_fixed_fast_quorum
+            );
+            println!(
+                "SwiftPaxos leader: {:?}",
+                propagation_graphs.swift_paxos_leader
+            );
+            println!(
+                "Force MPaxos3P at this replica: {:?}",
+                propagation_graphs.swift_paxos_force_mpaxos.contains(my_pid)
+            );
+            propagation_graphs.swift_paxos_latencies[my_pid]
+        }
         Algo::MultiPaxos | Algo::MultiPaxos3P => {
             let is_3p = algo == Algo::MultiPaxos3P;
             let (multi_paxos_latencies, leader_prio) = if is_3p {
@@ -332,13 +367,17 @@ pub async fn run() -> io::Result<()> {
                     (
                         propagation_graphs.link_rtts[leader][my_pid] / args.speedup,
                         (leader != my_pid) as usize,
-                        Some(leader)
+                        Some(leader),
                     )
                 }
                 Algo::WeakReplication => {
                     let majority = 1 + (topology.nb_replicas / 2);
                     let to_send = majority - topology.alive_replicas.contains(my_pid) as usize;
-                    (propagation_graphs.min_effort_latencies[my_pid], to_send, None)
+                    (
+                        propagation_graphs.min_effort_latencies[my_pid],
+                        to_send,
+                        None,
+                    )
                 }
                 _ => unreachable!("Algo::(No|Weak)Replication"),
             };
@@ -461,9 +500,7 @@ pub async fn run() -> io::Result<()> {
         }
     };
 
-    println!(
-        "Expected local latency (no-contention): {expected_latency:?}",
-    );
+    println!("Expected local latency (no-contention): {expected_latency:?}",);
     println!("Total duration: {:?}", start.elapsed());
 
     delayer_task.await?;

@@ -3,11 +3,14 @@ use crate::consensus::message::{CommandBatch, ConsensusMessage};
 use crate::consensus::paxos_family::message::PaxosMsg::{Accept, ForwardRequest, Prepare};
 use crate::consensus::paxos_family::message::{PaxosMsg, PaxosRound};
 use crate::consensus::paxos_family::round_state::PaxosFamilyRoundState;
-use crate::consensus::paxos_family::PFModeSetting::{EPaxos, MultiPaxos, MultiPaxos3P};
+use crate::consensus::paxos_family::PFModeSetting::{
+    EPaxos, MultiPaxos, MultiPaxos3P, Pando, SwiftPaxos,
+};
 use crate::consensus::read_tracker::ReadTracker;
 use crate::consensus::{Consensus, ConsensusShard, ConsensusShardTrait};
 use crate::multi_sink::{MultiSink, ShardMultiSink};
 use crate::topology::Topology;
+use bit_set::BitSet;
 use log::{debug, info, trace};
 use message::RoundV;
 use std::collections::HashMap;
@@ -35,6 +38,7 @@ pub enum PFModeSetting {
     MultiPaxos3P,
     EPaxos,
     Pando { delegates: Arc<Vec<usize>> },
+    SwiftPaxos { quorum: Arc<Option<BitSet>> },
 }
 
 impl PaxosFamilyShard {
@@ -110,7 +114,7 @@ impl Debug for PaxosFamilyShard {
 
 impl ConsensusShardTrait for PaxosFamilyShard {
     async fn process_message(&mut self, msg: ConsensusMessage) -> io::Result<Option<CommandBatch>> {
-        if !self.replica {
+        if !self.replica && !matches!(self.settings.mode_setting, SwiftPaxos { .. }) {
             return Ok(None);
         }
 
@@ -119,7 +123,7 @@ impl ConsensusShardTrait for PaxosFamilyShard {
             PaxosM(msg) => {
                 if matches!(msg, ForwardRequest { .. }) {
                     trace!(
-                        "Processing paxos msg from {src} (shard={}): {msg:?}",
+                        "Processing forward request from {src} (shard={}): {msg:?}",
                         self.sinks.shard_id
                     );
                     return Ok(None);
@@ -135,46 +139,86 @@ impl ConsensusShardTrait for PaxosFamilyShard {
             self.sinks.shard_id
         );
 
-        let prepared_for = match msg {
+        let delegate_or_leader = match &msg {
             Prepare { slot, round, .. } | Accept { slot, round, .. } => {
-                if slot < self.slot || Some(round) < self.round_state.round {
+                if *slot < self.slot || Some(*round) < self.round_state.round {
                     return Ok(None);
-                } else if Some(round) > self.round_state.round {
-                    assert_ne!(round.leader, self.my_pid);
-                    self.goto_round(Some(round));
+                } else if Some(*round) > self.round_state.round {
+                    self.goto_round(Some(*round));
                 }
-                assert_eq!(slot, self.slot);
-                assert_eq!(Some(round), self.round_state.round);
-                assert!(self.alive_replicas.contains(src));
+                assert_eq!(*slot, self.slot);
+                assert_eq!(Some(*round), self.round_state.round);
+                assert!(
+                    self.alive_replicas.contains(src)
+                        || matches!(self.settings.mode_setting, SwiftPaxos { .. })
+                );
 
                 match &self.settings.mode_setting {
-                    PFModeSetting::Pando { delegates } => delegates[round.leader],
+                    Pando { delegates } => delegates[round.leader],
+                    SwiftPaxos { .. } => {
+                        if let Prepare {
+                            rv: RoundV::FastV { proposer, .. },
+                            ..
+                        } = &msg
+                            && round.leader != self.my_pid
+                        {
+                            *proposer
+                        } else {
+                            round.leader
+                        }
+                    }
                     _ => round.leader,
                 }
             }
             _ => panic!("Unexpected message type: {msg:?}"),
         };
 
+        if !self.replica {
+            match self.settings.mode_setting {
+                SwiftPaxos { .. } => {
+                    return Ok(self.process_answers_at_swift_paxos_client(src, msg));
+                }
+                _ => unreachable!("Non-SwiftPaxos mode should have exited earlier."),
+            };
+        }
+
         match msg {
             Prepare { round, rv, .. } => {
-                if prepared_for != self.my_pid {
-                    if self.get_my_v().is_none() {
-                        assert!(rv.get_accept_round().is_none());
-                        self.round_state.paxos_propose_v(rv)
+                if self.get_my_v().is_none() {
+                    self.round_state.paxos_propose_v(rv)
+                }
+
+                if delegate_or_leader != self.my_pid {
+                    if matches!(self.settings.mode_setting, SwiftPaxos { .. })
+                        && delegate_or_leader == round.leader
+                        || self.round_state.get_last_accepted_round() == Some(round)
+                    {
+                        return Ok(None);
                     }
-                    self.answer_prepare(prepared_for).await?;
-                    assert!(prepared_for == src || prepared_for != round.leader);
+                    self.answer_prepare(delegate_or_leader).await?;
+                    assert!(delegate_or_leader == src || delegate_or_leader != round.leader);
                     return Ok(None);
                 }
 
                 let was_paxos_prepared = self.round_state.is_prepared();
                 self.round_state.receive_promise(src, rv);
 
-                if self.settings.mode_setting == EPaxos
+                if matches!(self.settings.mode_setting, SwiftPaxos { .. }) {
+                    if round.leader != self.my_pid {
+                        // I'm the proposer (not the leader). Try to complete the fast-path.
+                        return Ok(self.process_answers_at_swift_paxos_client(src, msg));
+                    } else {
+                        // I'm the leader. Immediately start the accept phase.
+                        if self.round_state.get_last_accepted_round().is_none() {
+                            self.round_state.self_accept(round);
+                            self.broadcast_accept().await?;
+                        }
+                    }
+                } else if self.settings.mode_setting == EPaxos
                     && self.round_state.get_last_accepted_round().is_none()
                 {
-                    if let RoundV::EPaxosV { leader, v } = rv {
-                        self.round_state.epaxos_answered(src, leader, v);
+                    if let RoundV::FastV { proposer, v } = rv {
+                        self.round_state.epaxos_answered(src, proposer, v);
                         if self.round_state.epaxos_can_commit() {
                             self.broadcast_commit().await?;
                             info!(
@@ -193,7 +237,7 @@ impl ConsensusShardTrait for PaxosFamilyShard {
                             self.broadcast_accept().await?;
                         }
                     } else {
-                        panic!("Can not receive PaxosV with None round in EPaxos.")
+                        unreachable!("Can not receive PaxosV with None round in EPaxos.")
                     }
                 } else if !was_paxos_prepared && self.round_state.is_prepared() {
                     self.round_state.self_accept(round);
@@ -204,17 +248,24 @@ impl ConsensusShardTrait for PaxosFamilyShard {
                 self.round_state.receive_accept(src, round, v);
 
                 if self.my_pid != round.leader {
-                    if src == prepared_for {
+                    let i_am_3p_commiter =
+                        matches!(self.settings.mode_setting, MultiPaxos3P | SwiftPaxos { .. })
+                            && self.get_committer(v) == Some(self.my_pid);
+                    if src == delegate_or_leader {
                         self.answer_accept().await?;
-                        if self.settings.mode_setting != MultiPaxos3P
-                            || self.get_committer(v) != Some(self.my_pid)
-                        {
-                            // nothing else to do (unless I'm a commiter in MultiPaxos3P)
+                        if !i_am_3p_commiter {
+                            // nothing else to do (unless I'm a commiter in MultiPaxos3P / SwiftPaxos)
                             return Ok(None);
                         }
+                        if let SwiftPaxos { quorum } = &self.settings.mode_setting {
+                            self.round_state
+                                .swift_answered(src, self.my_pid, v, quorum, true);
+                            if self.round_state.swift_can_commit(quorum.is_some()) {
+                                return Ok(Some(self.commit_slot(v, false)));
+                            }
+                        }
                     }
-                    assert_eq!(self.settings.mode_setting, MultiPaxos3P);
-                    assert_eq!(self.get_committer(v), Some(self.my_pid));
+                    assert!(i_am_3p_commiter);
                 }
 
                 if self.round_state.paxos_can_commit() {
@@ -315,11 +366,67 @@ impl ConsensusShardTrait for PaxosFamilyShard {
 
     #[inline]
     fn can_propose(&self) -> bool {
-        self.replica
+        self.replica || matches!(self.settings.mode_setting, SwiftPaxos { .. })
     }
 }
 
 impl PaxosFamilyShard {
+    fn process_answers_at_swift_paxos_client(
+        &mut self,
+        src: usize,
+        msg: PaxosMsg,
+    ) -> Option<CommandBatch> {
+        if self.get_committer(msg.get_v()) != Some(self.my_pid) {
+            return None;
+        }
+        let quorum = if let SwiftPaxos { quorum } = &self.settings.mode_setting {
+            quorum
+        } else {
+            unreachable!("This method should only be called in SwiftPaxos mode.")
+        };
+        match msg {
+            Prepare { round, rv, .. } => {
+                if let RoundV::FastV { proposer, v } = rv {
+                    assert_ne!(
+                        src, round.leader,
+                        "leaders don't respond with prepare messages"
+                    );
+                    self.round_state
+                        .swift_answered(src, proposer, v, quorum, false);
+                    if self.round_state.swift_can_commit(quorum.is_some()) {
+                        info!(
+                            "Commit via SwiftPaxos: shard={} slot={} v={v}",
+                            self.sinks.shard_id, self.slot
+                        );
+                        let value = self.commit_slot(v, false);
+                        Some(value)
+                    } else {
+                        None
+                    }
+                } else {
+                    unreachable!("Can not receive a PaxosV in a Prepare msg in SwiftPaxos.")
+                }
+            }
+            Accept { round, v, .. } => {
+                if src == round.leader {
+                    self.round_state
+                        .swift_answered(src, self.my_pid, v, quorum, true);
+                    if self.round_state.swift_can_commit(quorum.is_some()) {
+                        return Some(self.commit_slot(v, false));
+                    }
+                };
+
+                self.round_state.receive_accept(src, round, v);
+                if self.round_state.paxos_can_commit() {
+                    Some(self.commit_slot(v, false))
+                } else {
+                    None
+                }
+            }
+            _ => panic!("Unexpected message type: {msg:?}"),
+        }
+    }
+
     #[inline]
     fn goto_round(&mut self, round: Option<PaxosRound>) {
         if round.unwrap_or_default()
@@ -329,11 +436,15 @@ impl PaxosFamilyShard {
                 .unwrap_or_default()
                 .next_leader_round(self.my_pid)
         {
-            debug!(
-                // "<#FF4F4F>Cannot commit in round {} from state:</> <#EFBFBF>{}</>"
-                "Cannot commit in round {:?}",
-                self.round_state.round,
-            );
+            if self.round_state.round.is_some()
+                || !matches!(self.settings.mode_setting, SwiftPaxos { .. })
+            {
+                debug!(
+                    // "<#FF4F4F>Cannot commit in round {} from state:</> <#EFBFBF>{}</>"
+                    "Cannot commit in round {:?}",
+                    self.round_state.round,
+                );
+            }
             if round.unwrap_or_default().round_group
                 > self.round_state.round.unwrap_or_default().round_group + 1
             {
@@ -368,17 +479,23 @@ impl PaxosFamilyShard {
     async fn propose(&mut self, v: usize, with_value: bool) -> io::Result<()> {
         assert_eq!(self.round_state.round, self.settings.starting_round);
         assert!(self.round_state.get_v().is_none());
+        let electing = match self.settings.mode_setting {
+            SwiftPaxos { .. } => self.leader_priority[0],
+            _ => self.my_pid,
+        };
         let round = self
             .round_state
             .round
             .unwrap_or_default()
-            .next_leader_round(self.my_pid);
+            .next_leader_round(electing);
         self.goto_round(Some(round));
         assert_eq!(
             self.is_multi_paxos(),
             Some(round) == self.settings.starting_round
         );
-        let msg = if self.is_multi_paxos() {
+        let msg = if self.is_multi_paxos()
+            || (matches!(self.settings.mode_setting, SwiftPaxos { .. }) && electing == self.my_pid)
+        {
             let rv = RoundV::new_paxos_v(None, v);
             self.round_state.paxos_propose_v(rv);
             self.round_state.self_accept(round);
@@ -388,10 +505,15 @@ impl PaxosFamilyShard {
                 v: rv.get_v(),
             }
         } else {
-            let rv = match self.settings.mode_setting {
+            let rv = match &self.settings.mode_setting {
                 EPaxos => {
                     self.round_state.epaxos_propose_v(v);
-                    RoundV::new_epaxos_v(self.my_pid, v)
+                    RoundV::new_fast_v(self.my_pid, v)
+                }
+                SwiftPaxos { quorum } => {
+                    self.round_state
+                        .swift_propose_v(v, quorum, electing == self.my_pid);
+                    RoundV::new_fast_v(self.my_pid, v)
                 }
                 _ => RoundV::new_paxos_v(None, v),
             };
@@ -436,8 +558,8 @@ impl PaxosFamilyShard {
             round: self.round_state.round.unwrap(),
             v,
         };
-        if self.settings.mode_setting == MultiPaxos3P
-            && self.round_state.round == self.settings.starting_round
+        if matches!(self.settings.mode_setting, MultiPaxos3P | SwiftPaxos { .. })
+        // && self.round_state.round == self.settings.starting_round // Not correct for SwiftPaxos
         {
             if let Some(commiter) = self.get_committer(v) {
                 if commiter != leader && commiter != self.my_pid {
@@ -466,6 +588,8 @@ impl PaxosFamilyShard {
     fn get_committer(&self, v: usize) -> Option<usize> {
         if let Some(committers) = &self.settings.committers {
             self.get_requester(v).map(|proposer| committers[proposer])
+        } else if matches!(self.settings.mode_setting, SwiftPaxos { .. }) {
+            self.get_requester(v)
         } else {
             None
         }

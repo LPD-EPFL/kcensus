@@ -65,11 +65,17 @@ fn wrap_stream(stream: TcpStream) -> (SerStream, WrappedSink) {
 pub async fn connect_all(
     my_pid: usize,
     topology: Topology,
+    send_paxos_messages_to_all: bool,
 ) -> (
     MultiSink,
     impl Stream<Item = Result<MsgWithSource, io::Error>>,
 ) {
-    let mut sinks = MultiSink::new(my_pid, topology.nb_processes, topology.alive_replicas);
+    let mut sinks = MultiSink::new(
+        my_pid,
+        topology.nb_processes,
+        topology.alive_replicas,
+        send_paxos_messages_to_all,
+    );
     let mut streams = Vec::with_capacity(topology.nb_processes);
 
     let wrap_with_source_pid = |pid: usize| move |m: Message| m.with_source(pid);

@@ -1,5 +1,5 @@
 use crate::consensus::paxos_family::message::PaxosMsg::{Accept, ForwardRequest, Prepare};
-use crate::consensus::paxos_family::message::RoundV::{EPaxosV, PaxosV};
+use crate::consensus::paxos_family::message::RoundV::{FastV, PaxosV};
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 
@@ -11,8 +11,8 @@ pub struct PaxosRound {
 
 #[derive(Copy, Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum RoundV {
-    EPaxosV {
-        leader: usize,
+    FastV {
+        proposer: usize,
         v: usize,
     },
     PaxosV {
@@ -61,21 +61,21 @@ impl RoundV {
     }
 
     #[inline]
-    pub fn new_epaxos_v(leader: usize, v: usize) -> Self {
-        EPaxosV { leader, v }
+    pub fn new_fast_v(proposer: usize, v: usize) -> Self {
+        FastV { proposer, v }
     }
 
     pub fn get_v(&self) -> usize {
         match self {
             PaxosV { v, .. } => *v,
-            EPaxosV { v, .. } => *v,
+            FastV { v, .. } => *v,
         }
     }
 
     pub fn get_accept_round(&self) -> Option<PaxosRound> {
         match self {
             PaxosV { accept_round, .. } => *accept_round,
-            EPaxosV { .. } => None,
+            FastV { .. } => None,
         }
     }
 }
@@ -102,7 +102,9 @@ impl PaxosMsg {
     #[inline]
     pub fn can_include_value(&self, src: usize) -> bool {
         match self {
-            Prepare { round, .. } => round.leader == src,
+            Prepare { round, rv, .. } => {
+                round.leader == src || matches!(rv, FastV { proposer, .. } if *proposer == src)
+            }
             Accept { round, .. } => round.leader == src && round.round_group == 0,
             ForwardRequest { .. } => true,
         }

@@ -20,6 +20,7 @@ pub struct MultiSink {
     sinks: HashMap<usize, WrappedSink>,
     pub alive_replicas: BitSet,
     pub stats: Stats,
+    send_paxos_messages_to_all: bool,
 }
 
 pub struct ShardMultiSink {
@@ -41,13 +42,19 @@ pub fn encode(msg: &Message) -> Bytes {
 }
 
 impl MultiSink {
-    pub fn new(my_pid: usize, nb_nodes: usize, alive_replicas: BitSet) -> Self {
+    pub fn new(
+        my_pid: usize,
+        nb_nodes: usize,
+        alive_replicas: BitSet,
+        send_paxos_messages_to_all: bool,
+    ) -> Self {
         Self {
             my_pid,
             nb_nodes,
             sinks: HashMap::with_capacity(nb_nodes - 1),
             alive_replicas,
             stats: Stats::default(),
+            send_paxos_messages_to_all,
         }
     }
 
@@ -61,7 +68,7 @@ impl MultiSink {
     #[inline]
     pub async fn broadcast(&mut self, msg: Message, priority: Option<usize>) -> io::Result<()> {
         trace!("Broadcasting {msg:?}");
-        let replica_only = should_only_send_to_replicas(&msg);
+        let replica_only = should_only_send_to_replicas(&msg, self.send_paxos_messages_to_all);
         let bytes = encode(&msg);
         if let Some(priority_dest) = priority
             && priority_dest != self.my_pid
@@ -97,7 +104,9 @@ impl MultiSink {
     pub async fn send(&mut self, msg: Message, dest: usize) -> io::Result<()> {
         trace!("Sending to {dest}: {msg:?}");
         debug_assert!(dest != self.my_pid);
-        if should_only_send_to_replicas(&msg) && !self.alive_replicas.contains(dest) {
+        if should_only_send_to_replicas(&msg, self.send_paxos_messages_to_all)
+            && !self.alive_replicas.contains(dest)
+        {
             return Ok(());
         }
         let bytes = encode(&msg);
@@ -110,7 +119,7 @@ impl MultiSink {
     }
 }
 
-fn should_only_send_to_replicas(msg: &Message) -> bool {
+fn should_only_send_to_replicas(msg: &Message, send_paxos_messages_to_all: bool) -> bool {
     if let ConsensusM { msg, value, .. } = msg {
         match &msg.msg {
             ConsensusMsg::Commit { .. } => false,
@@ -121,7 +130,7 @@ fn should_only_send_to_replicas(msg: &Message) -> bool {
                 KCensusMsg::SpreadValueOnly { .. } => false,
                 KCensusMsg::PaxosAccept { .. } => value.is_none(),
             },
-            ConsensusMsg::PaxosM(_) => value.is_none(),
+            ConsensusMsg::PaxosM(_) => value.is_none() && !send_paxos_messages_to_all,
         }
     } else {
         false

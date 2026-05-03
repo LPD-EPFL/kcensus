@@ -1,6 +1,7 @@
 use crate::consensus::kcensus::node_state::{Knowledge, NodeState};
 use crate::topology::{Topology, FAULTY_LATENCY};
 use bit_set::BitSet;
+use itertools::Itertools;
 use log::{debug, info, trace};
 use petgraph::algo::bellman_ford;
 use petgraph::matrix_graph::DiMatrix;
@@ -67,6 +68,10 @@ pub struct PropagationGraphs {
     pub multi_paxos_3p_latencies: Vec<Vec<Duration>>,
     pub multi_paxos_3p_committers: Vec<Vec<ProcId>>,
     pub multi_paxos_3p_leaders: Vec<usize>,
+    pub swift_paxos_leader: usize,
+    pub swift_paxos_fixed_fast_quorum: Option<BitSet>,
+    pub swift_paxos_latencies: Vec<Duration>,
+    pub swift_paxos_force_mpaxos: BitSet,
 }
 
 impl PropagationGraphs {
@@ -367,7 +372,7 @@ pub fn compute_propagation_graphs(
             }
         }
 
-        let e_paxos_quorum = ((topology.nb_replicas * 3) / 4).max(maj_quorum);
+        let e_paxos_quorum = ((topology.nb_replicas * 3 - 1) / 4).max(maj_quorum);
         if e_paxos_quorum <= topology.alive_replicas.len() {
             epaxos_latencies[leader] = quorum_link_rtts[leader][e_paxos_quorum - 1];
         } else {
@@ -432,6 +437,80 @@ pub fn compute_propagation_graphs(
             if min_effort_latency < min_effort_latencies[proposer] {
                 min_effort_latencies[proposer] = min_effort_latency;
                 _min_effort_committers[proposer] = committer;
+            }
+        }
+    }
+
+    let mut swift_paxos_leader = 0usize;
+    let mut swift_paxos_fixed_fast_quorum: Option<BitSet> = None;
+    let mut swift_paxos_latencies = vec![Duration::MAX; nb_processes];
+    let mut swift_paxos_best_total = Duration::MAX;
+    let mut swift_paxos_force_mpaxos = BitSet::with_capacity(nb_processes);
+
+    let mut swift_leader_prio: Vec<_> = topology.alive_replicas.iter().collect();
+    swift_leader_prio.sort_by_key(|leader| quorum_link_rtts[*leader][maj_quorum - 1]);
+
+    // Find best swift-paxos strategy, checking fast-paxos quorums first
+    let fast_paxos_quorum = (((topology.nb_replicas * 3 - 1) / 4) + 1).max(maj_quorum);
+    if topology.alive_replicas.len() > fast_paxos_quorum {
+        for leader in swift_leader_prio.iter().copied() {
+            // Try the full-size fast-paxos quorums approach
+            // (Note: if alive.len == fast_paxos_quorum, there cannot be a benefit over a fixed quorum)
+            let mut final_latencies = vec![Duration::MAX; nb_processes];
+            let mut use_mpaxos = BitSet::with_capacity(nb_processes);
+            for requester in 0..nb_processes {
+                let fast_paxos_latency = quorum_link_rtts[requester][fast_paxos_quorum - 1]
+                    .max(link_rtts[requester][leader]);
+                let mpaxos_latency = topology.link_latency(requester, leader)
+                    + quorum_3p_link_rtts[leader][requester][maj_quorum - 1];
+
+                final_latencies[requester] = if fast_paxos_latency < mpaxos_latency {
+                    fast_paxos_latency
+                } else {
+                    use_mpaxos.insert(requester);
+                    mpaxos_latency
+                }
+            }
+            let total = final_latencies.iter().sum();
+            if total <= swift_paxos_best_total {
+                swift_paxos_leader = leader;
+                swift_paxos_fixed_fast_quorum = None;
+                swift_paxos_latencies = final_latencies;
+                swift_paxos_best_total = total;
+                swift_paxos_force_mpaxos = use_mpaxos;
+            }
+        }
+    }
+
+    // Now checking fixed majority quorums
+    let quorums = swift_leader_prio.iter().copied().combinations(maj_quorum);
+    for quorum in quorums {
+        let mut latencies_to_fixed_quorum = vec![Duration::ZERO; nb_processes];
+        for requester in 0..nb_processes {
+            latencies_to_fixed_quorum[requester] = quorum
+                .iter()
+                .map(|replica| link_rtts[requester][*replica])
+                .max()
+                .unwrap();
+        }
+        for leader in quorum.iter().copied() {
+            let mut final_latencies = latencies_to_fixed_quorum.clone();
+            let mut use_mpaxos = BitSet::with_capacity(nb_processes);
+            for requester in 0..nb_processes {
+                let mpaxos_latency = topology.link_latency(requester, leader)
+                    + quorum_3p_link_rtts[leader][requester][maj_quorum - 1];
+                if mpaxos_latency < final_latencies[requester] {
+                    use_mpaxos.insert(requester);
+                    final_latencies[requester] = mpaxos_latency;
+                }
+            }
+            let total: Duration = final_latencies.iter().sum();
+            if total < swift_paxos_best_total {
+                swift_paxos_leader = leader;
+                swift_paxos_fixed_fast_quorum = Some(BitSet::from_iter(quorum.clone()));
+                swift_paxos_latencies = final_latencies;
+                swift_paxos_best_total = total;
+                swift_paxos_force_mpaxos = use_mpaxos;
             }
         }
     }
@@ -1083,5 +1162,9 @@ pub fn compute_propagation_graphs(
         multi_paxos_3p_latencies,
         multi_paxos_3p_committers,
         multi_paxos_3p_leaders,
+        swift_paxos_leader,
+        swift_paxos_fixed_fast_quorum,
+        swift_paxos_latencies,
+        swift_paxos_force_mpaxos,
     }
 }

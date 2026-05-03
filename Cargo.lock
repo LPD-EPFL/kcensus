@@ -671,6 +671,7 @@ dependencies = [
  "env_logger",
  "futures",
  "humantime",
+ "itertools",
  "log",
  "petgraph",
  "rand",
