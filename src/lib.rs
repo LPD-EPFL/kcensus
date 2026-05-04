@@ -67,6 +67,12 @@ struct Args {
     skew: f64,
     #[arg(long, value_name = "SHARD_COUNT", help = "Defaults to the key count")]
     shards: Option<usize>,
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Avoids conflicts by partitioning the keyspace between requesters"
+    )]
+    no_conflicts: bool,
 }
 
 #[derive(clap::ValueEnum, Copy, Clone, Debug, PartialEq)]
@@ -168,6 +174,16 @@ pub async fn run() -> io::Result<()> {
     let sustain = args.sustain.unwrap_or((warmup * 3) / 4);
     let exp_length = warmup + duration + sustain;
     let deadlock_deadline = ((exp_length * 3) / 2).max(Duration::from_secs(5));
+    let partition_keys = if args.no_conflicts {
+        args.keys / process_count
+    } else {
+        args.keys
+    };
+    let partition_start = if args.no_conflicts {
+        partition_keys * my_pid
+    } else {
+        0
+    };
 
     let workload = cassandra::Workload {
         key_distribution: rand_distr::Zipf::new(args.keys as f64, args.skew)
@@ -185,6 +201,10 @@ pub async fn run() -> io::Result<()> {
                 reqs_per_second: args.throughput * args.speedup as f32,
             },
         },
+        no_conflicts: args.no_conflicts,
+        partition_keys,
+        partition_start,
+        last_key: 0,
     };
 
     let start = Instant::now();

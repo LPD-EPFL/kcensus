@@ -270,10 +270,18 @@ pub struct Workload {
     pub interval: RequestInterval,
     pub key_distribution: rand_distr::Zipf<f64>,
     pub shards: usize,
+    pub no_conflicts: bool,
+    pub partition_keys: usize,
+    pub partition_start: usize,
+    pub last_key: usize,
 }
 
 impl Workload {
-    pub fn random_key(&self) -> usize {
+    pub fn random_key(&mut self) -> usize {
+        if self.no_conflicts {
+            self.last_key = (self.last_key + 1) % self.partition_keys;
+            return self.last_key + self.partition_start;
+        }
         // Zipfian distributions are off by 1
         self.key_distribution.sample(&mut rand::rng()) as usize - 1
     }
@@ -299,7 +307,7 @@ impl Client {
         (client, client_request_rx, client_response_tx)
     }
 
-    fn generate_request(&self, workload: &Workload, request_id: u64) -> Command {
+    fn generate_request(&self, workload: &mut Workload, request_id: u64) -> Command {
         let key = workload.random_key();
         if rand::random_range(0. ..1.) < workload.rw_ratio {
             Command::new_write(
@@ -360,7 +368,7 @@ impl Client {
         let mut request_timings: HashMap<u64, (Instant, Instant)> = HashMap::new();
 
         // Prepare the first request
-        let mut next_request = Some(self.generate_request(&workload, 0u64));
+        let mut next_request = Some(self.generate_request(&mut workload, 0u64));
 
         // Initialize delay object and request state
         let delay = Delay::new(Instant::now()).expect("Failed to init delay");
@@ -400,7 +408,7 @@ impl Client {
                     // Prepare next request, while we haven't reached the end of the sustain phase
                     if Instant::now() < sustain_end {
                         next_request = Some(
-                            self.generate_request(&workload, current_request_id as u64)
+                            self.generate_request(&mut workload, current_request_id as u64)
                         );
                         scheduled_time = workload.interval.next(&scheduled_time);
                         delay.as_mut().reset(scheduled_time);
