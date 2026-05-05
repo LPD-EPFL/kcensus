@@ -253,7 +253,13 @@ impl RequestInterval {
     fn next(&mut self, last: &Instant) -> Instant {
         let secs = match self {
             RequestInterval::Exponential { distribution } => distribution.sample(&mut rand::rng()),
-            RequestInterval::Constant { reqs_per_second } => 1. / *reqs_per_second,
+            RequestInterval::Constant { reqs_per_second } => {
+                if 0f32 < *reqs_per_second {
+                    1. / *reqs_per_second
+                } else {
+                    f32::INFINITY
+                }
+            }
         };
         if secs.is_infinite() || secs.is_nan() {
             return *last + Duration::from_secs(1 << 30);
@@ -381,7 +387,11 @@ impl Client {
 
         // Set initial delay for first request
         scheduled_time = workload.interval.next(&scheduled_time);
-        delay.as_mut().reset(scheduled_time);
+        if sustain_end < scheduled_time {
+            next_request = None;
+        } else {
+            delay.as_mut().reset(scheduled_time);
+        }
         while next_request.is_some() || responses_received != current_request_id {
             let no_response = self.client_response_rx.is_empty();
             select! {
@@ -411,7 +421,11 @@ impl Client {
                             self.generate_request(&mut workload, current_request_id as u64)
                         );
                         scheduled_time = workload.interval.next(&scheduled_time);
-                        delay.as_mut().reset(scheduled_time);
+                        if sustain_end < scheduled_time {
+                            next_request = None;
+                        } else {
+                            delay.as_mut().reset(scheduled_time);
+                        }
                     }
                 }
 
@@ -436,7 +450,11 @@ impl Client {
                 }
             }
         }
-        let average_latency = total_latency / responses_received as u32;
+        let average_latency = if responses_received > 0 {
+            total_latency / responses_received as u32
+        } else {
+            Duration::ZERO
+        };
         let readable = format!(
             "Issued {} requests in total (avg latency: {}ms) (including warmup+sustain)",
             responses_received,
@@ -444,7 +462,7 @@ impl Client {
         );
         let event = ClientDoneEvent {
             requests: responses_received,
-            average_latency: total_latency / responses_received as u32,
+            average_latency,
         };
         eval::log("client-done", &readable, &event);
     }

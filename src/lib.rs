@@ -195,7 +195,15 @@ pub async fn run() -> io::Result<()> {
         rw_ratio: args.writes,
         interval: match args.ingress {
             Ingress::Exponential => {
-                cassandra::RequestInterval::new_exponential(args.throughput * args.speedup as f32)
+                if args.throughput != 0f32 {
+                    cassandra::RequestInterval::new_exponential(
+                        args.throughput * args.speedup as f32,
+                    )
+                } else {
+                    cassandra::RequestInterval::Constant {
+                        reqs_per_second: 0f32,
+                    }
+                }
             }
             Ingress::Constant => cassandra::RequestInterval::Constant {
                 reqs_per_second: args.throughput * args.speedup as f32,
