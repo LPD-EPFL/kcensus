@@ -49,7 +49,7 @@ impl KCensusShard {
 
             sinks,
 
-            next_uid: my_pid,
+            next_uid: 2 * my_pid,
             slot: 0,
             queued_commands: HashMap::with_capacity(process_count),
             last_v: None,

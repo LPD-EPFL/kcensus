@@ -1,5 +1,6 @@
-use crate::consensus::message::ConsensusMsg::{Commit, ReadRequest, ReadResponse};
+use crate::consensus::message::ConsensusMsg::{Commit, PaxosM, ReadRequest, ReadResponse};
 use crate::consensus::message::{CommandBatch, ConsensusMessage};
+use crate::consensus::paxos_family::message::PaxosMsg::{Accept, Prepare};
 use crate::consensus::read_tracker::ReadTracker;
 use crate::eval;
 use crate::message::Message::{ConsensusM, Done};
@@ -266,7 +267,7 @@ where
                 "last_v should be the same in shard {} for slot {}, but msg indicates {:?} while local state is {:?}. msg:{:?}",
                 self.sinks.shard_id, self.slot, msg.last_v, self.last_v, msg
             );
-            match msg.get_v() {
+            let value_ready = match msg.get_v() {
                 None => true,
                 Some(v) => match self.queued_commands.get(&v) {
                     None => false,
@@ -276,7 +277,9 @@ where
                         vs.iter().all(|v| self.queued_commands.contains_key(v))
                     }
                 },
-            }
+            };
+            value_ready
+                || matches!(msg.msg, PaxosM(Prepare { round, .. } | Accept { round, .. }) if round.leader != self.my_pid)
         } else {
             msg.get_slot() < Some(self.slot) // "Process" messages from lower slots, regardless of value
         }
@@ -369,7 +372,7 @@ where
 
     #[inline]
     fn store_new_command(&mut self, value: CommandBatch) -> usize {
-        let v = self.get_next_uid();
+        let v = self.get_next_uid(matches!(value, CommandBatch::Batch { .. }));
         let old = self.queued_commands.insert(v, value);
         debug_assert!(old.is_none());
         v
@@ -437,25 +440,17 @@ where
     }
 
     #[inline]
-    fn get_command(&self, v: usize) -> &CommandBatch {
-        self.queued_commands
-            .get(&v)
-            .expect("Queued command not found")
-    }
-
-    #[inline]
     fn get_requester(&self, v: usize) -> Option<usize> {
-        let cmd = self.get_command(v);
-        if let CommandBatch::Single(cmd) = cmd {
-            Some(cmd.requester)
+        if v % 2 == 0 {
+            Some((v >> 1) % self.process_count)
         } else {
             None
         }
     }
 
-    fn get_next_uid(&mut self) -> usize {
+    fn get_next_uid(&mut self, batch: bool) -> usize {
         let uid = self.next_uid;
-        self.next_uid += self.process_count;
-        uid
+        self.next_uid += 2 * self.process_count;
+        if batch { uid + 1 } else { uid }
     }
 }
