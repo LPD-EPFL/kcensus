@@ -459,10 +459,23 @@ pub fn compute_propagation_graphs(
             let mut final_latencies = vec![Duration::MAX; nb_processes];
             let mut use_mpaxos = BitSet::with_capacity(nb_processes);
             for requester in 0..nb_processes {
-                let fast_paxos_latency = quorum_link_rtts[requester][fast_paxos_quorum - 1]
-                    .max(link_rtts[requester][leader]);
-                let mpaxos_latency = topology.link_latency(requester, leader)
-                    + quorum_3p_link_rtts[leader][requester][maj_quorum - 1];
+                let mut requester_quorum_rtts: Vec<_> = topology
+                    .alive_replicas
+                    .iter()
+                    .map(|replica| {
+                        link_rtts[requester][replica].min(
+                            topology.link_latency(requester, leader)
+                                + topology.link_latency(leader, replica)
+                                + topology.link_latency(replica, requester),
+                        )
+                    })
+                    .collect();
+                requester_quorum_rtts.sort();
+                let fast_paxos_latency =
+                    requester_quorum_rtts[fast_paxos_quorum - 1].max(link_rtts[requester][leader]);
+                let mpaxos_latency = (topology.link_latency(requester, leader)
+                    + quorum_3p_link_rtts[leader][requester][maj_quorum - 1])
+                    .min(multi_paxos_latencies[leader][requester]);
 
                 final_latencies[requester] = if fast_paxos_latency < mpaxos_latency {
                     fast_paxos_latency
@@ -485,30 +498,38 @@ pub fn compute_propagation_graphs(
     // Now checking fixed majority quorums
     let quorums = swift_leader_prio.iter().copied().combinations(maj_quorum);
     for quorum in quorums {
-        let mut latencies_to_fixed_quorum = vec![Duration::ZERO; nb_processes];
-        for requester in 0..nb_processes {
-            latencies_to_fixed_quorum[requester] = quorum
-                .iter()
-                .map(|replica| link_rtts[requester][*replica])
-                .max()
-                .unwrap();
-        }
         for leader in quorum.iter().copied() {
-            let mut final_latencies = latencies_to_fixed_quorum.clone();
+            let mut latencies = vec![Duration::ZERO; nb_processes];
+            for requester in 0..nb_processes {
+                latencies[requester] = quorum
+                    .iter()
+                    .copied()
+                    .map(|replica| {
+                        link_rtts[requester][replica].min(
+                            topology.link_latency(requester, leader)
+                                + topology.link_latency(leader, replica)
+                                + topology.link_latency(replica, requester),
+                        )
+                    })
+                    .max()
+                    .unwrap();
+            }
+
             let mut use_mpaxos = BitSet::with_capacity(nb_processes);
             for requester in 0..nb_processes {
-                let mpaxos_latency = topology.link_latency(requester, leader)
-                    + quorum_3p_link_rtts[leader][requester][maj_quorum - 1];
-                if mpaxos_latency < final_latencies[requester] {
+                let mpaxos_latency = (topology.link_latency(requester, leader)
+                    + quorum_3p_link_rtts[leader][requester][maj_quorum - 1])
+                    .min(multi_paxos_latencies[leader][requester]);
+                if mpaxos_latency < latencies[requester] {
                     use_mpaxos.insert(requester);
-                    final_latencies[requester] = mpaxos_latency;
+                    latencies[requester] = mpaxos_latency;
                 }
             }
-            let total: Duration = final_latencies.iter().sum();
+            let total: Duration = latencies.iter().sum();
             if total < swift_paxos_best_total {
                 swift_paxos_leader = leader;
                 swift_paxos_fixed_fast_quorum = Some(BitSet::from_iter(quorum.clone()));
-                swift_paxos_latencies = final_latencies;
+                swift_paxos_latencies = latencies;
                 swift_paxos_best_total = total;
                 swift_paxos_force_mpaxos = use_mpaxos;
             }
