@@ -62,15 +62,15 @@ function run() {
   mkdir -p "$LOG_DIR"
   killall kcensus 2>/dev/null
   local NB=$(digits "$CONFIG")
-  if [[ "${CASSANDRA,,}" != "false" && "$CASSANDRA" != "0" ]]; then
-    start_cassandra "$NB"
-  fi
+#  if [[ "${CASSANDRA,,}" != "false" && "$CASSANDRA" != "0" ]]; then
+#    start_cassandra "$NB"
+#  fi
   echo "Starting $TITLE"
   for pid in $(seq 0 $((NB - 1))); do
     local CASSANDRA_ARG=""
-    if [[ "${CASSANDRA,,}" != "false" && "$CASSANDRA" != "0" ]]; then
-      CASSANDRA_ARG="-d 127.0.0.1:$((CASSANDRA_BASE_PORT + pid))"
-    fi
+#    if [[ "${CASSANDRA,,}" != "false" && "$CASSANDRA" != "0" ]]; then
+#      CASSANDRA_ARG="-d 127.0.0.1:$((CASSANDRA_BASE_PORT + pid))"
+#    fi
     local FAULTS_ARG=""
     if [[ "$FAULTS" != "" ]]; then
        FAULTS_ARG="-f $FAULTS"
