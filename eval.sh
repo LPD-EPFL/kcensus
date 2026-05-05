@@ -2,7 +2,7 @@
 
 CASSANDRA_BASE_PORT="9042"
 BASE_LOG_DIR="./logs"
-REPLICATED_ALGOS=(kcensus epaxos multi-paxos paxos weak-replication)
+REPLICATED_ALGOS=(kcensus "weak-replication" "swift-paxos" pando epaxos "multi-paxos" paxos)
 ALGOS=(no-replication ${REPLICATED_ALGOS[@]})
 CONFIGS=(aws-europe-7-alt.toml aws-north-america-7.toml aws-world-ring-13.toml) # aws-europe-7.toml aws-world-ring-9.toml
 YCSB=(1 0.5 0.05)
@@ -57,7 +57,7 @@ function run() {
   local INGRESS="$5"
   local THROUGHPUT="$6"
   local FAULTS="$7"
-  local TITLE="c=$CONFIG/a=$ALGO/w=$WRITES/r=$REQUESTS/i=$INGRESS/t=$THROUGHPUT/s=$SPEEDUP/f=$FAULTS"
+  local TITLE="c=$CONFIG/a=$ALGO/w=$WRITES/r=$REQUESTS/i=$INGRESS/t=$THROUGHPUT/s=$SPEEDUP/f=$FAULTS/no-conflicts"
   local LOG_DIR="$BASE_LOG_DIR/$TITLE/"
   mkdir -p "$LOG_DIR"
   killall kcensus 2>/dev/null

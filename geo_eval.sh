@@ -3,7 +3,7 @@
 set -e
 
 BASE_LOG_DIR="./logs"
-REPLICATED_ALGOS=(kcensus weak-replication "multi-paxos-3p" epaxos paxos)
+REPLICATED_ALGOS=(kcensus "weak-replication" "swift-paxos" pando epaxos "multi-paxos" paxos)
 ALGOS=(no-replication "${REPLICATED_ALGOS[@]}")
 DURATION=10s
 THROUGHPUT=1000 # 0.1 req /shard / sec total
@@ -106,7 +106,7 @@ function run() {
   local nonvoting="$(get_nonvoting "$configName" "$algo")"
 
   local inventoryFile="inventory-${expId}.ini"
-  local title="c=${configName}/a=${algo}/w=${writes}/d=${duration}/i=${ingress}/t=${throughput}/s=${SPEEDUP}/f=${faults}/k=${keys}/skew=${skew}/shards=${shards}"
+  local title="c=${configName}/a=${algo}/w=${writes}/d=${duration}/i=${ingress}/t=${throughput}/s=${SPEEDUP}/f=${faults}/k=${keys}/skew=${skew}/shards=${shards}/no-conflicts"
   local resultPath="${ABSOLUTE_BASE_LOG_DIR}/${title}"
   mkdir -p "${resultPath}"
 
@@ -221,16 +221,20 @@ get_nonvoting() {
   local algo=$2
   case "$config-$algo" in
     aws-europe-8-kcensus) echo "4";;
+    aws-europe-8-weak-replication) echo "4";;
+    aws-europe-8-pando) echo "4";;
+    aws-europe-8-swift-paxos) echo "4";;
     aws-europe-8-epaxos) echo "2";;
     aws-europe-8-multi-paxos-3p) echo "4";;
     aws-europe-8-paxos) echo "2";;
-    aws-europe-8-weak-replication) echo "4";;
 
     aws-ease-asia-9-kcensus) echo "1,8";;
+    aws-ease-asia-9-weak-replication) echo "1,8";;
+    aws-ease-asia-9-pando) echo "1,8";;
+    aws-ease-asia-9-swift-paxos) echo "1,8";;
     aws-ease-asia-9-epaxos) echo "1,4";;
     aws-ease-asia-9-multi-paxos-3p) echo "2,4";;
     aws-ease-asia-9-paxos) echo "1,8";;
-    aws-ease-asia-9-weak-replication) echo "1,8";;
 
     *) echo "";;
   esac

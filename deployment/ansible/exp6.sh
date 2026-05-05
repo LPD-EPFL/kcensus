@@ -3,7 +3,7 @@
 
 CASSANDRA_BASE_PORT="9042"
 BASE_LOG_DIR="./logs"
-REPLICATED_ALGOS=(kcensus epaxos multi-paxos-3p paxos weak-replication)
+REPLICATED_ALGOS=(kcensus "weak-replication" "swift-paxos" pando epaxos "multi-paxos" paxos)
 ALGOS=(no-replication ${REPLICATED_ALGOS[@]})
 WRITES=(1)
 SPEEDUP=2 # latency precision does not matter
