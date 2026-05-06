@@ -13,11 +13,14 @@ SKEW=0
 SHARDS=$KEYS
 
 declare -A CONFIGS
+CONFIGS["aws-world-ring-7"]="deployment/terraform/regions/ring-7.tfvars"
 CONFIGS["aws-north-america-7"]="deployment/terraform/regions/north-america-7.tfvars"
-CONFIGS["aws-europe-8"]="deployment/terraform/regions/europe-8.tfvars"
-CONFIGS["aws-east-asia-9"]="deployment/terraform/regions/east-asia-9.tfvars"
+CONFIGS["aws-europe-7"]="deployment/terraform/regions/europe-7.tfvars"
+CONFIGS["aws-east-asia-7"]="deployment/terraform/regions/east-asia-7.tfvars"
 CONFIGS["aws-exp-6"]="deployment/terraform/regions/one.tfvars"
 # Old
+CONFIGS["aws-east-asia-9"]="deployment/terraform/regions/east-asia-9.tfvars"
+CONFIGS["aws-europe-8"]="deployment/terraform/regions/europe-8.tfvars"
 CONFIGS["old/aws-world-ring-13"]="deployment/terraform/regions/world-ring-13.tfvars"
 CONFIGS["old/aws-world-ring-9"]="deployment/terraform/regions/world-ring-9.tfvars"
 CONFIGS["old/aws-europe-7"]="deployment/terraform/regions/europe-7.tfvars"
@@ -220,21 +223,23 @@ get_nonvoting() {
   local config=$1
   local algo=$2
   case "$config-$algo" in
-    aws-europe-8-kcensus) echo "4";;
     aws-europe-8-weak-replication) echo "4";;
-    aws-europe-8-pando) echo "4";;
+    aws-europe-8-kcensus) echo "4";;
     aws-europe-8-swift-paxos) echo "4";;
-    aws-europe-8-epaxos) echo "2";;
+    aws-europe-8-pando) echo "4";;
+    aws-europe-8-epaxos) echo "4";;
+    aws-europe-8-multi-paxos) echo "4";;
     aws-europe-8-multi-paxos-3p) echo "4";;
-    aws-europe-8-paxos) echo "2";;
+    aws-europe-8-paxos) echo "4";;
 
-    aws-ease-asia-9-kcensus) echo "1,8";;
-    aws-ease-asia-9-weak-replication) echo "1,8";;
-    aws-ease-asia-9-pando) echo "1,8";;
-    aws-ease-asia-9-swift-paxos) echo "1,8";;
-    aws-ease-asia-9-epaxos) echo "1,4";;
-    aws-ease-asia-9-multi-paxos-3p) echo "2,4";;
-    aws-ease-asia-9-paxos) echo "1,8";;
+    aws-east-asia-9-weak-replication) echo "1,8";;
+    aws-east-asia-9-kcensus) echo "1,8";;
+    aws-east-asia-9-swift-paxos) echo "2,4";;
+    aws-east-asia-9-pando) echo "2,4";;
+    aws-east-asia-9-epaxos) echo "1,4";;
+    aws-east-asia-9-multi-paxos) echo "2,4";; # any pair composed of 0,1,2,3,4 works
+    aws-east-asia-9-multi-paxos-3p) echo "2,4";;
+    aws-east-asia-9-paxos) echo "1,8";;
 
     *) echo "";;
   esac
@@ -244,7 +249,7 @@ get_nonvoting() {
 # exp-1 <=> 7.1
 function exp-1() {
   echo "--- Starting Experiment 1: Pure Latency ---"
-  for configName in "aws-europe-8" "aws-north-america-7" "aws-east-asia-9"; do
+  for configName in "aws-ring-7" "aws-europe-7" "aws-north-america-7" "aws-east-asia-7"; do
     local EXPERIMENT_ID="exp-1-$configName"
     local varFile="${CONFIGS[$configName]}"
     provision "$varFile" "$EXPERIMENT_ID"
@@ -267,7 +272,7 @@ function exp-1() {
 function exp-2() {
   echo "--- Starting Experiment 2: Latency under load ---"
 
-  local configName="aws-europe-8"
+  local configName="aws-ring-7"
   local EXPERIMENT_ID="exp-2"
   local varFile="${CONFIGS[$configName]}"
   provision "$varFile" "$EXPERIMENT_ID"
@@ -291,7 +296,7 @@ function exp-2() {
 function exp-4() {
   echo "--- Starting Experiment 4: Faults ---"
 
-  local configName="aws-europe-8"
+  local configName="aws-ring-7"
   local EXPERIMENT_ID="exp-4"
   local varFile="${CONFIGS[$configName]}"
   provision "$varFile" "$EXPERIMENT_ID"
