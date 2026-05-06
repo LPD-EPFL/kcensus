@@ -30,30 +30,39 @@ ALGORITHMS = {
         "marker": "d",
         "markersize": 2.4,
     },
+    "swift-paxos": {
+        "label": "SwiftPaxos",
+        "color": yellow,
+        "lw": 0.7,
+        "linestyle": "-",
+        "marker": "s",
+        "markersize": 1.4,
+    },
     "epaxos": {
         "label": "EPaxos",
-        "color": yellow,
+        "color": orange,
         "lw": 0.7,
         "linestyle": "-",
         "marker": "o",
         "markersize": 2.1,
     },
-    "multi-paxos-3p": {
+    "pando": {
+        "label": "Pando",
+        "color": red,
+        "lw": 0.7,
+        "linestyle": "-",
+        "marker": "+",
+        "markersize": 4,
+        "markeredgewidth": 0.7,
+    },
+    "multi-paxos": {
         "label": "Multi-Paxos",
-        "color": orange,
+        "color": lavanda,
         "lw": 0.7,
         "linestyle": "-",
         "marker": "x",
         "markersize": 4,
         "markeredgewidth": 0.7,
-    },
-    "paxos": {
-        "label": "Paxos",
-        "color": red,
-        "lw": 0.7,
-        "linestyle": "-",
-        "marker": "s",
-        "markersize": 1.4,
     },
 }
 
@@ -87,19 +96,23 @@ parser.add_argument(
     "-k", "--keys", type=int, default=100, help="Key count"
 )
 parser.add_argument(
-    "--nonvoting_weak_replication", type=lambda x: list(map(int, x.split(","))), default=[], help="Non-voting processes for weak-replication"
+    "--nonvoting_weak_replication", type=lambda x: list(map(int, x.split(","))), default=[],
+    help="Non-voting processes for weak-replication"
 )
 parser.add_argument(
     "--nonvoting_paxos", type=lambda x: list(map(int, x.split(","))), default=[], help="Non-voting processes for paxos"
 )
 parser.add_argument(
-    "--nonvoting_epaxos", type=lambda x: list(map(int, x.split(","))), default=[], help="Non-voting processes for epaxos"
+    "--nonvoting_epaxos", type=lambda x: list(map(int, x.split(","))), default=[],
+    help="Non-voting processes for epaxos"
 )
 parser.add_argument(
-    "--nonvoting_multi_paxos_3p", type=lambda x: list(map(int, x.split(","))), default=[], help="Non-voting processes for multi-paxos-3p"
+    "--nonvoting_multi_paxos_3p", type=lambda x: list(map(int, x.split(","))), default=[],
+    help="Non-voting processes for multi-paxos-3p"
 )
 parser.add_argument(
-    "--nonvoting_kcensus", type=lambda x: list(map(int, x.split(","))), default=[], help="Non-voting processes for kcensus"
+    "--nonvoting_kcensus", type=lambda x: list(map(int, x.split(","))), default=[],
+    help="Non-voting processes for kcensus"
 )
 parser.add_argument(
     "--skew", type=float, default=0, help="Zipfian skew"
@@ -110,6 +123,7 @@ parser.add_argument(
 args = parser.parse_args()
 serialized_args = f'-c={args.config.replace("/", "-")}-w={args.writes:g}-d={args.duration}-i={args.ingress}-t={args.throughput:g}-s={args.speedup}-f={args.faults}-g={args.geo}-keys={args.keys}-skew={args.skew}-shards={args.shards}'
 
+
 def k_formatter(x, _):
     if x < 1000:
         return int(x)
@@ -117,10 +131,10 @@ def k_formatter(x, _):
 
 
 def ki_formatter(x, _):
-    if x > (1024**3):
+    if x > (1024 ** 3):
         return f"{int(x / 1024 ** 3)}Gi"
-    if x > (1024**2):
+    if x > (1024 ** 2):
         return f"{int(x / 1024 ** 2)}Mi"
-    if x > (1024**1):
+    if x > (1024 ** 1):
         return f"{int(x / 1024 ** 1)}Ki"
     return int(x)
