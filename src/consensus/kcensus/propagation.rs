@@ -363,7 +363,7 @@ pub fn compute_propagation_graphs(
         paxos_committers[leader] = leader;
 
         pando_committers[leader] = leader;
-        for delegate in 0..nb_processes {
+        for delegate in topology.alive_replicas.iter() {
             let latency = quorum_3p_link_rtts[leader][delegate][maj_quorum - 1]
                 + quorum_3p_link_rtts[delegate][leader][maj_quorum - 1];
             if latency < pando_latencies[leader] {
