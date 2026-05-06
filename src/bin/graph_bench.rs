@@ -55,35 +55,44 @@ fn main() {
                 // println!("faults: {:?}", topology.faults);
                 let graph = compute_propagation_graphs(topology, true, true);
 
-                let leader = graph.multi_paxos_leaders[0];
-                let leader_3p = graph.multi_paxos_3p_leaders[0];
+                let mp_leader = graph.multi_paxos_leaders[0];
+                let mp3p_leader = graph.multi_paxos_3p_leaders[0];
                 for proposer in 0..nb_processes {
                     let min_effort = graph.min_effort_latencies[proposer];
                     let kcensus = graph.kcensus_latencies[proposer];
                     let paxos = graph.paxos_latencies[proposer];
+                    let swift_paxos = graph.swift_paxos_latencies[proposer];
                     let pando = graph.pando_latencies[proposer];
+                    let pando_delegate = graph.pando_delegates[proposer];
                     let epaxos = graph.epaxos_latencies[proposer];
-                    let mpaxos = graph.multi_paxos_latencies[leader][proposer];
-                    let mpaxos_3p = graph.multi_paxos_3p_latencies[leader_3p][proposer];
-                    let committer_3p = graph.multi_paxos_3p_committers[leader_3p][proposer];
+                    let mpaxos = graph.multi_paxos_latencies[mp_leader][proposer];
+                    let mpaxos_3p = graph.multi_paxos_3p_latencies[mp3p_leader][proposer];
                     info!("proposer {proposer} ({})", base_topology.regions[proposer],);
                     info!(
-                        "  min-effort: {min_effort:?}, kcensus: {kcensus:?}, paxos: {paxos:?}, pando: {pando:?}, epaxos: {epaxos:?}, multi-paxos: {mpaxos:?}, multi-paxos-3p: {mpaxos_3p:?} (committer {committer_3p})"
+                        "  min-effort: {min_effort:?}, kcensus: {kcensus:?}, swift_paxos: {swift_paxos:?}, pando: {pando:?} (delegate: {pando_delegate}), epaxos: {epaxos:?}, multi-paxos: {mpaxos:?}, multi-paxos-3p: {mpaxos_3p:?}, paxos: {paxos:?}",
                     );
                 }
+                info!(
+                    "swift-paxos leader: {} and fixed quorum: {:?}",
+                    graph.swift_paxos_leader, graph.swift_paxos_fixed_fast_quorum
+                );
+                info!("multi-paxos leader: {mp_leader}");
+                info!("multi-paxos-3p leader: {mp_leader}");
 
                 let avg_millis = |durations: &[Duration]| {
                     1_000.0 * durations.iter().sum::<Duration>().as_secs_f64()
                         / durations.len() as f64
                 };
                 info!(
-                    "Averages: min-effort: {:.2}ms kcensus: {:.2}ms paxos: {:.2}ms epaxos: {:.2}ms multi-paxos: {:.2}ms multi-paxos-3p: {:.2}ms",
+                    "Averages:  min-effort: {:.2}ms, kcensus: {:.2}ms, swift_paxos: {:.2}ms, pando: {:.2}ms, epaxos: {:.2}ms, multi-paxos: {:.2}ms, multi-paxos-3p: {:.2}ms, paxos: {:.2}ms",
                     avg_millis(&graph.min_effort_latencies),
                     avg_millis(&graph.kcensus_latencies),
-                    avg_millis(&graph.paxos_latencies),
+                    avg_millis(&graph.swift_paxos_latencies),
+                    avg_millis(&graph.pando_latencies),
                     avg_millis(&graph.epaxos_latencies),
-                    avg_millis(&graph.multi_paxos_latencies[leader]),
-                    avg_millis(&graph.multi_paxos_3p_latencies[leader]),
+                    avg_millis(&graph.multi_paxos_latencies[mp_leader]),
+                    avg_millis(&graph.multi_paxos_3p_latencies[mp_leader]),
+                    avg_millis(&graph.paxos_latencies),
                 );
                 count += 1;
                 if !next_combination(&mut faults, nb_processes) {
