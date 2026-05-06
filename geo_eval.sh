@@ -13,7 +13,7 @@ SKEW=0
 SHARDS=$KEYS
 
 declare -A CONFIGS
-CONFIGS["aws-world-ring-7"]="deployment/terraform/regions/ring-7.tfvars"
+CONFIGS["aws-ring-7"]="deployment/terraform/regions/ring-7.tfvars"
 CONFIGS["aws-north-america-7"]="deployment/terraform/regions/north-america-7.tfvars"
 CONFIGS["aws-europe-7"]="deployment/terraform/regions/europe-7.tfvars"
 CONFIGS["aws-east-asia-7"]="deployment/terraform/regions/east-asia-7.tfvars"
