@@ -3,8 +3,10 @@
 set -e
 
 BASE_LOG_DIR="./logs"
-REPLICATED_ALGOS=(kcensus "weak-replication" "swift-paxos" pando epaxos "multi-paxos" paxos)
-ALGOS=(no-replication "${REPLICATED_ALGOS[@]}")
+# REPLICATED_ALGOS=(kcensus "weak-replication" "swift-paxos" pando epaxos "multi-paxos" paxos)
+# ALGOS=(no-replication "${REPLICATED_ALGOS[@]}")
+REPLICATED_ALGOS=(kcensus "swift-paxos" pando epaxos "multi-paxos" paxos)
+ALGOS=("${REPLICATED_ALGOS[@]}")
 DURATION=10s
 THROUGHPUT=1000 # 0.1 req /shard / sec total
 SPEEDUP=1
