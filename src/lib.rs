@@ -144,6 +144,7 @@ pub async fn run() -> io::Result<()> {
         x => x,
     };
     debug!("Loaded topology:{topology}");
+    println!("Region: {}", topology.regions[my_pid]);
     let start = Instant::now();
     let propagation_graphs = compute_propagation_graphs(
         topology.clone(),
@@ -530,6 +531,7 @@ pub async fn run() -> io::Result<()> {
 
     println!("Expected local latency (no-contention): {expected_latency:?}",);
     println!("Total duration: {:?}", start.elapsed());
+    println!("Region: {}", topology.regions[my_pid]);
 
     delayer_task.await?;
     Ok(())
