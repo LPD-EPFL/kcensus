@@ -97,21 +97,22 @@ function destroy() {
 
 function run() {
   local expId="$1"
-  local configName="$2"
-  local algo="$3"
-  local writes="$4"
-  local duration="$5"
-  local ingress="$6"
-  local throughput="$7"
-  local faults="${8:-}"
-  local keys="${9:-${KEYS}}"
-  local skew="${10:-${SKEW}}"
-  local shards="${11:-${SHARDS}}"
+  local retry"$2"
+  local configName="$3"
+  local algo="$4"
+  local writes="$5"
+  local duration="$6"
+  local ingress="$7"
+  local throughput="$8"
+  local faults="${9:-}"
+  local keys="${10:-${KEYS}}"
+  local skew="${11:-${SKEW}}"
+  local shards="${12:-${SHARDS}}"
 
   local nonvoting="$(get_nonvoting "$configName" "$algo")"
 
   local inventoryFile="inventory-${expId}.ini"
-  local title="c=${configName}/a=${algo}/w=${writes}/d=${duration}/i=${ingress}/t=${throughput}/s=${SPEEDUP}/f=${faults}/k=${keys}/skew=${skew}/shards=${shards}/no-conflicts"
+  local title="c=${configName}/a=${algo}/w=${writes}/d=${duration}/i=${ingress}/t=${throughput}/s=${SPEEDUP}/f=${faults}/k=${keys}/skew=${skew}/shards=${shards}/no-conflicts/retry=${retry}"
   local resultPath="${ABSOLUTE_BASE_LOG_DIR}/${title}"
   mkdir -p "${resultPath}"
 
@@ -251,19 +252,21 @@ get_nonvoting() {
 # exp-1 <=> 7.1
 function exp-1() {
   echo "--- Starting Experiment 1: Pure Latency ---"
-  for configName in "aws-ring-7" "aws-europe-7" "aws-north-america-7" "aws-east-asia-7"; do
-    local EXPERIMENT_ID="exp-1-$configName"
-    local varFile="${CONFIGS[$configName]}"
-    provision "$varFile" "$EXPERIMENT_ID"
-    deploy "$EXPERIMENT_ID"
+  for retry in 1 2; do
+    for configName in "aws-ring-7" "aws-europe-7" "aws-north-america-7" "aws-east-asia-7"; do
+      local EXPERIMENT_ID="exp-1-$configName"
+      local varFile="${CONFIGS[$configName]}"
+      provision "$varFile" "$EXPERIMENT_ID"
+      deploy "$EXPERIMENT_ID"
 
-    for writes in 1; do
-      for algo in "${ALGOS[@]}"; do
-        run "$EXPERIMENT_ID" "$configName" "$algo" "$writes" "$DURATION" "exponential" "$THROUGHPUT"
+      for writes in 1; do
+        for algo in "${ALGOS[@]}"; do
+          run "$EXPERIMENT_ID" "$retry" "$configName" "$algo" "$writes" "$DURATION" "exponential" "$THROUGHPUT"
+        done
       done
-    done
 
-    destroy "$varFile" "$EXPERIMENT_ID"
+      destroy "$varFile" "$EXPERIMENT_ID"
+    done
   done
 
   echo "--- Finished Experiment 1 ---"
@@ -277,18 +280,23 @@ function exp-2() {
   local configName="aws-ring-7"
   local EXPERIMENT_ID="exp-2"
   local varFile="${CONFIGS[$configName]}"
-  provision "$varFile" "$EXPERIMENT_ID"
-  deploy "$EXPERIMENT_ID"
 
-  for writes in 1; do
+  for retry in 0 1 2; do
+    provision "$varFile" "$EXPERIMENT_ID"
+    deploy "$EXPERIMENT_ID"
+
+    for writes in 1; do
       for skew in 0.5 1 2; do # 0 will have run before
         for algo in "${ALGOS[@]}"; do
-          run "$EXPERIMENT_ID" "$configName" "$algo" "$writes" "$DURATION" "exponential" "$THROUGHPUT" "" "$KEYS" "$skew"
+          run "$EXPERIMENT_ID" "$retry" "$configName" "$algo" "$writes" "$DURATION" "exponential" "$THROUGHPUT" "" "$KEYS" "$skew"
         done
       done
-  done
+    done
 
-  destroy "$varFile" "$EXPERIMENT_ID"
+    destroy "$varFile" "$EXPERIMENT_ID"
+    echo "try $retry done. Waiting 30s before the next try..."
+    sleep 30
+  done
 
   echo "--- Finished Experiment 2 ---"
 }
@@ -301,20 +309,25 @@ function exp-4() {
   local configName="aws-ring-7"
   local EXPERIMENT_ID="exp-4"
   local varFile="${CONFIGS[$configName]}"
-  provision "$varFile" "$EXPERIMENT_ID"
-  deploy "$EXPERIMENT_ID"
-
   local writes=1
   local duration="10s"
   local throughput="$THROUGHPUT"
 
-  for algo in "${REPLICATED_ALGOS[@]}"; do
-    for faults in "" $(all_faults "$(digits "$configName")" "$(get_nonvoting "$configName" "$algo")"); do
-      run "$EXPERIMENT_ID" "$configName" "$algo" $writes $duration exponential $throughput "$faults"
-    done
-  done
+  for retry in 0 1 2; do
+    provision "$varFile" "$EXPERIMENT_ID"
+    deploy "$EXPERIMENT_ID"
 
-  destroy "$varFile" "$EXPERIMENT_ID"
+    for algo in "${REPLICATED_ALGOS[@]}"; do
+      for faults in "" $(all_faults "$(digits "$configName")" "$(get_nonvoting "$configName" "$algo")"); do
+        run "$EXPERIMENT_ID" "$retry" "$configName" "$algo" $writes $duration exponential $throughput "$faults"
+      done
+    done
+
+    destroy "$varFile" "$EXPERIMENT_ID"
+
+    echo "try $retry done. Waiting 30s before the next try..."
+    sleep 30
+  done
 
   echo "--- Finished Experiment 4 ---"
 }
@@ -328,84 +341,88 @@ function exp-3-5() {
   local masterConfigFile="${tmpDir}/master-config.json"
   local duration="10s"
 
-  # step 1: provision servers
-  provision "$varFile" "$EXPERIMENT_ID"
-  mkdir -p "$tmpDir"
+  for retry in 0 1 2; do
 
-  # step 2: prepare nodes and generate master config file
-  echo "--> Preparing nodes and generating master config file"
-  (
-    cd deployment/ansible
-    ansible-playbook -i "inventory-${EXPERIMENT_ID}.ini" 01-prepare-nodes.yml
-    ansible-playbook -i "inventory-${EXPERIMENT_ID}.ini" 02-generate-configs.yml \
-      -e "master_config_path=${masterConfigFile}"
-  )
-  echo "--> Master config created at ${masterConfigFile}"
+    # step 1: provision servers
+    provision "$varFile" "$EXPERIMENT_ID"
+    mkdir -p "$tmpDir"
 
-  # step 3: run stuff
-  for configs_type in aws-from-paris aws-random; do 
-    for num_replicas in $(seq 31 -2 3); do
-      local configName="${configs_type}-${num_replicas}"
-      local target_regions=$(get_regions "$configs_type" "$num_replicas")
+    # step 2: prepare nodes and generate master config file
+    echo "--> Preparing nodes and generating master config file"
+    (
+      cd deployment/ansible
+      ansible-playbook -i "inventory-${EXPERIMENT_ID}.ini" 01-prepare-nodes.yml
+      ansible-playbook -i "inventory-${EXPERIMENT_ID}.ini" 02-generate-configs.yml \
+        -e "master_config_path=${masterConfigFile}"
+    )
+    echo "--> Master config created at ${masterConfigFile}"
 
-      # step 3.1: generate sub-config file for current experiment using master config
-      echo "--> Generating sub-config for ${configName} with ${num_replicas} nodes"
-      local subConfigFile="${tmpDir}/config-${configName}.toml"
-      local subInventoryFile="${tmpDir}/inventory-${configName}.ini"
-      
-      python3 deployment/ansible/scripts/generate_sub_config.py \
-        --master-config "$masterConfigFile" \
-        --regions "$target_regions" \
-        --out-config "$subConfigFile" \
-        --out-inventory "$subInventoryFile"
+    # step 3: run stuff
+    for configs_type in aws-from-paris aws-random; do
+      for num_replicas in $(seq 31 -2 3); do
+        local configName="${configs_type}-${num_replicas}"
+        local target_regions=$(get_regions "$configs_type" "$num_replicas")
 
-      # step 3.2: customize and distribute config files to each server (once per server set)
-      echo "--> Customizing and distributing config files for ${configName}"
-      (
-        cd deployment/ansible
-        ansible-playbook -i "${subInventoryFile}" 03-prepare-sub-configs.yml \
-          -e "sub_config_file=${subConfigFile}"
-      )
+        # step 3.1: generate sub-config file for current experiment using master config
+        echo "--> Generating sub-config for ${configName} with ${num_replicas} nodes"
+        local subConfigFile="${tmpDir}/config-${configName}.toml"
+        local subInventoryFile="${tmpDir}/inventory-${configName}.ini"
 
-      # step 3.3: run the scalability experiments
-      for writes in 1; do
-        for algo in "${ALGOS[@]}"; do
-            run_title="c=${configs_type}/${num_replicas}.toml/a=${algo}/w=${writes}/d=${duration}/i=exponential/t=${THROUGHPUT}/s=${SPEEDUP}/f=/k=${KEYS}/skew=${SKEW}/shards=${SHARDS}"
-            resultPath="${ABSOLUTE_BASE_LOG_DIR}/${run_title}"
-            mkdir -p "$resultPath"
+        python3 deployment/ansible/scripts/generate_sub_config.py \
+          --master-config "$masterConfigFile" \
+          --regions "$target_regions" \
+          --out-config "$subConfigFile" \
+          --out-inventory "$subInventoryFile"
 
-            local per_proposer_throughput=$((THROUGHPUT / num_replicas))
-            
-            echo "--> RUNNING: ${run_title}"
-            (
-              cd deployment/ansible
-              until ansible-playbook -i "${subInventoryFile}" 03-run-experiment.yml \
-                -e "algo=${algo}" -e "writes=${writes}" -e "duration=${duration}" \
-                -e "ingress=exponential" -e "throughput=${per_proposer_throughput}" -e "speedup=${SPEEDUP}" \
-                -e "keys=${KEYS}" -e "skew=${SKEW}" -e "shards=${SHARDS}" \
-                -e "result_path=${resultPath}" -e "sub_config_file=${subConfigFile}"; do
-                echo "Experiment failed, retrying $algo on $configName..."
-              done
-            )
+        # step 3.2: customize and distribute config files to each server (once per server set)
+        echo "--> Customizing and distributing config files for ${configName}"
+        (
+          cd deployment/ansible
+          ansible-playbook -i "${subInventoryFile}" 03-prepare-sub-configs.yml \
+            -e "sub_config_file=${subConfigFile}"
+        )
+
+        # step 3.3: run the scalability experiments
+        for writes in 1; do
+          for algo in "${ALGOS[@]}"; do
+              run_title="c=${configs_type}/${num_replicas}.toml/a=${algo}/w=${writes}/d=${duration}/i=exponential/t=${THROUGHPUT}/s=${SPEEDUP}/f=/k=${KEYS}/skew=${SKEW}/shards=${SHARDS}/retry=${retry}"
+              resultPath="${ABSOLUTE_BASE_LOG_DIR}/${run_title}"
+              mkdir -p "$resultPath"
+
+              local per_proposer_throughput=$((THROUGHPUT / num_replicas))
+
+              echo "--> RUNNING: ${run_title}"
+              (
+                cd deployment/ansible
+                until ansible-playbook -i "${subInventoryFile}" 03-run-experiment.yml \
+                  -e "algo=${algo}" -e "writes=${writes}" -e "duration=${duration}" \
+                  -e "ingress=exponential" -e "throughput=${per_proposer_throughput}" -e "speedup=${SPEEDUP}" \
+                  -e "keys=${KEYS}" -e "skew=${SKEW}" -e "shards=${SHARDS}" \
+                  -e "result_path=${resultPath}" -e "sub_config_file=${subConfigFile}"; do
+                  echo "Experiment failed, retrying $algo on $configName..."
+                done
+              )
+          done
         done
-      done
 
-      # step 3.4: run one propagation experiment per config
-      local graph_bench_title="c=${configs_type}/${num_replicas}.toml"
-      local graphResultPath="${ABSOLUTE_BASE_LOG_DIR}/${graph_bench_title}"
-      mkdir -p "$graphResultPath"
-      
-      echo "--> RUNNING Graph Bench: ${graph_bench_title}"
-      (
-        cd deployment/ansible
-        ansible-playbook -i "${subInventoryFile}" 03-run-graph-bench.yml \
-          -e "result_path=${graphResultPath}"
-      )
+        # step 3.4: run one propagation experiment per config
+        local graph_bench_title="c=${configs_type}/${num_replicas}.toml"
+        local graphResultPath="${ABSOLUTE_BASE_LOG_DIR}/${graph_bench_title}"
+        mkdir -p "$graphResultPath"
+
+        echo "--> RUNNING Graph Bench: ${graph_bench_title}"
+        (
+          cd deployment/ansible
+          ansible-playbook -i "${subInventoryFile}" 03-run-graph-bench.yml \
+            -e "result_path=${graphResultPath}"
+        )
+      done
     done
+
+    # step 4: destroy infrastructure
+    destroy "$varFile" "$EXPERIMENT_ID"
+    echo "try $retry done. Waiting 30s before the next try..."
   done
-  
-  # step 4: destroy infrastructure
-  destroy "$varFile" "$EXPERIMENT_ID"
 
   echo "--- Finished Experiments 3 & 5 ---"
 }
