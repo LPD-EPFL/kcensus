@@ -134,17 +134,6 @@ module "server_stack_eu_west_1" { # Ireland
   experiment_id  = var.experiment_id
 }
 
-module "server_stack_me_south_1" { # Bahrain
-  count          = contains(local.target_regions_set, "me-south-1") ? 1 : 0
-  source         = "./modules/server"
-  providers      = { aws = aws.me-south-1 }
-  region         = "me-south-1"
-  instance_type  = var.instance_type
-  ssh_public_key = local.ssh_public_key_content
-  my_ip_for_ssh  = chomp(data.http.my_ip.response_body)
-  experiment_id  = var.experiment_id
-}
-
 module "server_stack_eu_south_2" { # Spain
   count          = contains(local.target_regions_set, "eu-south-2") ? 1 : 0
   source         = "./modules/server"
@@ -391,7 +380,6 @@ resource "null_resource" "manage_inventory" {
     module.server_stack_eu_west_3,
     module.server_stack_eu_west_2,
     module.server_stack_eu_west_1,
-    module.server_stack_me_south_1,
     module.server_stack_eu_south_2,
     module.server_stack_eu_south_1,
     module.server_stack_eu_north_1,
@@ -455,7 +443,6 @@ locals {
     contains(local.target_regions_set, "eu-west-3") ? { "eu-west-3" = module.server_stack_eu_west_3[0].public_ip } : {},
     contains(local.target_regions_set, "eu-west-2") ? { "eu-west-2" = module.server_stack_eu_west_2[0].public_ip } : {},
     contains(local.target_regions_set, "eu-west-1") ? { "eu-west-1" = module.server_stack_eu_west_1[0].public_ip } : {},
-    contains(local.target_regions_set, "me-south-1") ? { "me-south-1" = module.server_stack_me_south_1[0].public_ip } : {},
     contains(local.target_regions_set, "eu-south-2") ? { "eu-south-2" = module.server_stack_eu_south_2[0].public_ip } : {},
     contains(local.target_regions_set, "eu-south-1") ? { "eu-south-1" = module.server_stack_eu_south_1[0].public_ip } : {},
     contains(local.target_regions_set, "eu-north-1") ? { "eu-north-1" = module.server_stack_eu_north_1[0].public_ip } : {},

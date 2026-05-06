@@ -28,7 +28,6 @@ source "amazon-ebs" "kcensus-node" {
     "eu-west-3",
     "eu-west-2",
     "eu-west-1",
-    "me-south-1",
     "eu-south-2",
     "eu-south-1",
     "eu-north-1",
@@ -49,7 +48,8 @@ source "amazon-ebs" "kcensus-node" {
     "ap-southeast-5",
     "ap-northeast-3",
     "ap-southeast-2",
-    "ap-southeast-4"
+    "ap-southeast-4",
+    "ap-southeast-6",
   ]
 
   source_ami_filter {
@@ -59,12 +59,12 @@ source "amazon-ebs" "kcensus-node" {
       virtualization-type = "hvm"
     }
     most_recent = true
-    owners      = ["amazon"]
+    owners = ["amazon"]
   }
 }
 
 build {
-  name    = "kcensus-node-ami"
+  name = "kcensus-node-ami"
   sources = ["source.amazon-ebs.kcensus-node"]
 
   provisioner "shell" {
