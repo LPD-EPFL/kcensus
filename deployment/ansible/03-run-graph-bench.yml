@@ -18,7 +18,7 @@
       run_once: true
       ansible.builtin.shell:
         cmd: >
-          ./graph_bench --config config.toml --fault-count {{ num_faults }}
+          ./graph_bench --config config.toml --fault-count {{ num_faults }} -w 50 -s 200
         chdir: /home/ec2-user/kcensus_app
       register: graph_bench_result
 
