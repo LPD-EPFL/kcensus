@@ -53,7 +53,7 @@ fn main() {
                     .alive_replicas
                     .difference_with(&BitSet::from_iter(faults.iter().copied()));
                 // println!("faults: {:?}", topology.faults);
-                let graph = compute_propagation_graphs(topology, true, true);
+                let graph = compute_propagation_graphs(topology, true, args.min_warmup == 0, true);
 
                 let mp_leader = graph.multi_paxos_leaders[0];
                 let mp3p_leader = graph.multi_paxos_3p_leaders[0];

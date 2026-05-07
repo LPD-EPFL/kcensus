@@ -149,6 +149,7 @@ pub async fn run() -> io::Result<()> {
     let propagation_graphs = compute_propagation_graphs(
         topology.clone(),
         algo == Algo::KCensus,
+        algo == Algo::SwiftPaxos,
         matches!(algo, Algo::KCensus | Algo::WeakReplication),
     );
     println!("Computed propagation graphs in {:?}", start.elapsed());
