@@ -51,14 +51,14 @@ for p in range(2):
     else:
         plot.yaxis.set_minor_locator(MultipleLocator(50))
     plot.yaxis.set_major_formatter(ScalarFormatter())
-    plot.set_xlim(3, 19)
+    plot.set_xlim(3, 31)
 
     min_y = 1000
-    for experiment in ALGORITHMS:
+    for i, experiment in enumerate(ALGORITHMS):
         xs = []
         ys = []
         # percentiles_ys = ([], [])
-        for num_replicas in range(3, 19+2, 2):
+        for num_replicas in range(3, 31 + 2, 2):
             logs = parse(
                 algo=experiment,
                 config=config.replace("@", str(num_replicas)),
@@ -71,6 +71,8 @@ for p in range(2):
                 keys=keys,
                 skew=skew,
                 shards=shards,
+                retries=2,
+                conflicts="",
             )
 
             flattened_output = defaultdict(list)
@@ -98,12 +100,14 @@ for p in range(2):
             # percentiles_ys[1].append(percentiles[MOUSTACHES[1]])
             min_y = min(min_y, average)
 
-        plot.plot(xs, ys, **ALGORITHMS[experiment], markevery=(1, 3))
+        plot.plot(xs, ys, **ALGORITHMS[experiment], markevery=(1, 3), zorder=(2 - i / 100))
         # for ys in percentiles_ys:
         #     plot.plot(xs, ys, color=ALGORITHMS[experiment]['color'], linestyle="--")
 
     # if p == 1:
     #     plot.set_ylim(min_y, 1000)
+subplots[0].set_ylim(100, 300)
+subplots[1].set_ylim(0, 250)
 
 legends = [Line2D([0], [0], **algo) for algo in ALGORITHMS.values()]
 

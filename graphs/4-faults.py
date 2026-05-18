@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
-from itertools import combinations
-from collections import defaultdict
-
 import matplotlib as mpl
+from collections import defaultdict
+from itertools import combinations
 from matplotlib import patches
 from matplotlib.ticker import NullLocator, NullFormatter, MultipleLocator
 
@@ -10,15 +9,15 @@ from common import ALGORITHMS, args, serialized_args
 from logparser import *
 from prelude import lighten_color, plt
 
-algorithms = ["weak-replication", "kcensus", "epaxos", "multi-paxos-3p", "paxos"]
+algorithms = ["kcensus", "swift-paxos", "epaxos", "pando", "multi-paxos"]
 
 mpl.rcParams["hatch.linewidth"] = 0.5
 HATCHES = {
-    "weak-replication": "",
-    "kcensus": "xxxx",
+    "kcensus": "",
+    "swift-paxos": "xxxx",
     "epaxos": "\\\\\\\\\\",
-    "multi-paxos-3p": "----",
-    "paxos": "////",
+    "pando": "----",
+    "multi-paxos": "////",
 }
 
 fig, plots = plt.subplots(1, 4, figsize=(3.22, 0.95), tight_layout=True)
@@ -44,8 +43,8 @@ for num_faults, plot in enumerate(plots):
         )
     plot.xaxis.set_major_locator(NullLocator())
     plot.xaxis.set_minor_locator(NullLocator())
-    plot.yaxis.set_major_locator(MultipleLocator(20))
-    plot.yaxis.set_minor_locator(MultipleLocator(10))
+    plot.yaxis.set_major_locator(MultipleLocator(100))
+    plot.yaxis.set_minor_locator(MultipleLocator(50))
     plt.gca().xaxis.set_tick_params(pad=10)
     plot.set_axisbelow(True)
     plt.xticks(ha="center", va="center")
@@ -61,15 +60,8 @@ for num_faults, plot in enumerate(plots):
 
     for i, experiment in enumerate(algorithms):
         all_executed_by_replica = defaultdict(list)
-        nonvoting = {
-            "paxos": args.nonvoting_paxos,
-            "epaxos": args.nonvoting_epaxos,
-            "multi-paxos-3p": args.nonvoting_multi_paxos_3p,
-            "kcensus": args.nonvoting_kcensus,
-            "weak-replication": args.nonvoting_weak_replication,
-        }[experiment]
         num_replicas = int("".join([char for char in args.config if char.isdigit()]))
-        voting = [p for p in range(num_replicas) if p not in nonvoting]
+        voting = [p for p in range(num_replicas)]
         all_faults = [
             ",".join(map(str, comb))
             for comb in combinations(voting, num_faults)
@@ -87,10 +79,11 @@ for num_faults, plot in enumerate(plots):
                 skew=args.skew,
                 shards=args.shards,
                 faults=faults,
+                retries=3,
             )
             for pid, pid_data in logs["executed"].items():
                 all_executed_by_replica[pid].extend(pid_data)
-        
+
         all_executed = []
         for pid_data in all_executed_by_replica.values():
             all_executed.extend(pid_data)
@@ -109,9 +102,17 @@ for num_faults, plot in enumerate(plots):
             experiment,
             average,
             (min_replica_avg, max_replica_avg),
-            (percentiles[1], percentiles[5], percentiles[95], percentiles[99])
+            (percentiles[1], percentiles[5], percentiles[50], percentiles[95], percentiles[99])
         )
-        regions = ["eu-west-3", "eu-west-2", "eu-west-1", "eu-south-2", "eu-south-1", "eu-north-1", "eu-central-2", "eu-central-1" ]
+        regions = [
+            "ap-northeast-1",
+            "ap-south-1",
+            "ap-southeast-1",
+            "ca-central-1",
+            "eu-south-1",
+            "eu-west-1",
+            "us-west-2",
+        ]
         regions.sort()
         for pid, region in enumerate(regions):
             if pid in logs["executed"] and logs["executed"][pid]:
@@ -119,17 +120,14 @@ for num_faults, plot in enumerate(plots):
                     logs["executed"][pid], lambda log: duration_to_ms(log["latency"])
                 )
                 print(region, region_avg)
-        if experiment == "weak-replication":
-            wr_latency = average
-        else:
-            i = i - 1
-            xs.append(i)
-            labels.append(i)
-            ys.append(average)
-            delta_ys_top.append(max_replica_avg - average)
-            delta_ys_bottom.append(average - min_replica_avg)
-            colors.append(lighten_color(ALGORITHMS[experiment]["color"]))
-            hatches.append(HATCHES[experiment])
+        i = i - 1
+        xs.append(i)
+        labels.append(i)
+        ys.append(average)
+        delta_ys_top.append(max_replica_avg - average)
+        delta_ys_bottom.append(average - min_replica_avg)
+        colors.append(lighten_color(ALGORITHMS[experiment]["color"]))
+        hatches.append(HATCHES[experiment])
 
     plot.bar(labels, ys, lw=0, color=colors, hatch=hatches, edgecolor="black")
     plot.errorbar(
@@ -141,13 +139,13 @@ for num_faults, plot in enumerate(plots):
         solid_capstyle="projecting",
         capsize=1.5,
     )
-    wr_style=ALGORITHMS["weak-replication"]
+    # wr_style = ALGORITHMS["weak-replication"]
     # plot.axhline(y=wr_latency, linestyle="--", color=wr_style["color"], linewidth=1, zorder=2)
 
 max_y = max(plot.get_ylim()[1] for plot in plots)
 for plot in plots:
     # plot.set_ylim(0, max(max_y * 1.1, 80))
-    plot.set_ylim(0, 70)
+    plot.set_ylim(0, 450)
 fig.subplots_adjust(wspace=0, hspace=0)
 
 legends = [

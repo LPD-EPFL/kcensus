@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
-from matplotlib.ticker import MultipleLocator
+from matplotlib.lines import Line2D
+from matplotlib.ticker import MultipleLocator, NullFormatter
 
 from common import ALGORITHMS, args
 from logparser import *
@@ -19,69 +20,95 @@ keys = 10000
 skew = 0.0
 shards = 10000
 
-fig, subplots = plt.subplots(4, 1, figsize=(3.26, 2.7), tight_layout=True)
+fig, subplots = plt.subplots(4, 2, figsize=(3.26, 3.5), tight_layout=True, width_ratios=[4, 2])
 plt.tight_layout(pad=0, w_pad=0, h_pad=0)  # , rect=(0,0,.80,1))
 fig.subplots_adjust(
-    # wspace=0.22,
-    hspace=0.40,
+    wspace=0,
+    hspace=0.3,
     # top=.80,
 )
 
-for c in range(4):
+for c, row in enumerate(subplots):
     config = [
         "aws-ring-7",
         "aws-east-asia-7",
         "aws-europe-7",
         "aws-north-america-7",
-    ][c] if args.geo == 1 else [
-        "aws-ring-7.toml",
-        "aws-east-asia-7.toml",
-        "aws-europe-7.toml",
-        "aws-north-america-7.toml",
     ][c]
-    plot = subplots[c]
+    if args.geo != 1:
+        config += ".toml"
+
     title = [
         "Northern Hemisphere (NH) Deployments",
         "East Asia (EA) Deployments",
         "Europe (EU) Deployments",
         "North America (NA) Deployments",
     ][c]
-    plot.set_title(title, pad=0)
-    if c == 2:
-        plot.set_ylabel("                     Request Latency (ms)", labelpad=1)
-    plot.grid(axis="y", which="major", linestyle="--", linewidth="0.5")
-    plot.grid(axis="y", which="minor", linestyle=":", linewidth="0.25")
-    plot.tick_params(axis="both", which="major", pad=0.5)
-    plot.tick_params(axis="both", which="minor", pad=0.5)
-    plot.yaxis.set_major_locator(MultipleLocator([100, 40, 10, 40][c]))
-    plot.yaxis.set_minor_locator(MultipleLocator([50, 20, 5, 20][c]))
-    plot.xaxis.set_tick_params(pad=10)
-    plot.set_axisbelow(True)
+    row[0].set_title(title, pad=0)
+    row[1].set_title("Avg & P1/99", pad=0)
 
-    # # Min. effort average latency
-    # def compute_wr_latency():
-    #     logs = parse(
-    #         algo="weak-replication",
-    #         config=config,
-    #         writes=writes,
-    #         duration=duration,
-    #         ingress=ingress,
-    #         throughput=throughput,
-    #         speedup=speedup,
-    #         faults=faults,
-    #         keys=keys,
-    #         skew=skew,
-    #         shards=shards,
-    #     )
-    #     all_executed = []
-    #     for pid_data in logs["executed"].values():
-    #         all_executed.extend(pid_data)
-    #     return compute_average(all_executed, lambda log: duration_to_ms(log["latency"]))
-    #
-    #
-    # wr_latency = compute_wr_latency()
-    # wr_style = ALGORITHMS["weak-replication"]
-    # plot.axhline(y=wr_latency, linestyle="--", color=wr_style["color"], linewidth=1, zorder=2)
+    # Regions sorted by longitude
+    # with minor exceptions in NA/EU to keep close-by datacenters next to each other
+    regions = [[
+        'us-west-2',
+        'ca-central-1',
+        'eu-west-1',
+        'eu-south-1',
+        'ap-south-1',
+        'ap-southeast-1',
+        'ap-northeast-1',
+    ], [
+        "ap-southeast-5",
+        "ap-southeast-1",
+        "ap-east-1",
+        "ap-east-2",
+        "ap-northeast-2",
+        "ap-northeast-3",
+        "ap-northeast-1",
+    ], [
+        "eu-south-2",
+        "eu-west-1",
+        "eu-west-2",
+        "eu-west-3",
+        "eu-central-1",
+        "eu-central-2",
+        "eu-south-1",
+    ], [
+        "ca-west-1",
+        "us-west-2",
+        "us-west-1",
+        "mx-central-1",
+        "us-east-2",
+        "us-east-1",
+        "ca-central-1",
+    ]][c]
+    alpha_regions = regions.copy()
+    alpha_regions.sort()
+
+    ymax = [350, 100, 35, 100][c]
+    if c == 2:
+        row[0].set_ylabel("                        Request Latency (ms)", labelpad=1)
+    for plot in row:
+        plot.set_axisbelow(True)
+        # Both graphs, y-axis
+        plot.grid(axis="y", which="major", linestyle="--", linewidth="0.5")
+        plot.grid(axis="y", which="minor", linestyle=":", linewidth="0.25")
+        plot.yaxis.set_major_locator(MultipleLocator([100, 40, 10, 40][c]))
+        plot.yaxis.set_minor_locator(MultipleLocator([50, 20, 5, 20][c]))
+        plot.set_ylim(0, ymax)
+    # Left graph, x-axis
+    row[0].xaxis.set_major_locator(MultipleLocator(1))
+    # row[0].xaxis.set_major_formatter(NullFormatter())
+    row[0].tick_params(axis="x", which="major", bottom=False, labelbottom=False)
+    row[0].grid(axis="x", which="major", linestyle=":", linewidth="0.3")
+    # Left graph, y-axis
+    row[0].tick_params(axis="y", which="major", pad=0.5)
+    row[0].tick_params(axis="y", which="minor", pad=0.5)
+    # Right graph, x-axis
+    row[1].set_xticks([])
+    # Right graph, y-axis
+    row[1].tick_params(axis="y", which="both", left=False, labelleft=False)
+    row[1].tick_params(axis="y", which="both", left=False, labelleft=False)
 
     xs = []
     ys = []
@@ -124,82 +151,84 @@ for c in range(4):
             (min_replica_avg, max_replica_avg),
             (percentiles[1], percentiles[5], percentiles[50], percentiles[95], percentiles[99])
         )
-        if config == "aws-east-asia-7":
-            regions = [
-                "ap-east-1",
-                "ap-east-2",
-                "ap-northeast-1",
-                "ap-northeast-2",
-                "ap-northeast-3",
-                "ap-southeast-1",
-                "ap-southeast-5",
-            ]
-        elif config == "aws-europe-7":
-            regions = [
-                "eu-central-1",
-                "eu-central-2",
-                "eu-south-1",
-                "eu-south-2",
-                "eu-west-1",
-                "eu-west-2",
-                "eu-west-3",
-            ]
-        elif config == "aws-north-america-7":
-            regions = [
-                "ca-central-1",
-                "ca-west-1",
-                "mx-central-1",
-                "us-east-1",
-                "us-east-2",
-                "us-west-1",
-                "us-west-2",
-            ]
-        elif config == "aws-ring-7":
-            regions = [
-                "ap-northeast-1",
-                "ap-south-1",
-                "ap-southeast-1",
-                "ca-central-1",
-                "eu-south-1",
-                "eu-west-1",
-                "us-west-2",
-            ]
-        regions.sort()
-        for pid, region in enumerate(regions):
+        region_averages = {}
+        for pid, region in enumerate(alpha_regions):
             if pid in logs["executed"] and logs["executed"][pid]:
-                region_avg = compute_average(
-                    logs["executed"][pid], lambda log: duration_to_ms(log["latency"])
-                )
-                print(region, region_avg)
+                print(region, replica_averages[pid])
+                region_averages[region] = replica_averages[pid]
+
         xs.append(i)
         ys.append(average)
-        delta_ys_top.append(max_replica_avg - average)
-        delta_ys_bottom.append(average - min_replica_avg)
+        delta_ys_top.append(percentiles[99] - average)
+        delta_ys_bottom.append(average - percentiles[1])
 
         labels.append(
             ALGORITHMS[experiment]["label"].replace(" ", "\n").replace("-", "-\n")
         )
         colors.append(lighten_color(ALGORITHMS[experiment]["color"]))
-        # text_y = max_replica_avg  # average / 2
+
+        if i == 0:
+            row[0].set_xlim(-0.6, len(regions) - 1 + 0.4)
+            for r, region in enumerate(regions):
+                region = region.replace("north", "N")
+                region = region.replace("south", "S")
+                region = region.replace("east", "E")
+                region = region.replace("west", "W")
+                region = region.replace("central", "C")
+                region = region[:3] + region[3:].replace("-", "")
+                region = region.upper()
+                row[0].text(
+                    r - 0.15,
+                    ymax / 20,
+                    f"{region}",
+                    horizontalalignment="right",
+                    verticalalignment="bottom",
+                    rotation=90,
+                    size=6,
+                    color="#222",
+                    # backgroundcolor="white",
+                    bbox=dict(facecolor='white', alpha=0.5, linewidth=0, edgecolor=None, pad=0.1),
+                    zorder=100,
+                )
+
+        row[0].plot(
+            list(range(len(regions))),
+            [region_averages[region] for region in regions],
+            **ALGORITHMS[experiment],
+            markevery=1,
+            zorder=(2 - i / 100),
+        )
         # plot.text(
         #     i,
-        #     text_y,
-        #     f"{round(average)}\N{THIN SPACE}ms",
+        #     0,
+        #     f"{round(average) if average >= 99.95 else round(average, 1)}\N{THIN SPACE}ms",
         #     horizontalalignment="center",
         #     verticalalignment="bottom",
         # )
-        text_y = 0  # min(average / 2, min_replica_avg, wr_latency)
+
+    row[1].bar(list(range(len(ys))), ys, lw=0, color=colors, width=0.9)
+    for i, experiment in enumerate(ALGORITHMS):
+        style = ALGORITHMS[experiment]
+        row[1].plot(
+            [i],
+            [ymax * 0.185],
+            marker=style["marker"],
+            markersize=style["markersize"],
+            markeredgewidth=style["markeredgewidth"],
+            color="black",
+            linewidth=0,
+        )
+        average = ys[i]
         plot.text(
             i,
-            text_y,
-            f"{round(average) if average >= 99.95 else round(average, 1)}\N{THIN SPACE}ms",
+            0,
+            f"{round(average) if average >= 99.95 else round(average, 1)}",
             horizontalalignment="center",
             verticalalignment="bottom",
+            size=6,
         )
-
-    plot.bar(labels, ys, lw=0, color=colors)
-    plot.errorbar(
-        xs,
+    row[1].errorbar(
+        list(range(len(ys))),
         ys,
         [delta_ys_bottom, delta_ys_top],
         ls="none",
@@ -208,14 +237,22 @@ for c in range(4):
         capsize=2.5,
     )
 
-    if c != 3:
-        plot.set_xticks([])
+legends = [Line2D([0], [0], **ALGORITHMS[algo]) for algo in ALGORITHMS]
+fig.legend(
+    handles=legends,
+    bbox_to_anchor=(-0.012, 1.03, 0.99, 0.07),
+    loc="center",
+    edgecolor="black",
+    borderaxespad=0,
+    ncols=5,
+    borderpad=0.3,
+    labelspacing=0.1,
+    mode="expand",
+    handlelength=0.8,
+    handletextpad=0.5,
+)
 
-    # For the average text to fit
-    ymin, ymax = plot.get_ylim()
-    ymax = [350, 110, 35, 110][c]
-    plot.set_ylim(ymin, ymax)
-plt.xticks(ha="center", va="center")
-pdf_path = f"plots/1-bars.pdf"
+# plt.xticks(ha="center", va="center", rotation=45)
+pdf_path = f"plots/1-bars-new.pdf"
 plt.savefig(pdf_path, format="pdf", bbox_inches="tight", pad_inches=0.01)
 print(pdf_path)

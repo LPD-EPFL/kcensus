@@ -29,14 +29,18 @@ function activate_env() {
 function plot-1() {
   (
     cd graphs &&
-    python3 1-bars-merged.py -g 1 > "./plots/1-pure-latency.txt"
+    python3 0-intro.py -g 1 > "./plots/0-intro.txt" &&
+    echo 'finished plot 1/2.' &&
+    python3 1-bars-merged.py -g 1 > "./plots/1-pure-latency.txt" &&
+    echo 'finished plot 2/2.'
   )
 }
 
 function plot-2() {
   (
     cd graphs &&
-    python3 2-cdfs-merged.py -g 1 > "./plots/2-load-latency.txt"
+    python3 2-cdfs-merged.py -g 1 > "./plots/2-load-latency.txt" &&
+    echo 'finished plot.'
   )
 }
 
@@ -44,12 +48,13 @@ function plot-3() {
   local requests=10
   (
     cd graphs &&
-    python3 3-scalability-merged.py -g 1 > "./plots/3-scalability.txt"
+    python3 3-scalability-merged.py -g 1 > "./plots/3-scalability.txt" &&
+    echo 'finished plot.'
   )
 }
 
 function plot-4() {
-  local config=aws-europe-8
+  local config=aws-ring-7
   local writes=1
   local duration="10s"
   local throughput=1000
@@ -57,14 +62,16 @@ function plot-4() {
   local keys=10000
   (
     cd graphs &&
-    python3 4-faults.py -c "$config" --nonvoting_paxos "2" --nonvoting_epaxos "2" --nonvoting_kcensus "4" --nonvoting_multi_paxos_3p "4" --nonvoting_weak_replication "4" -w "$writes" --duration "$duration" -i exponential -t $throughput -s "$SPEEDUP" --shards $shards --keys $keys -g 1 > "./plots/4-faults.txt"
+    python3 4-faults.py -c "$config" -w "$writes" --duration "$duration" -i exponential -t $throughput -s "$SPEEDUP" --shards $shards --keys $keys -g 1 > "./plots/4-faults.txt" &&
+    echo 'finished plot.'
   )
 }
 
 function plot-5() {
   (
     cd graphs &&
-    python3 5-propagation.py -g 1 > "./plots/5-propagation.txt"
+    python3 5-propagation.py -g 1 > "./plots/5-propagation.txt" &&
+    echo 'finished plot.'
   )
 }
 
@@ -79,7 +86,9 @@ function plot-6() {
   (
     cd graphs &&
     python3 6-network.py -c aws-random/@.toml -w "$writes" --duration "$duration" -i exponential -t $throughput -s "$speedup" --shards $shards --keys $keys --skew $skew -g 1 > "./plots/6-network.txt" &&
-    python3 7-cpu-mem.py -c aws-random/@.toml -w "$writes" --duration "$duration" -i exponential -t $throughput -s "$speedup" --shards $shards --keys $keys --skew $skew -g 1 > "./plots/7-cpu-mem.txt"
+    echo 'finished plot 1/2.' &&
+    python3 7-cpu-mem.py -c aws-random/@.toml -w "$writes" --duration "$duration" -i exponential -t $throughput -s "$speedup" --shards $shards --keys $keys --skew $skew -g 1 > "./plots/7-cpu-mem.txt" &&
+    echo 'finished plot 2/2.'
   )
 }
 

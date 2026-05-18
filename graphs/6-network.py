@@ -10,6 +10,8 @@ fig, plots = plt.subplots(1, 2, figsize=(3.2, 0.95), tight_layout=True)
 plt.tight_layout(pad=0, w_pad=0, h_pad=0)  # , rect=(0,0,.80,1))
 plots[0].set_title("Traffic", pad=0)
 plots[0].set_ylabel("Bytes per App Req.", labelpad=1)
+plots[0].yaxis.set_major_locator(MultipleLocator(2000))
+plots[0].yaxis.set_minor_locator(MultipleLocator(1000))
 # plots[0].set_yscale("log")
 plots[0].yaxis.set_major_formatter(k_formatter)
 plots[1].set_title("Communication", pad=0)
@@ -26,15 +28,14 @@ for plot in plots:
     plot.tick_params(axis="both", which="major", pad=0.5)
     plot.tick_params(axis="both", which="minor", pad=0.5)
     plot.xaxis.set_major_locator(MultipleLocator(4, 3))
-    # plot.xaxis.set_minor_locator(MultipleLocator(3, 3))
-    plot.set_xlim(3, 19)
+    plot.set_xlim(3, 31)
 
-for experiment in ALGORITHMS:
+for i, experiment in enumerate(ALGORITHMS):
     if experiment == "weak-replication": continue
     xs = []
     ys_bytes = []
     ys_msgs = []
-    for num_replicas in range(3, 19+2, 2):
+    for num_replicas in range(3, 31 + 2, 2):
         config = args.config.replace("@", str(num_replicas))
         logs = parse(
             algo=experiment,
@@ -47,10 +48,12 @@ for experiment in ALGORITHMS:
             speedup=args.speedup,
             keys=args.keys,
             skew=args.skew,
-            shards=args.shards
+            shards=args.shards,
+            retries=None,
+            conflicts="",
         )
         assert (
-            len(logs["network-done"]) == num_replicas
+                len(logs["network-done"]) == num_replicas
         ), f'Some replicas ({num_replicas - len(logs["network-done"])} out of {num_replicas}) did not report networking stats'
 
         flattened_output = defaultdict(list)
@@ -66,8 +69,10 @@ for experiment in ALGORITHMS:
         ys_bytes.append(total_bytes / total_requests)
         ys_msgs.append(total_msgs / total_requests)
         print(experiment, num_replicas, ys_bytes[-1], ys_msgs[-1])
-    plots[0].plot(xs, ys_bytes, **ALGORITHMS[experiment], markevery=(1, 3))
-    plots[1].plot(xs, ys_msgs, **ALGORITHMS[experiment], markevery=(1, 3))
+    plots[0].plot(xs, ys_bytes, **ALGORITHMS[experiment], markevery=(1, 3), zorder=(2 - i / 100))
+    plots[1].plot(xs, ys_msgs, **ALGORITHMS[experiment], markevery=(1, 3), zorder=(2 - i / 100))
+for plot in plots:
+    plot.set_ylim(0, None)
 
 fig.subplots_adjust(wspace=0.4, hspace=0)
 
