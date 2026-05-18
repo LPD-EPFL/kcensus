@@ -1,6 +1,6 @@
-from math import sqrt
 import matplotlib as mpl
 import matplotlib.pyplot as plt
+from math import sqrt
 from os.path import expanduser
 
 mpl.rcParams["font.family"] = "Linux Libertine O"
@@ -26,13 +26,8 @@ plt.rc("ytick", labelsize=SMALL_SIZE)  # fontsize of the tick labels
 
 def lighten_color(color):
     """
-    Lightens the given color by multiplying (1-luminosity) by the given amount.
+    Lightens the given color.
     Input can be matplotlib color string, hex string, or RGB tuple.
-
-    Examples:
-    >> lighten_color('g', 0.3)
-    >> lighten_color('#F034A3', 0.6)
-    >> lighten_color((.3,.55,.1), 0.5)
     """
     import colorsys
 
