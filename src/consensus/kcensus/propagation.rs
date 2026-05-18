@@ -504,7 +504,8 @@ pub fn compute_propagation_graphs(
             factorial(n) / (factorial(k) * factorial(n - k))
         }
         // Make sure the amount of combinations doesn't explode
-        while n_choose_k(swift_leader_prio.len(), maj_quorum) > 10u64.pow(6) as f64 {
+        // TODO: Something smarter would be nice (branch & bound?)
+        while n_choose_k(swift_leader_prio.len(), maj_quorum) > 10u64.pow(5) as f64 {
             swift_leader_prio.remove(swift_leader_prio.len() - 1);
         }
 
