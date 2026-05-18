@@ -108,11 +108,15 @@ function run() {
   local keys="${10:-${KEYS}}"
   local skew="${11:-${SKEW}}"
   local shards="${12:-${SHARDS}}"
+  local conflicts="${13:-}"
 
   local nonvoting="$(get_nonvoting "$configName" "$algo")"
 
   local inventoryFile="inventory-${expId}.ini"
   local title="c=${configName}/a=${algo}/w=${writes}/d=${duration}/i=${ingress}/t=${throughput}/s=${SPEEDUP}/f=${faults}/k=${keys}/skew=${skew}/shards=${shards}/no-conflicts/retry=${retry}"
+  if [ "$conflicts" != "" ]; then
+      title="c=${configName}/a=${algo}/w=${writes}/d=${duration}/i=${ingress}/t=${throughput}/s=${SPEEDUP}/f=${faults}/k=${keys}/skew=${skew}/shards=${shards}/conflicts=${conflicts}/retry=${retry}"
+  fi
   local resultPath="${ABSOLUTE_BASE_LOG_DIR}/${title}"
   mkdir -p "${resultPath}"
 
@@ -135,6 +139,7 @@ function run() {
       -e "skew=${skew}" \
       -e "shards=${shards}" \
       -e "nonvoting=${nonvoting}" \
+      -e "conflicts=${conflicts}" \
       -e "result_path=${resultPath}"; do
       echo "Experiment failed, retrying $algo on $configName (faults=$faults)..."
     done
@@ -288,7 +293,12 @@ function exp-2() {
     for writes in 1; do
       for skew in 0.5 1 2; do # 0 will have run before
         for algo in "${ALGOS[@]}"; do
-          run "$EXPERIMENT_ID" "$retry" "$configName" "$algo" "$writes" "$DURATION" "exponential" "$THROUGHPUT" "" "$KEYS" "$skew"
+          if [[ "$algo" == "kcensus" ]]; then
+            # Run with conflicts
+            run "$EXPERIMENT_ID" "$retry" "$configName" "$algo" "$writes" "$DURATION" "exponential" "$THROUGHPUT" "" "$KEYS" "$skew" "$KEYS" "true"
+          fi
+          # Run without conflicts
+          run "$EXPERIMENT_ID" "$retry" "$configName" "$algo" "$writes" "$DURATION" "exponential" "$THROUGHPUT" "" "$KEYS" "$skew" "$KEYS" "false"
         done
       done
     done

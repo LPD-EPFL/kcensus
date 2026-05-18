@@ -15,6 +15,7 @@
     skew: "0"
     shards: "100"
     nonvoting: ""
+    conflicts: ""
     result_path: "./results_default"
 
   tasks:
@@ -39,6 +40,7 @@
           --shards "{{ shards }}"
           {{ "-v " + nonvoting if nonvoting else "" }}
           {{ "-f " + faults if faults else "" }}
+          {{ "--conflicts=" + conflicts if conflicts else "" }}
         chdir: /home/ec2-user/kcensus_app
       register: job_result
 
