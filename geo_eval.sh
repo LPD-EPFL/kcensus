@@ -168,7 +168,7 @@ TO="$4"
 VOTERS=list(range(SERVERS))
 for non_voter in NON_VOTERS:
   VOTERS.remove(non_voter)
-MINORITY=len(VOTERS) // 2
+MINORITY=(len(VOTERS) - 1) // 2
 done = False
 should_yield = FROM == ''
 for r in range(1, MINORITY + 1):
