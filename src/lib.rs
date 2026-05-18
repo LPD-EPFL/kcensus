@@ -7,6 +7,7 @@ use crate::topology::Topology;
 use bincode::Options;
 use chrono::prelude::*;
 use clap::{arg, Parser};
+use cpu_time::ProcessTime;
 use env_logger::fmt::style;
 use log::debug;
 use std::collections::VecDeque;
@@ -218,6 +219,7 @@ pub async fn run() -> io::Result<()> {
     };
 
     let start = Instant::now();
+    let process_start = ProcessTime::try_now().expect("Getting process time failed");
 
     let expected_latency = match algo {
         Algo::KCensus => {
@@ -529,7 +531,13 @@ pub async fn run() -> io::Result<()> {
             rtt
         }
     };
-
+    let process_runtime = process_start
+        .try_elapsed()
+        .expect("Getting process time failed");
+    println!(
+        "[log=time] process time (in seconds) | {{\"user\": {}}}",
+        process_runtime.as_secs_f64()
+    );
     println!("Expected local latency (no-contention): {expected_latency:?}",);
     println!("Total duration: {:?}", start.elapsed());
     println!("Region: {}", topology.regions[my_pid]);
