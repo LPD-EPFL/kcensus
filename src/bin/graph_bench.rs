@@ -83,17 +83,20 @@ fn main() {
                     1_000.0 * durations.iter().sum::<Duration>().as_secs_f64()
                         / durations.len() as f64
                 };
-                info!(
-                    "Averages:  min-effort: {:.2}ms, kcensus: {:.2}ms, swift_paxos: {:.2}ms, pando: {:.2}ms, epaxos: {:.2}ms, multi-paxos: {:.2}ms, multi-paxos-3p: {:.2}ms, paxos: {:.2}ms",
-                    avg_millis(&graph.min_effort_latencies),
-                    avg_millis(&graph.kcensus_latencies),
-                    avg_millis(&graph.swift_paxos_latencies),
-                    avg_millis(&graph.pando_latencies),
-                    avg_millis(&graph.epaxos_latencies),
-                    avg_millis(&graph.multi_paxos_latencies[mp_leader]),
-                    avg_millis(&graph.multi_paxos_3p_latencies[mp_leader]),
-                    avg_millis(&graph.paxos_latencies),
-                );
+                if args.min_warmup == 0 && args.min_samples == 1 {
+                    info!("Faults: {faults:?}");
+                    info!(
+                        "Averages:  min-effort: {:.2}ms, kcensus: {:.2}ms, swift_paxos: {:.2}ms, pando: {:.2}ms, epaxos: {:.2}ms, multi-paxos: {:.2}ms, multi-paxos-3p: {:.2}ms, paxos: {:.2}ms",
+                        avg_millis(&graph.min_effort_latencies),
+                        avg_millis(&graph.kcensus_latencies),
+                        avg_millis(&graph.swift_paxos_latencies),
+                        avg_millis(&graph.pando_latencies),
+                        avg_millis(&graph.epaxos_latencies),
+                        avg_millis(&graph.multi_paxos_latencies[mp_leader]),
+                        avg_millis(&graph.multi_paxos_3p_latencies[mp_leader]),
+                        avg_millis(&graph.paxos_latencies),
+                    );
+                }
                 count += 1;
                 if !next_combination(&mut faults, nb_processes) {
                     break;
