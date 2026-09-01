@@ -4,10 +4,14 @@ CASSANDRA_BASE_PORT="9042"
 BASE_LOG_DIR="./logs"
 REPLICATED_ALGOS=(kcensus "weak-replication" "swift-paxos" pando epaxos "multi-paxos" paxos)
 ALGOS=(no-replication ${REPLICATED_ALGOS[@]})
-CONFIGS=(aws-europe-7-alt.toml aws-north-america-7.toml aws-world-ring-13.toml) # aws-europe-7.toml aws-world-ring-9.toml
+CONFIGS=(aws-europe-8.toml aws-north-america-7.toml aws-east-asia-9.toml)
 YCSB=(1 0.5 0.05)
-REQUESTS=100
+DURATION=10s
+THROUGHPUT=1000 # Total req/s, split evenly between the proposers.
 SPEEDUP=1
+KEYS=10000
+SKEW=0
+SHARDS=$KEYS
 
 if ! command -v "/usr/bin/time" >/dev/null 2>&1
 then
@@ -49,23 +53,34 @@ function stop_cassandra() {
   docker ps -a -q --filter="name=cassandra" | xargs docker rm -f
 }
 
+# run <config> <algo> <writes> <duration> <ingress> <throughput> [faults] [keys] [skew] [shards]
+#
+# <throughput> is the total target req/s: like geo_eval.sh, it is what the title records,
+# while each proposer is started with its own share of it. The log directory has to match
+# the path graphs/logparser.py rebuilds, so any parameter added here has to be added there.
 function run() {
   local CONFIG="$1"
   local ALGO="$2"
   local WRITES="$3"
-  local REQUESTS="$4"
+  local DURATION="$4"
   local INGRESS="$5"
   local THROUGHPUT="$6"
-  local FAULTS="$7"
-  local TITLE="c=$CONFIG/a=$ALGO/w=$WRITES/r=$REQUESTS/i=$INGRESS/t=$THROUGHPUT/s=$SPEEDUP/f=$FAULTS/no-conflicts"
+  local FAULTS="${7:-}"
+  local KEYS="${8:-${KEYS}}"
+  local SKEW="${9:-${SKEW}}"
+  local SHARDS="${10:-${SHARDS}}"
+
+  local TITLE="c=$CONFIG/a=$ALGO/w=$WRITES/d=$DURATION/i=$INGRESS/t=$THROUGHPUT/s=$SPEEDUP/f=$FAULTS/k=$KEYS/skew=$SKEW/shards=$SHARDS"
   local LOG_DIR="$BASE_LOG_DIR/$TITLE/"
   mkdir -p "$LOG_DIR"
   killall kcensus 2>/dev/null
   local NB=$(digits "$CONFIG")
+  local PER_PROPOSER_THROUGHPUT=$((THROUGHPUT / NB))
 #  if [[ "${CASSANDRA,,}" != "false" && "$CASSANDRA" != "0" ]]; then
 #    start_cassandra "$NB"
 #  fi
   echo "Starting $TITLE"
+  cargo build -r 2>"$LOG_DIR/build.stderr" || return 1
   for pid in $(seq 0 $((NB - 1))); do
     local CASSANDRA_ARG=""
 #    if [[ "${CASSANDRA,,}" != "false" && "$CASSANDRA" != "0" ]]; then
@@ -75,11 +90,19 @@ function run() {
     if [[ "$FAULTS" != "" ]]; then
        FAULTS_ARG="-f $FAULTS"
     fi
-    cargo build -r 2>"$LOG_DIR/$pid.stderr"
     local time_format='[log=time] Memory (KB): %M, System (s): %S User (s): %U | {"memory": %M, "system": %S, "user": %U}'
-    (/usr/bin/time -f "$time_format" target/release/kcensus -p "$pid" --config "configs/$CONFIG" $CASSANDRA_ARG -a "$ALGO" -w "$WRITES" -r "$REQUESTS" -i "$INGRESS" -t "$THROUGHPUT" -s "$SPEEDUP" $FAULTS_ARG)>"$LOG_DIR/$pid.stdout" 2>>"$LOG_DIR/$pid.stderr" &
+    (/usr/bin/time -f "$time_format" target/release/kcensus -p "$pid" --config "configs/$CONFIG" $CASSANDRA_ARG -a "$ALGO" -w "$WRITES" --duration "$DURATION" -i "$INGRESS" -t "$PER_PROPOSER_THROUGHPUT" -s "$SPEEDUP" -k "$KEYS" --skew "$SKEW" --shards "$SHARDS" $FAULTS_ARG)>"$LOG_DIR/$pid.stdout" 2>>"$LOG_DIR/$pid.stderr" &
   done
   wait
+}
+
+# Arguments identifying a run for the plotting scripts, mirroring `run`'s title.
+function plot_args() {
+  local CONFIG="$1"
+  local WRITES="$2"
+  local THROUGHPUT="${3:-${THROUGHPUT}}"
+  local SKEW="${4:-${SKEW}}"
+  echo -c "$CONFIG" -w "$WRITES" -d "$DURATION" -i exponential -t "$THROUGHPUT" -s "$SPEEDUP" -k "$KEYS" --skew "$SKEW" --shards "$SHARDS"
 }
 
 # No load, pure latency
@@ -87,32 +110,31 @@ function exp-1() {
   for writes in "${YCSB[@]}"; do
     for config in "${CONFIGS[@]}"; do
       for algo in "${ALGOS[@]}"; do
-        run "$config" "$algo" "$writes" "$REQUESTS" round-robin 0
+        run "$config" "$algo" "$writes" "$DURATION" exponential "$THROUGHPUT"
       done
       (
         cd graphs &&
         source env.sh >/dev/null 2>&1 &&
-        python3 1-bars.py -c "$config" -w "$writes" -r "$REQUESTS" -i round-robin -t 0 -s "$SPEEDUP" &&
-        python3 2-cdfs.py -c "$config" -w "$writes" -r "$REQUESTS" -i round-robin -t 0 -s "$SPEEDUP"
+        python3 1-bars.py $(plot_args "$config" "$writes") &&
+        python3 2-cdfs.py $(plot_args "$config" "$writes")
       )
     done
   done
 }
 
-# Latency under load
+# Latency under contention
 function exp-2() {
-  local LOADS=(0.05 0.1) # req/s per client
   for writes in "${YCSB[@]}"; do
-    for config in aws-world-ring-13.toml; do # "${CONFIGS[@]}"; do
-      for load in "${LOADS[@]}"; do
+    for config in aws-europe-8.toml; do # "${CONFIGS[@]}"; do
+      for skew in 0.5 1 2; do # 0 has run as part of exp-1
         for algo in "${ALGOS[@]}"; do
-          run "$config" "$algo" "$writes" "$REQUESTS" exponential "$load"
+          run "$config" "$algo" "$writes" "$DURATION" exponential "$THROUGHPUT" "" "$KEYS" "$skew"
         done
         (
           cd graphs &&
           source env.sh >/dev/null 2>&1 &&
-          python3 1-bars.py -c "$config" -w "$writes" -r "$REQUESTS" -i exponential -t "$load" -s "$SPEEDUP" &&
-          python3 2-cdfs.py -c "$config" -w "$writes" -r "$REQUESTS" -i exponential -t "$load" -s "$SPEEDUP"
+          python3 1-bars.py $(plot_args "$config" "$writes" "$THROUGHPUT" "$skew") &&
+          python3 2-cdfs.py $(plot_args "$config" "$writes" "$THROUGHPUT" "$skew")
         )
       done
     done
@@ -121,18 +143,17 @@ function exp-2() {
 
 # Scalability
 function exp-3() {
-  local requests=10
   for configs in aws-random aws-from-paris; do
     for writes in "${YCSB[@]}"; do
       for num_replicas in $(seq 3 2 31); do
         for algo in "${ALGOS[@]}"; do
-          run "${configs}/${num_replicas}.toml" "$algo" "$writes" "$requests" round-robin 0
+          run "${configs}/${num_replicas}.toml" "$algo" "$writes" "$DURATION" exponential "$THROUGHPUT"
         done
       done
       (
         cd graphs &&
         source env.sh >/dev/null 2>&1 &&
-        python3 3-scalability.py -c "${configs}/@.toml" -w "$writes" -r "$requests" -i round-robin -t 0 -s "$SPEEDUP"
+        python3 3-scalability.py $(plot_args "${configs}/@.toml" "$writes")
       )
     done
   done
@@ -160,18 +181,17 @@ END
 
 # Faults
 function exp-4() {
-  local config=aws-world-ring-9.toml
+  local config=aws-europe-8.toml
   local writes=1
-  local requests=10
   for algo in "${REPLICATED_ALGOS[@]}"; do
     for faults in "" $(all_faults "$(digits "$config")"); do
-      run "$config" "$algo" $writes $requests round-robin 0 "$faults"
+      run "$config" "$algo" $writes "$DURATION" exponential "$THROUGHPUT" "$faults"
     done
   done
   (
     cd graphs &&
     source env.sh >/dev/null 2>&1 &&
-    python3 4-faults.py -c "$config" -w "$writes" -r "$requests" -i round-robin -t 0 -s "$SPEEDUP"
+    python3 4-faults.py $(plot_args "$config" "$writes")
   )
 }
 
@@ -201,19 +221,18 @@ function exp-5() {
 # Resources
 function exp-6() {
   SPEEDUP=10000000 # latency precision does not matter
-  local requests=1000
   for configs in aws-random aws-from-paris; do
     for writes in "${YCSB[@]}"; do
       for num_replicas in $(seq 3 2 31); do
         for algo in "${ALGOS[@]}"; do
-          run "${configs}/${num_replicas}.toml" "$algo" "$writes" "$((requests / num_replicas))" round-robin 0
+          run "${configs}/${num_replicas}.toml" "$algo" "$writes" "$DURATION" exponential "$THROUGHPUT"
         done
       done
       (
         cd graphs &&
         source env.sh >/dev/null 2>&1 &&
-        python3 6-network.py -c "${configs}/@.toml" -w "$writes" -r "$requests" -i round-robin -t 0 -s "$SPEEDUP" &&
-        python3 7-cpu-mem.py -c "${configs}/@.toml" -w "$writes" -r "$requests" -i round-robin -t 0 -s "$SPEEDUP"
+        python3 6-network.py $(plot_args "${configs}/@.toml" "$writes") &&
+        python3 7-cpu-mem.py $(plot_args "${configs}/@.toml" "$writes")
       )
     done
   done
@@ -227,9 +246,6 @@ exp-5
 exp-6
 
 #python3 1-bars-merged.py
-#python3 4-faults.py -c=aws-world-ring-9.toml -w=1 -r=10 -i=round-robin -t=0
 #python3 2-cdfs-merged.py
 #python3 3-scalability-merged.py
 #python3 5-propagation.py
-#python3 6-network.py -r 1000 -c aws-random/@.toml -s 10000000 -w 1 -t=0
-#python3 7-cpu-mem.py -r 1000 -c aws-random/@.toml -s 10000000 -w 1 -t=0
