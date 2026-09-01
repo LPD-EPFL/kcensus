@@ -558,10 +558,14 @@ where
     #[inline]
     fn ready_to_process(&self, msg: &ConsensusMessage) -> bool {
         if msg.get_slot() == Some(self.slot) {
-            assert_eq!(
-                msg.last_v, self.last_v,
+            assert!(
+                msg.last_v.is_none() || msg.last_v == self.last_v,
                 "last_v should be the same in shard {} for slot {}, but msg indicates {:?} while local state is {:?}. msg:{:?}",
-                self.sinks.shard_id, self.slot, msg.last_v, self.last_v, msg
+                self.sinks.shard_id,
+                self.slot,
+                msg.last_v,
+                self.last_v,
+                msg
             );
             let value_ready = match msg.get_v() {
                 None => true,
@@ -607,7 +611,7 @@ where
                     },
                     None,
                     msg.src,
-                    self.last_v,
+                    None,
                 )
                 .await?;
             return Ok(None);
