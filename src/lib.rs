@@ -70,6 +70,13 @@ struct Args {
     shards: Option<usize>,
     #[arg(
         long,
+        value_name = "SHARD_POOL_SIZE",
+        help = "Number of preallocated physical shards, reused by the active logical shards. \
+                Defaults to min(shard count, 64)."
+    )]
+    shard_pool: Option<usize>,
+    #[arg(
+        long,
         help = "Avoids conflicts by partitioning the keyspace between requesters"
     )]
     conflicts: Option<bool>,
@@ -132,6 +139,9 @@ pub async fn run() -> io::Result<()> {
             .all(|(address, _)| address == "localhost" || address == "127.0.0.1")
     });
     let shards = args.shards.unwrap_or(args.keys);
+    let shard_pool = args
+        .shard_pool
+        .unwrap_or_else(|| shards.min(consensus::DEFAULT_SHARD_POOL_SIZE));
 
     let epaxos_quorum = (topology.nb_replicas * 3) / 4;
     let algo = match args.algo {
@@ -242,6 +252,7 @@ pub async fn run() -> io::Result<()> {
                 leader_prio,
                 propagation_graphs,
                 shards,
+                shard_pool,
             );
             let consensus = consensus_obj.run(
                 delayed_msg_rx,
@@ -264,6 +275,7 @@ pub async fn run() -> io::Result<()> {
                 Some(committers),
                 PFModeSetting::Paxos,
                 shards,
+                shard_pool,
             );
             let consensus = consensus_obj.run(
                 delayed_msg_rx,
@@ -288,6 +300,7 @@ pub async fn run() -> io::Result<()> {
                     delegates: Arc::new(propagation_graphs.pando_delegates.clone()),
                 },
                 shards,
+                shard_pool,
             );
             let consensus = consensus_obj.run(
                 delayed_msg_rx,
@@ -310,6 +323,7 @@ pub async fn run() -> io::Result<()> {
                 Some(committers),
                 PFModeSetting::EPaxos,
                 shards,
+                shard_pool,
             );
             let consensus = consensus_obj.run(
                 delayed_msg_rx,
@@ -331,6 +345,7 @@ pub async fn run() -> io::Result<()> {
                     quorum: Arc::new(propagation_graphs.swift_paxos_fixed_fast_quorum.clone()),
                 },
                 shards,
+                shard_pool,
             );
             let consensus = consensus_obj.run(
                 delayed_msg_rx,
@@ -381,6 +396,7 @@ pub async fn run() -> io::Result<()> {
                     PFModeSetting::MultiPaxos
                 },
                 shards,
+                shard_pool,
             );
             let consensus = consensus_obj.run(
                 delayed_msg_rx,

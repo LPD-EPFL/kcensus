@@ -88,6 +88,24 @@ impl PaxosFamilyRoundState {
         self.swift_leader_answer = None;
     }
 
+    /// True if no trace of a round is left, i.e. this is the state `new` and
+    /// `full_clear` (followed by `goto_round(starting_round)`) produce.
+    pub fn is_clear(&self, starting_round: Option<PaxosRound>) -> bool {
+        self.round == starting_round
+            && self.max_rv.is_none()
+            && self.prepared == 0
+            && self.accepted == 0
+            && self.prepared_set.is_empty()
+            && self.accepted_set.is_empty()
+            && self.fast_answers == 0
+            && self.fast_preaccepted == 0
+            && self.fast_answer_set.is_empty()
+            && self.fast_proposer_to_v.is_empty()
+            && self.swift_leader_answer.is_none()
+            && self.epaxos_proposer_scores.iter().all(|score| *score == 2)
+            && self._swift_proposer_scores.iter().all(|score| *score == 0)
+    }
+
     #[inline]
     pub fn get_rv(&self) -> Option<RoundV> {
         self.max_rv
