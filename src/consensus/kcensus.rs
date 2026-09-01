@@ -9,7 +9,7 @@ use crate::consensus::{Consensus, ConsensusShard, ConsensusShardTrait};
 use crate::multi_sink::{MultiSink, ShardMultiSink};
 use crate::topology::Topology;
 use log::{debug, info, trace};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fmt::{Debug, Formatter};
 use std::io;
 use std::sync::Arc;
@@ -53,6 +53,9 @@ impl KCensusShard {
             slot: 0,
             queued_commands: HashMap::with_capacity(process_count),
             last_v: None,
+
+            queued_messages: VecDeque::with_capacity(process_count),
+            my_queued_commands: VecDeque::new(),
 
             read_tracker: ReadTracker::new(majority),
 
@@ -306,6 +309,11 @@ impl ConsensusShardTrait for KCensusShard {
     }
 
     #[inline]
+    fn round_state_is_clear(&self) -> bool {
+        self.round_state.is_clear()
+    }
+
+    #[inline]
     fn get_my_v(&self) -> Option<usize> {
         self.round_state.get_my_v()
     }
@@ -473,26 +481,33 @@ impl KCensus {
         leader_priority: Vec<usize>,
         propagation_graphs: PropagationGraphs,
         shard_count: usize,
+        shard_pool_size: usize,
     ) -> Self {
+        let process_count = topology.nb_processes;
         let sinks = Arc::new(Mutex::new(sinks));
         let propagation_graphs = Arc::new(propagation_graphs);
-        Self {
-            process_count: topology.nb_processes,
-            shards: (0..shard_count)
-                .map(|shard_id| {
-                    KCensusShard::new(
-                        topology,
-                        my_pid,
-                        ShardMultiSink {
-                            shard_id,
-                            multi_sink: sinks.clone(),
-                        },
-                        leader_priority.clone(),
-                        propagation_graphs.clone(),
-                    )
-                })
-                .collect(),
+        let topology = topology.clone();
+        let shard_sinks = sinks.clone();
+        let new_shard = Box::new(move || {
+            KCensusShard::new(
+                &topology,
+                my_pid,
+                ShardMultiSink {
+                    // Placeholder: assigned when the shard is taken out of the pool.
+                    shard_id: usize::MAX,
+                    multi_sink: shard_sinks.clone(),
+                },
+                leader_priority.clone(),
+                propagation_graphs.clone(),
+            )
+        });
+        Consensus::with_pool(
+            process_count,
+            my_pid,
+            shard_count,
+            shard_pool_size,
             sinks,
-        }
+            new_shard,
+        )
     }
 }

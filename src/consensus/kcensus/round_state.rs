@@ -58,6 +58,19 @@ impl KCensusRoundState {
         self.paxos_accept_count = 0;
     }
 
+    /// True if no trace of a round is left, i.e. this is the state `new` and `clear` produce.
+    pub fn is_clear(&self) -> bool {
+        self.proposers.is_empty()
+            && self.leaders.is_empty()
+            && self.received_msgs.is_empty()
+            && self.paxos_accept_count == 0
+            && self
+                .propagation_states
+                .iter()
+                .all(|state| *state == Duration::ZERO)
+            && self.node_states.iter().all(|state| state.is_clear())
+    }
+
     #[inline]
     pub fn get_my_v(&self) -> Option<usize> {
         my_state!(self).get_v()

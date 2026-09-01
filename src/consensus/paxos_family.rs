@@ -13,7 +13,7 @@ use crate::topology::Topology;
 use bit_set::BitSet;
 use log::{debug, info, trace};
 use message::RoundV;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fmt::{Debug, Formatter};
 use std::io;
 use std::sync::Arc;
@@ -74,6 +74,9 @@ impl PaxosFamilyShard {
             slot: 0,
             queued_commands: HashMap::with_capacity(process_count),
             last_v: None,
+
+            queued_messages: VecDeque::with_capacity(process_count),
+            my_queued_commands: VecDeque::new(),
 
             read_tracker: ReadTracker::new(majority),
 
@@ -342,6 +345,11 @@ impl ConsensusShardTrait for PaxosFamilyShard {
         self.goto_round(self.settings.starting_round);
         self.round_state.full_clear();
         value
+    }
+
+    #[inline]
+    fn round_state_is_clear(&self) -> bool {
+        self.round_state.is_clear(self.settings.starting_round)
     }
 
     #[inline]
@@ -618,6 +626,7 @@ impl PaxosFamilyShard {
 pub(crate) type PaxosFamily = Consensus<PaxosFamilySettings, PaxosFamilyRoundState>;
 
 impl PaxosFamily {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         topology: &Topology,
         my_pid: usize,
@@ -626,27 +635,33 @@ impl PaxosFamily {
         committers: Option<Vec<usize>>,
         mode_setting: PFModeSetting,
         shard_count: usize,
+        shard_pool_size: usize,
     ) -> Self {
+        let process_count = topology.nb_processes;
         let sinks = Arc::new(Mutex::new(sinks));
-
-        Self {
-            process_count: topology.nb_processes,
-            shards: (0..shard_count)
-                .map(|id| {
-                    PaxosFamilyShard::new(
-                        topology,
-                        my_pid,
-                        ShardMultiSink {
-                            shard_id: id,
-                            multi_sink: sinks.clone(),
-                        },
-                        leader_priority.clone(),
-                        committers.clone(),
-                        mode_setting.clone(),
-                    )
-                })
-                .collect(),
+        let topology = topology.clone();
+        let shard_sinks = sinks.clone();
+        let new_shard = Box::new(move || {
+            PaxosFamilyShard::new(
+                &topology,
+                my_pid,
+                ShardMultiSink {
+                    // Placeholder: assigned when the shard is taken out of the pool.
+                    shard_id: usize::MAX,
+                    multi_sink: shard_sinks.clone(),
+                },
+                leader_priority.clone(),
+                committers.clone(),
+                mode_setting.clone(),
+            )
+        });
+        Consensus::with_pool(
+            process_count,
+            my_pid,
+            shard_count,
+            shard_pool_size,
             sinks,
-        }
+            new_shard,
+        )
     }
 }

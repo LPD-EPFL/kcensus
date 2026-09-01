@@ -69,6 +69,16 @@ impl NodeState {
         self.paxos_accept_round = None;
     }
 
+    /// True if this is the state of a node that has not taken part in the current slot.
+    #[inline]
+    pub fn is_clear(&self) -> bool {
+        self.v.is_none()
+            && self.k_proposer.is_none()
+            && self.k_state_nanos == 0
+            && self.prepared_for.is_none()
+            && self.paxos_accept_round.is_none()
+    }
+
     #[inline]
     pub fn get_v(&self) -> Option<usize> {
         self.v

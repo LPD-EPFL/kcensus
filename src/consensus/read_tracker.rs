@@ -25,6 +25,24 @@ impl ReadTracker {
 }
 
 impl ReadTracker {
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.read_commands.is_empty()
+    }
+
+    #[inline]
+    pub fn next_id(&self) -> usize {
+        self.next_id
+    }
+
+    /// Restores the uid counter of a shard that was put to sleep, so that late answers
+    /// to reads issued before the shard fell asleep can not match a new read.
+    #[inline]
+    pub fn set_next_id(&mut self, next_id: usize) {
+        debug_assert!(self.is_empty());
+        self.next_id = next_id;
+    }
+
     pub fn insert(&mut self, command: Command, local_ready: bool) -> ReadUid {
         debug_assert!(command.read_only);
         let uid = ReadUid {
