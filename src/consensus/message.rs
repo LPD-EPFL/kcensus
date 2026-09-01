@@ -15,19 +15,19 @@ pub enum ConsensusMsg {
         v: usize,
     },
     ReadRequest {
-        uid: ReadUid,
+        id: ReadId,
     },
     ReadResponse {
-        uid: ReadUid,
+        id: ReadId,
         next_readable_slot: usize,
     },
 }
 
+/// Identifies a read among those a node issued for one shard. A responder only echoes it
+/// back, and a tracker only ever holds the reads its own node issued, so it never has to
+/// be unique any wider than that.
 #[derive(Ord, PartialOrd, Eq, PartialEq, Serialize, Deserialize, Clone, Copy, Debug)]
-pub struct ReadUid {
-    pub reader: usize,
-    pub id: usize,
-}
+pub struct ReadId(pub usize);
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum CommandBatch {
