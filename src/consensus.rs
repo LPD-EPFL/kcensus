@@ -549,9 +549,9 @@ where
     #[inline]
     async fn start_read(&mut self, command: Command) -> io::Result<()> {
         let local_ready = self.get_my_v().is_none();
-        let uid = self.read_tracker.insert(command, local_ready);
+        let id = self.read_tracker.insert(command, local_ready);
         self.sinks
-            .broadcast(ReadRequest { uid }, None, self.last_v)
+            .broadcast(ReadRequest { id }, None, self.last_v)
             .await
     }
 
@@ -601,12 +601,12 @@ where
             );
             return Ok(Some(self.commit_slot(v, true)));
         };
-        if let ReadRequest { uid } = msg.msg {
+        if let ReadRequest { id } = msg.msg {
             let next_readable_slot = self.slot + self.get_my_v().is_some() as usize;
             self.sinks
                 .send(
                     ReadResponse {
-                        uid,
+                        id,
                         next_readable_slot,
                     },
                     None,
@@ -616,10 +616,10 @@ where
                 .await?;
             return Ok(None);
         }
-        if let ReadResponse { uid, .. } = msg.msg {
+        if let ReadResponse { id, .. } = msg.msg {
             return Ok(self
                 .read_tracker
-                .receive_ready(uid)
+                .receive_ready(id)
                 .map(CommandBatch::Single));
         }
         self.process_message(msg).await
