@@ -1,6 +1,7 @@
 use crate::consensus::command::Command;
 use crate::consensus::message::ReadId;
 use std::collections::BTreeMap;
+use std::fmt::{Debug, Formatter};
 
 pub struct ReadOnlyCommand {
     pub command: Command,
@@ -12,6 +13,25 @@ pub struct ReadTracker {
     next_id: usize,
     read_quorum: usize,
     read_commands: BTreeMap<ReadId, ReadOnlyCommand>,
+}
+
+/// Reports every read still short of its quorum, so that a stuck shard says what it is
+/// waiting for. A shard holding a pending read can not sleep, so it is always reachable
+/// through `active_shards` when the deadlock detector goes looking for it.
+impl Debug for ReadTracker {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "quorum={}, pending=[", self.read_quorum)?;
+        for (i, (id, roc)) in self.read_commands.iter().enumerate() {
+            if i > 0 {
+                write!(f, ", ")?;
+            }
+            write!(f, "{id:?}: {} ready", roc.ready_count)?;
+            if !roc.local_ready {
+                write!(f, ", waiting on the local slot")?;
+            }
+        }
+        write!(f, "]")
+    }
 }
 
 impl ReadTracker {
