@@ -314,9 +314,15 @@ where
                     eprintln!("deadlock detected ! Checking all active shards...");
                     for (shard_id, &physical) in self.active_shards.iter() {
                         let shard = &self.shard_pool[physical];
-                        if shard.ongoing() || shard.has_queued_commands() || !shard.queued_messages.is_empty() {
+                        // A read still short of its quorum keeps a shard awake without
+                        // showing up in any of the other three, so it is checked here too.
+                        let awaiting_read = !shard.read_tracker.is_empty();
+                        if shard.ongoing() || shard.has_queued_commands() || !shard.queued_messages.is_empty() || awaiting_read {
                             eprintln!("shard={shard_id} is stuck. Shard state: {shard:?}");
                             eprintln!("Queued messages for shard={shard_id}: {:?}", shard.queued_messages);
+                            if awaiting_read {
+                                eprintln!("Awaited reads for shard={shard_id}: {:?}", shard.read_tracker);
+                            }
                         }
                     }
                     eprintln!("checked all active shards ({} asleep).", self.sleeping_shards.len() - self.active_shards.len());
