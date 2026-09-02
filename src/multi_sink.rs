@@ -68,12 +68,19 @@ impl MultiSink {
     #[inline]
     pub async fn broadcast(&mut self, msg: Message, priority: Option<usize>) -> io::Result<()> {
         trace!("Broadcasting {msg:?}");
-        let replica_only = should_only_send_to_replicas(&msg, self.send_paxos_messages_to_all);
+        let replica_only = self.should_only_send_to_replicas(&msg);
         let bytes = encode(&msg);
         if let Some(priority_dest) = priority
             && priority_dest != self.my_pid
         {
-            assert!(!replica_only || self.alive_replicas.contains(priority_dest));
+            if msg.is_consensus_msg() {
+                self.stats.msg_count += 1;
+                self.stats.byte_count += bytes.len();
+            }
+
+            // The priority destination is always served, and served first — even when the
+            // message is otherwise replica-only. That is how a non-voting proposer gets the
+            // answers it needs to decide for itself.
             self.sinks
                 .get_mut(&priority_dest)
                 .unwrap()
@@ -85,14 +92,14 @@ impl MultiSink {
                 continue;
             }
 
-            if msg.is_consensus_msg() {
-                self.stats.msg_count += 1;
-                self.stats.byte_count += bytes.len();
-            }
-
             if Some(*dest) == priority {
                 // Already sent
                 continue;
+            }
+
+            if msg.is_consensus_msg() {
+                self.stats.msg_count += 1;
+                self.stats.byte_count += bytes.len();
             }
 
             sink.send(bytes.clone()).await?;
@@ -104,9 +111,7 @@ impl MultiSink {
     pub async fn send(&mut self, msg: Message, dest: usize) -> io::Result<()> {
         trace!("Sending to {dest}: {msg:?}");
         debug_assert!(dest != self.my_pid);
-        if should_only_send_to_replicas(&msg, self.send_paxos_messages_to_all)
-            && !self.alive_replicas.contains(dest)
-        {
+        if self.should_only_send_to_replicas(&msg) && !self.alive_replicas.contains(dest) {
             return Ok(());
         }
         let bytes = encode(&msg);
@@ -117,23 +122,24 @@ impl MultiSink {
         let sink = self.sinks.get_mut(&dest).unwrap();
         sink.send(bytes).await
     }
-}
 
-fn should_only_send_to_replicas(msg: &Message, send_paxos_messages_to_all: bool) -> bool {
-    if let ConsensusM { msg, value, .. } = msg {
-        match &msg.msg {
-            ConsensusMsg::Commit { .. } => false,
-            ConsensusMsg::ReadRequest { .. } => true,
-            ConsensusMsg::ReadResponse { .. } => false,
-            ConsensusMsg::KCensusM(msg) => match msg {
-                KCensusMsg::Spread { .. } => false,
-                KCensusMsg::SpreadValueOnly { .. } => false,
-                KCensusMsg::PaxosAccept { .. } => value.is_none(),
-            },
-            ConsensusMsg::PaxosM(_) => value.is_none() && !send_paxos_messages_to_all,
+    fn should_only_send_to_replicas(&self, msg: &Message) -> bool {
+        if let ConsensusM { msg, value, .. } = msg {
+            match &msg.msg {
+                ConsensusMsg::Commit { .. } => false,
+                ConsensusMsg::ReadRequest { .. } => true,
+                ConsensusMsg::ReadResponse { .. } => false,
+                ConsensusMsg::KCensusM(msg) => match msg {
+                    KCensusMsg::Spread { .. } => false,
+                    KCensusMsg::SpreadValueOnly { .. } => false,
+                    KCensusMsg::PaxosAccept { .. } => value.is_none(),
+                },
+                ConsensusMsg::PaxosM(_) => value.is_none() && !self.send_paxos_messages_to_all,
+                ConsensusMsg::DepM(msg) => msg.replicas_only(),
+            }
+        } else {
+            false
         }
-    } else {
-        false
     }
 }
 

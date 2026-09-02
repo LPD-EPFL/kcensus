@@ -1,7 +1,8 @@
 use crate::consensus::command::Command;
+use crate::consensus::deps::message::DepMsg;
 use crate::consensus::kcensus::message::KCensusMsg;
 use crate::consensus::message::ConsensusMsg::{
-    Commit, KCensusM, PaxosM, ReadRequest, ReadResponse,
+    Commit, DepM, KCensusM, PaxosM, ReadRequest, ReadResponse,
 };
 use crate::consensus::paxos_family::message::PaxosMsg;
 use serde::{Deserialize, Serialize};
@@ -10,6 +11,7 @@ use serde::{Deserialize, Serialize};
 pub enum ConsensusMsg {
     KCensusM(KCensusMsg),
     PaxosM(PaxosMsg),
+    DepM(DepMsg),
     Commit {
         slot: usize,
         v: usize,
@@ -47,6 +49,7 @@ impl ConsensusMessage {
         match &self.msg {
             KCensusM(msg) => msg.includes_value(),
             PaxosM(msg) => msg.can_include_value(self.src),
+            DepM(msg) => msg.includes_value(),
             Commit { .. } => false,
             ReadRequest { .. } => false,
             ReadResponse { .. } => false,
@@ -57,6 +60,7 @@ impl ConsensusMessage {
         match &self.msg {
             KCensusM(msg) => msg.includes_value(),
             PaxosM(msg) => msg.should_include_value(),
+            DepM(msg) => msg.includes_value(),
             Commit { .. } => false,
             ReadRequest { .. } => false,
             ReadResponse { .. } => false,
@@ -67,6 +71,7 @@ impl ConsensusMessage {
         match &self.msg {
             KCensusM(msg) => Some(msg.get_v()),
             PaxosM(msg) => Some(msg.get_v()),
+            DepM(msg) => msg.id(),
             Commit { v, .. } => Some(*v),
             ReadRequest { .. } => None,
             ReadResponse { .. } => None,
@@ -77,6 +82,8 @@ impl ConsensusMessage {
         match &self.msg {
             KCensusM(msg) => msg.get_slot(),
             PaxosM(msg) => msg.get_slot(),
+            // Dependency mode has no slots: an instance is identified by its command id.
+            DepM(_) => None,
             Commit { slot, .. } => Some(*slot),
             ReadRequest { .. } => None,
             ReadResponse {

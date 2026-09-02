@@ -1,5 +1,6 @@
 use crate::consensus::command::Command;
 use crate::consensus::kcensus::propagation::compute_propagation_graphs;
+use crate::consensus::deps::{DepConsensus, DepMode};
 use crate::consensus::kcensus::KCensus;
 use crate::consensus::paxos_family::{PFModeSetting, PaxosFamily};
 use crate::delayer::Delayer;
@@ -90,6 +91,12 @@ enum Algo {
     Paxos,
     #[value(name = "epaxos", alias = "EPaxos")]
     EPaxos,
+    /// EPaxos agreeing on dependency sets rather than on which command takes a slot.
+    #[value(name = "epaxos-deps", alias = "EPaxosDeps")]
+    EPaxosDeps,
+    /// SwiftPaxos agreeing on dependency sets.
+    #[value(name = "swift-paxos-deps", alias = "SwiftPaxosDeps")]
+    SwiftPaxosDeps,
     #[value(name = "multi-paxos", alias = "Multi-Paxos")]
     MultiPaxos,
     #[value(name = "multi-paxos-3p", alias = "Multi-Paxos-3P")]
@@ -310,6 +317,40 @@ pub async fn run() -> io::Result<()> {
             );
             let _ = tokio::join!(app.run(), client.run(workload), consensus);
             propagation_graphs.pando_latencies[my_pid]
+        }
+        Algo::EPaxosDeps | Algo::SwiftPaxosDeps => {
+            let (mode, expected_latency) = if algo == Algo::EPaxosDeps {
+                (
+                    DepMode::EPaxos {
+                        coordinator: propagation_graphs.epaxos_committers[my_pid],
+                    },
+                    propagation_graphs.epaxos_latencies[my_pid],
+                )
+            } else {
+                (
+                    DepMode::SwiftPaxos {
+                        leader: propagation_graphs.swift_paxos_leader,
+                        quorum: Arc::new(propagation_graphs.swift_paxos_fixed_fast_quorum.clone()),
+                    },
+                    propagation_graphs.swift_paxos_latencies[my_pid],
+                )
+            };
+            let mut consensus_obj = DepConsensus::new(
+                &topology,
+                my_pid,
+                consensus_msg_sinks,
+                mode,
+                shards,
+                shard_pool,
+            );
+            let consensus = consensus_obj.run(
+                delayed_msg_rx,
+                new_client_request_rx,
+                committed_request_tx,
+                deadlock_deadline,
+            );
+            let _ = tokio::join!(app.run(), client.run(workload), consensus);
+            expected_latency
         }
         Algo::EPaxos => {
             let mut leader_prio: Vec<_> = topology.alive_replicas.iter().collect();

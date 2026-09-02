@@ -21,6 +21,7 @@ use tokio::{pin, select};
 use tokio_timerfd::Delay;
 
 pub(crate) mod command;
+pub(crate) mod deps;
 pub mod kcensus;
 pub(crate) mod message;
 pub(crate) mod paxos_family;
