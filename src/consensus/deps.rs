@@ -8,7 +8,7 @@
 
 use crate::consensus::command::Command;
 use crate::consensus::deps::dep_set::{requester_of, DepSet};
-use crate::consensus::deps::execution::executable_order;
+use crate::consensus::deps::execution::{cycle_possible, executable_order, next_executable};
 use crate::consensus::deps::instance::{Instance, Phase};
 use crate::consensus::deps::message::DepMsg;
 use crate::consensus::message::{CommandBatch, ConsensusMessage, ConsensusMsg};
@@ -20,7 +20,7 @@ use crate::multi_sink::{MultiSink, ShardMultiSink};
 use crate::topology::Topology;
 use bit_set::BitSet;
 use log::{debug, trace};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -127,9 +127,14 @@ pub(crate) struct DepShard {
     /// One entry per unfinished command whose payload we hold. Executed instances are
     /// removed, so an empty table is (with `deferred`) the condition for the shard to sleep.
     instances: HashMap<usize, Instance>,
-    /// Messages about commands we have not received yet, in arrival order per command.
-    /// See `handle`: nothing can be acted on before the payload.
+    /// Messages held back, keyed by what they are waiting for and in arrival order.
+    /// A message waits either for the command it is about — nothing can be acted on before
+    /// the payload — or for a dependency the leader named to be accepted here. See
+    /// `handle` and `blocked_by`.
     deferred: HashMap<usize, Vec<(usize, DepMsg)>>,
+    /// How many of those are a leader's `Accept` waiting for its own command. Zero, which
+    /// is the normal state, is what lets `blocked_by` answer without looking at anything.
+    deferred_accepts: usize,
     /// Commands executed since the last drain, in execution order.
     ready: Vec<Command>,
 }
@@ -165,6 +170,7 @@ impl DepShard {
             executed: DepSet::new(process_count),
             instances: HashMap::new(),
             deferred: HashMap::new(),
+            deferred_accepts: 0,
             ready: Vec::new(),
         }
     }
@@ -390,18 +396,93 @@ impl DepShard {
         }
         if !self.instances.contains_key(&id) {
             let Some(CommandBatch::Single(command)) = value else {
-                self.deferred.entry(id).or_default().push((src, msg));
+                self.defer(id, src, msg);
                 return Ok(());
             };
             self.create_instance(id, command);
         }
-        self.dispatch(src, msg).await?;
-        // If that was the message carrying the payload, whatever was waiting on it can run
-        // now, in the order it arrived. None of those can defer again.
-        for (src, msg) in self.deferred.remove(&id).unwrap_or_default() {
+        self.deliver(src, msg).await
+    }
+
+    /// Delivers one message and then whatever its delivery released, in arrival order.
+    ///
+    /// A message can be held twice — once for the command it is about, once for a
+    /// dependency it names (`blocked_by`) — and releasing one can hand back messages that
+    /// have to wait again, so this is a queue rather than the single pass it used to be.
+    /// It terminates because a message only ever waits on something strictly ahead of it
+    /// in the leader's order, which no message of ours can hold up.
+    async fn deliver(&mut self, src: usize, msg: DepMsg) -> io::Result<()> {
+        let mut queue = VecDeque::from([(src, msg)]);
+        while let Some((src, msg)) = queue.pop_front() {
+            let id = msg.id().expect("a held message is about an instance");
+            // Executed while it waited: nothing it has to say can matter any more, and its
+            // instance is gone.
+            if self.executed.contains(id) {
+                continue;
+            }
+            if let Some(dep) = self.blocked_by(&msg) {
+                self.defer(dep, src, msg);
+                continue;
+            }
             self.dispatch(src, msg).await?;
+            queue.extend(self.take_deferred(id));
         }
         Ok(())
+    }
+
+    /// Holds `msg` back until `key` — the command it is about, or a dependency of it — has
+    /// moved on.
+    fn defer(&mut self, key: usize, src: usize, msg: DepMsg) {
+        if msg.id() == Some(key) && matches!(msg, DepMsg::Accept { .. }) {
+            self.deferred_accepts += 1;
+        }
+        self.deferred.entry(key).or_default().push((src, msg));
+    }
+
+    /// Everything that was waiting on `key`, in arrival order.
+    fn take_deferred(&mut self, key: usize) -> Vec<(usize, DepMsg)> {
+        let held = self.deferred.remove(&key).unwrap_or_default();
+        self.deferred_accepts -= held
+            .iter()
+            .filter(|(_, msg)| msg.id() == Some(key) && matches!(msg, DepMsg::Accept { .. }))
+            .count();
+        held
+    }
+
+    /// SwiftPaxos Fig. 4 line 23's `D ⊆ Accept ∪ Commit`, as a precondition: the
+    /// dependency that stops us from processing the leader's `Accept` yet, if any.
+    ///
+    /// The leader accepts in its own arrival order and FIFO delivers its `Accept`s in that
+    /// order, so by the time it names `D` we have received its `Accept` for every member of
+    /// it. *Received*, not necessarily processed: an `Accept` that travels without the
+    /// command (`spread_value`) waits for the proposer's `PreAccept`, and until then that
+    /// dependency has no instance here at all. So the one thing that can hold this
+    /// precondition up is a leader's `Accept` of our own queue — and when none is queued,
+    /// which is almost always, the answer is no without a single lookup.
+    ///
+    /// Replicas only, and the leader never sees its own `Accept`. A non-voting process is
+    /// served the leader's `Accept` for its own commands and nothing else, so its view is
+    /// deliberately partial: waiting for the rest would be waiting forever.
+    fn blocked_by(&self, msg: &DepMsg) -> Option<usize> {
+        let DepMode::SwiftPaxos { .. } = self.mode else {
+            return None;
+        };
+        if self.deferred_accepts == 0 || !self.is_replica(self.my_pid) {
+            return None;
+        }
+        // Only the leader ever sends `Accept` in SwiftPaxos, so being one is enough.
+        let DepMsg::Accept { id, deps, .. } = msg else {
+            return None;
+        };
+        let blocking = deps.pending_over(&self.executed).find(|dep| {
+            *dep != *id && !self.instances.get(dep).is_some_and(Instance::is_settled)
+        })?;
+        debug_assert!(
+            self.leader_accept_is_queued(blocking),
+            "the leader's order reaches us over a FIFO link, so a dependency we have not \
+             accepted must be one whose `Accept` is already waiting here"
+        );
+        Some(blocking)
     }
 
     async fn dispatch(&mut self, src: usize, msg: DepMsg) -> io::Result<()> {
@@ -416,6 +497,19 @@ impl DepShard {
                 Ok(())
             }
         }
+    }
+
+    /// Whether the leader's `Accept` for `id` is one of the messages waiting here.
+    ///
+    /// It is parked under whatever it is waiting for: under `id` itself while its command
+    /// is missing, or under one of *its* dependencies once the command has arrived and the
+    /// same precondition holds it up in turn. Chains like that are why this searches
+    /// rather than looking `id` up.
+    fn leader_accept_is_queued(&self, id: usize) -> bool {
+        self.deferred
+            .values()
+            .flatten()
+            .any(|(_, msg)| msg.id() == Some(id) && matches!(msg, DepMsg::Accept { .. }))
     }
 
     /// The coordinator's proposal reached us. Our own proposal completes it with every
@@ -574,7 +668,7 @@ impl DepShard {
         let my_pid = self.my_pid;
         let swift = matches!(self.mode, DepMode::SwiftPaxos { .. });
         debug_assert!(
-            !swift || !self.is_replica(my_pid) || self.deps_are_settled(&deps),
+            !swift || !self.is_replica(my_pid) || self.deps_are_settled(id, &deps),
             "SwiftPaxos Fig. 4 line 23: the leader's dependencies must already be accepted"
         );
         let instance = self.instance_mut(id);
@@ -659,27 +753,36 @@ impl DepShard {
 
     /// Moves every command whose dependencies are settled into `ready`, in the order
     /// every process computes identically.
+    ///
+    /// The graph is the fallback, not the normal path. Dependency sets are watermarks, so
+    /// they are downward closed and the graph over what is pending is dense — in
+    /// SwiftPaxos it is the leader's whole arrival order, `Θ(P²)` edges to rediscover an
+    /// order that was already fixed. [`next_executable`] walks that same order in `O(n)`
+    /// per command without allocating, and only a real cycle needs Tarjan.
     fn execute_ready(&mut self) {
-        loop {
-            let order = executable_order(&self.instances, &self.executed);
-            if order.is_empty() {
-                return;
-            }
-            let mut progressed = false;
-            for uid in order {
-                let command = self
-                    .instances
-                    .remove(&uid)
-                    .expect("ordered instance exists")
-                    .command;
-                self.executed.insert(uid);
-                self.ready.push(command);
-                progressed = true;
-            }
-            if !progressed {
-                return;
-            }
+        while let Some(uid) = next_executable(&self.instances, &self.executed) {
+            self.execute(uid);
         }
+        if cycle_possible(&self.instances, &self.executed) {
+            for uid in executable_order(&self.instances, &self.executed) {
+                self.execute(uid);
+            }
+            // `executable_order` returns the largest set closed under "depends only on
+            // what is in the set or already executed", so what it leaves behind is still
+            // blocked by something it did not execute: there is never a second round.
+            debug_assert!(next_executable(&self.instances, &self.executed).is_none());
+        }
+    }
+
+    /// Hands one committed command over to the application and advances the watermark.
+    fn execute(&mut self, uid: usize) {
+        let command = self
+            .instances
+            .remove(&uid)
+            .expect("ordered instance exists")
+            .command;
+        self.executed.insert(uid);
+        self.ready.push(command);
     }
 
     /// Commands executed since the last call, to be handed to the application.
@@ -801,18 +904,16 @@ impl DepShard {
     }
 
     /// SwiftPaxos Fig. 4 line 23's `D ⊆ Accept ∪ Commit`: every dependency the leader
-    /// names is already accepted here. It holds because the leader proposes only what it
-    /// has itself accepted, and its `Accept`s reach us in its own order over a FIFO link.
-    /// Checked rather than assumed — unioning the coordinator's view into the leader's
-    /// proposal used to break it, silently, on two of the three topologies.
+    /// names is accepted here. `blocked_by` is what makes it true — this checks that it
+    /// did, which is also how a broken FIFO or a leader naming a command out of its own
+    /// order would show up.
     ///
     /// Replicas only. A non-voting process is served the leader's `Accept` for its own
     /// commands and nothing else, so its view is deliberately partial: it casts no vote,
     /// and it learns every other decision from the `Commit`.
-    fn deps_are_settled(&self, deps: &DepSet) -> bool {
+    fn deps_are_settled(&self, id: usize, deps: &DepSet) -> bool {
         deps.pending_over(&self.executed)
-            .into_iter()
-            .all(|dep| self.instances.get(&dep).is_some_and(|i| i.is_settled()))
+            .all(|dep| dep == id || self.instances.get(&dep).is_some_and(Instance::is_settled))
     }
 
     /// True if a message about `id` cannot change anything at a sleeping shard, i.e. the

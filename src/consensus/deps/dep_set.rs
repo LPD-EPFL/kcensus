@@ -127,23 +127,28 @@ impl DepSet {
     /// enumeration is bounded by what is still unexecuted, not by the whole history, and
     /// it is exact because a replica's uids on a shard form the arithmetic sequence
     /// `2r, 2r + 2n, 2r + 4n, …`.
-    pub fn pending_over(&self, executed: &DepSet) -> Vec<usize> {
+    ///
+    /// Lazy, so that a caller that only wants to know whether *some* dependency blocks
+    /// it stops at the first one instead of walking the whole backlog.
+    pub fn pending_over<'a>(
+        &'a self,
+        executed: &'a DepSet,
+    ) -> impl Iterator<Item = usize> + 'a {
         debug_assert_eq!(self.marks.len(), executed.marks.len());
         let step = uid_step(self.marks.len());
-        let mut pending = Vec::new();
-        for (replica, mark) in self.marks.iter().enumerate() {
-            let Some(mark) = *mark else { continue };
-            let mut uid = match executed.marks[replica] {
-                Some(done) if done >= mark => continue,
-                Some(done) => done + step,
-                None => 2 * replica,
-            };
-            while uid <= mark {
-                pending.push(uid);
-                uid += step;
-            }
-        }
-        pending
+        self.marks
+            .iter()
+            .enumerate()
+            .filter_map(move |(replica, mark)| {
+                let mark = (*mark)?;
+                let first = match executed.marks[replica] {
+                    Some(done) if done >= mark => return None,
+                    Some(done) => done + step,
+                    None => 2 * replica,
+                };
+                Some((first..=mark).step_by(step))
+            })
+            .flatten()
     }
 }
 
@@ -240,7 +245,7 @@ mod tests {
         deps.insert(uid(1, 0));
 
         // Nothing executed: every implied command shows up.
-        let mut pending = deps.pending_over(&DepSet::new(N));
+        let mut pending: Vec<usize> = deps.pending_over(&DepSet::new(N)).collect();
         pending.sort();
         assert_eq!(
             pending,
@@ -251,11 +256,14 @@ mod tests {
         let mut executed = DepSet::new(N);
         executed.insert(uid(0, 1));
         executed.insert(uid(1, 0));
-        assert_eq!(deps.pending_over(&executed), vec![uid(0, 2)]);
+        assert_eq!(
+            deps.pending_over(&executed).collect::<Vec<_>>(),
+            vec![uid(0, 2)]
+        );
 
         // Everything executed.
         executed.insert(uid(0, 2));
-        assert!(deps.pending_over(&executed).is_empty());
+        assert_eq!(deps.pending_over(&executed).count(), 0);
         assert!(deps.is_covered_by(&executed));
     }
 
