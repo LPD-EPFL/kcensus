@@ -33,10 +33,7 @@ pub fn next_executable(instances: &HashMap<usize, Instance>, executed: &DepSet) 
         .filter(|uid| {
             instances.get(uid).is_some_and(|instance| {
                 instance.is_committed()
-                    && instance
-                        .deps
-                        .pending_over(executed)
-                        .all(|dep| dep == *uid)
+                    && instance.deps.pending_over(executed).all(|dep| dep == *uid)
             })
         })
         .min()

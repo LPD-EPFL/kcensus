@@ -20,7 +20,7 @@ use crate::multi_sink::{MultiSink, ShardMultiSink};
 use crate::topology::Topology;
 use bit_set::BitSet;
 use log::{debug, trace};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -132,9 +132,11 @@ pub(crate) struct DepShard {
     /// the payload — or for a dependency the leader named to be accepted here. See
     /// `handle` and `blocked_by`.
     deferred: HashMap<usize, Vec<(usize, DepMsg)>>,
-    /// How many of those are a leader's `Accept` waiting for its own command. Zero, which
-    /// is the normal state, is what lets `blocked_by` answer without looking at anything.
-    deferred_accepts: usize,
+    /// The instances whose leader's `Accept` is one of the messages held in `deferred`,
+    /// waiting for either reason. Empty, which is the normal state, is what lets
+    /// `blocked_by` answer without looking at anything: no `Accept` waiting means every
+    /// dependency the leader can name is already accepted here.
+    parked_accepts: HashSet<usize>,
     /// Commands executed since the last drain, in execution order.
     ready: Vec<Command>,
 }
@@ -170,7 +172,7 @@ impl DepShard {
             executed: DepSet::new(process_count),
             instances: HashMap::new(),
             deferred: HashMap::new(),
-            deferred_accepts: 0,
+            parked_accepts: HashSet::new(),
             ready: Vec::new(),
         }
     }
@@ -433,8 +435,8 @@ impl DepShard {
     /// Holds `msg` back until `key` — the command it is about, or a dependency of it — has
     /// moved on.
     fn defer(&mut self, key: usize, src: usize, msg: DepMsg) {
-        if msg.id() == Some(key) && matches!(msg, DepMsg::Accept { .. }) {
-            self.deferred_accepts += 1;
+        if let DepMsg::Accept { id, .. } = msg {
+            self.parked_accepts.insert(id);
         }
         self.deferred.entry(key).or_default().push((src, msg));
     }
@@ -442,23 +444,32 @@ impl DepShard {
     /// Everything that was waiting on `key`, in arrival order.
     fn take_deferred(&mut self, key: usize) -> Vec<(usize, DepMsg)> {
         let held = self.deferred.remove(&key).unwrap_or_default();
-        self.deferred_accepts -= held
-            .iter()
-            .filter(|(_, msg)| msg.id() == Some(key) && matches!(msg, DepMsg::Accept { .. }))
-            .count();
+        for (_, msg) in &held {
+            if let DepMsg::Accept { id, .. } = msg {
+                self.parked_accepts.remove(id);
+            }
+        }
         held
     }
 
-    /// SwiftPaxos Fig. 4 line 23's `D ⊆ Accept ∪ Commit`, as a precondition: the
-    /// dependency that stops us from processing the leader's `Accept` yet, if any.
+    /// What a message has to wait for before it can be delivered, if anything: SwiftPaxos
+    /// Fig. 4 line 23's `D ⊆ Accept ∪ Commit` as a precondition.
     ///
     /// The leader accepts in its own arrival order and FIFO delivers its `Accept`s in that
     /// order, so by the time it names `D` we have received its `Accept` for every member of
     /// it. *Received*, not necessarily processed: an `Accept` that travels without the
-    /// command (`spread_value`) waits for the proposer's `PreAccept`, and until then that
-    /// dependency has no instance here at all. So the one thing that can hold this
-    /// precondition up is a leader's `Accept` of our own queue — and when none is queued,
-    /// which is almost always, the answer is no without a single lookup.
+    /// command (`spread_value`) waits for the proposer's `PreAccept`, and one waiting there
+    /// holds up the leader's later `Accept`s in turn, so a dependency can be un-accepted
+    /// for either reason. Both leave an `Accept` of ours parked, which is why
+    /// `parked_accepts` settles it: nothing parked means every dependency is accepted, and
+    /// the answer is no without a single lookup.
+    ///
+    /// Waiting here does reorder the leader's own link: a `Commit` that follows a parked
+    /// `Accept` overtakes it. Nothing depends on that order — `on_accept` on a settled
+    /// instance is already a no-op, since the network reorders across sources anyway — and
+    /// the reference implementation reorders in exactly the same way, running a message
+    /// whose condition holds while an earlier one of the same instance sits in
+    /// `afterPropagate` (`hook/cond.go`).
     ///
     /// Replicas only, and the leader never sees its own `Accept`. A non-voting process is
     /// served the leader's `Accept` for its own commands and nothing else, so its view is
@@ -467,18 +478,23 @@ impl DepShard {
         let DepMode::SwiftPaxos { .. } = self.mode else {
             return None;
         };
-        if self.deferred_accepts == 0 || !self.is_replica(self.my_pid) {
+        // Nothing is waiting: by FIFO every dependency the leader can name is accepted.
+        if self.parked_accepts.is_empty() {
+            return None;
+        }
+        if !self.is_replica(self.my_pid) {
             return None;
         }
         // Only the leader ever sends `Accept` in SwiftPaxos, so being one is enough.
-        let DepMsg::Accept { id, deps, .. } = msg else {
+        let DepMsg::Accept { deps, id, .. } = msg else {
             return None;
         };
-        let blocking = deps.pending_over(&self.executed).find(|dep| {
-            *dep != *id && !self.instances.get(dep).is_some_and(Instance::is_settled)
-        })?;
+        let id = *id;
+        let blocking = deps
+            .pending_over(&self.executed)
+            .find(|dep| *dep != id && !self.instances.get(dep).is_some_and(Instance::is_settled))?;
         debug_assert!(
-            self.leader_accept_is_queued(blocking),
+            self.parked_accepts.contains(&blocking),
             "the leader's order reaches us over a FIFO link, so a dependency we have not \
              accepted must be one whose `Accept` is already waiting here"
         );
@@ -497,19 +513,6 @@ impl DepShard {
                 Ok(())
             }
         }
-    }
-
-    /// Whether the leader's `Accept` for `id` is one of the messages waiting here.
-    ///
-    /// It is parked under whatever it is waiting for: under `id` itself while its command
-    /// is missing, or under one of *its* dependencies once the command has arrived and the
-    /// same precondition holds it up in turn. Chains like that are why this searches
-    /// rather than looking `id` up.
-    fn leader_accept_is_queued(&self, id: usize) -> bool {
-        self.deferred
-            .values()
-            .flatten()
-            .any(|(_, msg)| msg.id() == Some(id) && matches!(msg, DepMsg::Accept { .. }))
     }
 
     /// The coordinator's proposal reached us. Our own proposal completes it with every
@@ -954,9 +957,14 @@ impl PooledShard for DepShard {
     }
 
     /// Nothing unfinished is left: every instance has been executed and handed over, and
-    /// nothing is waiting for a payload — sleeping would drop it.
+    /// nothing is waiting for a payload or for a dependency — sleeping would drop it.
     fn can_sleep(&self) -> bool {
-        self.instances.is_empty() && self.deferred.is_empty() && self.ready.is_empty()
+        let idle = self.instances.is_empty() && self.deferred.is_empty() && self.ready.is_empty();
+        debug_assert!(
+            !self.deferred.is_empty() || self.parked_accepts.is_empty(),
+            "an empty hold-back table holds no `Accept`s"
+        );
+        idle
     }
 }
 
