@@ -130,10 +130,7 @@ impl DepSet {
     ///
     /// Lazy, so that a caller that only wants to know whether *some* dependency blocks
     /// it stops at the first one instead of walking the whole backlog.
-    pub fn pending_over<'a>(
-        &'a self,
-        executed: &'a DepSet,
-    ) -> impl Iterator<Item = usize> + 'a {
+    pub fn pending_over<'a>(&'a self, executed: &'a DepSet) -> impl Iterator<Item = usize> + 'a {
         debug_assert_eq!(self.marks.len(), executed.marks.len());
         let step = uid_step(self.marks.len());
         self.marks
