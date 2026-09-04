@@ -54,32 +54,6 @@ pub enum DepMode {
     },
 }
 
-/// The proposers for which the leader's `Accept` should carry the command.
-///
-/// The reference implementation never puts one in a replica-to-replica message: a replica
-/// that has not received the client's `Propagate` simply waits for it (`afterPropagate`,
-/// `swift.go:418`), and the paper recovers a genuinely missing payload by asking the leader
-/// to retransmit. Carrying it costs bytes on every link, and buys nothing unless it beats
-/// the `PreAccept` — which needs the network to violate the triangle inequality:
-/// `proposer → leader → replica` shorter than `proposer → replica`. Attach it only for the
-/// proposers where some replica actually gains, which is what `force_mpaxos` is about in
-/// the slot layer.
-fn spread_value_for(topology: &Topology, leader: usize) -> BitSet {
-    let mut proposers = BitSet::with_capacity(topology.nb_processes);
-    for proposer in 0..topology.nb_processes {
-        let via_leader = topology.link_latency(proposer, leader);
-        if topology.alive_replicas.iter().any(|replica| {
-            replica != leader
-                && replica != proposer
-                && via_leader + topology.link_latency(leader, replica)
-                    < topology.link_latency(proposer, replica)
-        }) {
-            proposers.insert(proposer);
-        }
-    }
-    proposers
-}
-
 /// The compressed state of an idle dependency-mode shard.
 ///
 /// With no epochs, the dependency watermark has to survive sleep — it is what a freshly
@@ -106,14 +80,15 @@ pub(crate) struct DepShard {
     process_count: usize,
     my_pid: usize,
     alive_replicas: BitSet,
+    /// The processes that cast no vote. They see none of the replica-to-replica traffic,
+    /// so SwiftPaxos' decision has to be announced to them; normally empty, and then
+    /// nothing is announced at all, exactly as in the paper.
+    non_replicas: BitSet,
     /// `n − e`: unanimity over this many proposals commits on the fast path.
     fast_quorum: usize,
     /// `n − f`: enough to take the slow path, and to commit it.
     slow_quorum: usize,
     mode: DepMode,
-    /// SwiftPaxos: the proposers whose command the leader's `Accept` should carry. See
-    /// `spread_value_for`.
-    spread_value: BitSet,
 
     sinks: ShardMultiSink,
 
@@ -159,12 +134,11 @@ impl DepShard {
             process_count,
             my_pid,
             alive_replicas: topology.alive_replicas.clone(),
+            non_replicas: BitSet::from_iter(
+                (0..process_count).filter(|pid| !topology.alive_replicas.contains(*pid)),
+            ),
             fast_quorum,
             slow_quorum,
-            spread_value: match &mode {
-                DepMode::EPaxos { .. } => BitSet::with_capacity(process_count),
-                DepMode::SwiftPaxos { leader, .. } => spread_value_for(topology, *leader),
-            },
             mode,
             sinks,
             next_uid: 2 * my_pid,
@@ -457,10 +431,10 @@ impl DepShard {
     ///
     /// The leader accepts in its own arrival order and FIFO delivers its `Accept`s in that
     /// order, so by the time it names `D` we have received its `Accept` for every member of
-    /// it. *Received*, not necessarily processed: an `Accept` that travels without the
-    /// command (`spread_value`) waits for the proposer's `PreAccept`, and one waiting there
-    /// holds up the leader's later `Accept`s in turn, so a dependency can be un-accepted
-    /// for either reason. Both leave an `Accept` of ours parked, which is why
+    /// it. *Received*, not necessarily processed: the `Accept` travels without the command,
+    /// so it waits for the proposer's `PreAccept`, and one waiting there holds up the
+    /// leader's later `Accept`s in turn, so a dependency can be un-accepted for either
+    /// reason. Both leave an `Accept` of ours parked, which is why
     /// `parked_accepts` settles it: nothing parked means every dependency is accepted, and
     /// the answer is no without a single lookup.
     ///
@@ -645,11 +619,7 @@ impl DepShard {
             instance.accept_acked.insert(my_pid);
             debug!("Slow path for id={id} (shard={})", self.sinks.shard_id);
             self.broadcast(
-                DepMsg::Accept {
-                    id,
-                    deps,
-                    with_value: false,
-                },
+                DepMsg::Accept { id, deps },
                 None,
             )
             .await?;
@@ -688,7 +658,6 @@ impl DepShard {
         if swift {
             instance.record_preaccept(src, deps);
         }
-        let proposer = instance.coordinator_pid;
         if !self.is_replica(my_pid) {
             // A non-voting process adopts the value — it executes the command — but casts
             // no vote, so it neither counts itself nor acknowledges. It decides from the
@@ -700,16 +669,20 @@ impl DepShard {
             .expect("created above")
             .accept_acked
             .insert(my_pid);
-        // Back to the sender, which is the coordinator in EPaxos and the leader in
-        // SwiftPaxos. There the proposer needs it as well, to finish
-        // `proposer -> leader -> majority -> proposer`, while the leader's own majority
-        // drives the `Commit` that tells replicas busy with a conflicting command that this
-        // one is decided — without it they could wait forever on a dependency ordered
-        // before their own. In EPaxos the two are the same process and the second send is
-        // skipped.
-        self.send(DepMsg::AcceptOk { id }, src).await?;
-        if proposer != src {
-            self.send(DepMsg::AcceptOk { id }, proposer).await?;
+        match self.mode {
+            // EPaxos: back to the coordinator, the only process that decides (Fig. 3
+            // line 33). It is also the proposer, so there is nobody else to tell.
+            DepMode::EPaxos { .. } => self.send(DepMsg::AcceptOk { id }, src).await?,
+            // SwiftPaxos' `SlowAck`, to `R ∪ {client(id)}` (Fig. 4 line 27). Every replica
+            // but the leader sends one, and the leader never reaches this handler: the
+            // guard is `(fast(p, b) ∧ dep[id] ≠ D) ∨ slow(p, b)`, and slow quorums are any
+            // majorities, so every replica belongs to one and the second disjunct always
+            // holds. The reference says so outright — its `SQ` is a `Majority`, whose
+            // `Contains` is `true` for everyone (`swift.go:157`, `replica/quorum.go:26`).
+            DepMode::SwiftPaxos { .. } => {
+                self.priority_broadcast(DepMsg::AcceptOk { id }, None, self.requester_of(id))
+                    .await?
+            }
         }
         self.try_commit(id).await
     }
@@ -808,8 +781,9 @@ impl DepShard {
             }
     }
 
-    /// The leader broadcasts its own proposal as an `Accept`, carrying the command so that
-    /// a replica closer to the leader than to the proposer can act on it straight away.
+    /// The leader broadcasts its own proposal as an `Accept`. Like the reference's
+    /// `FastAck` from the leader it carries no command: a replica that does not hold the
+    /// payload yet waits for the proposer's `PreAccept` (`afterPropagate`, `swift.go:418`).
     async fn swift_leader_accept(&mut self, id: usize, my_deps: DepSet) -> io::Result<()> {
         let my_pid = self.my_pid;
         let instance = self.instances.get_mut(&id).expect("instance exists");
@@ -819,15 +793,9 @@ impl DepShard {
         instance.record_preaccept(my_pid, my_deps.clone());
         instance.accept(my_deps.clone());
         instance.accept_acked.insert(my_pid);
-        let spread = self.spread_value.contains(instance.coordinator_pid);
-        let value = spread.then(|| CommandBatch::Single(instance.command.clone()));
         self.priority_broadcast(
-            DepMsg::Accept {
-                id,
-                deps: my_deps,
-                with_value: value.is_some(),
-            },
-            value,
+            DepMsg::Accept { id, deps: my_deps },
+            None,
             // Send in priority to the requester (can be a non-voting proposer)
             self.requester_of(id),
         )
@@ -839,12 +807,14 @@ impl DepShard {
     ///
     /// 1. **fast quorum** — a whole fast quorum backing the proposer's own proposal, which
     ///    requires the leader to have agreed with it (the leader is in every fast quorum,
-    ///    so this is also why the two routes can never commit different values). Every
-    ///    replica evaluates this one, because `FastAck`s are broadcast;
+    ///    so this is also why the two routes can never commit different values);
     /// 2. **MultiPaxos through the leader** — a majority having acknowledged the leader's
-    ///    accept, i.e. `proposer → leader → majority → proposer`. Only the proposer and the
-    ///    leader see those acknowledgements; everyone else learns the outcome from the
-    ///    leader's `Commit`.
+    ///    accept, i.e. `proposer → leader → majority → proposer`.
+    ///
+    /// Both are evaluated at every replica: `FastAck`s and `SlowAck`s are broadcast, so
+    /// everyone holds the same answers and reaches the same decision at the same time.
+    /// That is SwiftPaxos Fig. 4 lines 30-32, and it is why the protocol has no `Commit`
+    /// message at all.
     ///
     /// Only acknowledgements of the leader's accept count towards (2): a replica's own
     /// proposal is a fast-path vote and belongs to (1).
@@ -863,35 +833,39 @@ impl DepShard {
         let Some(leader_deps) = instance.accepted_deps().cloned() else {
             return Ok(());
         };
-        let am_proposer = instance.coordinator_pid == my_pid;
+        let proposer = instance.coordinator_pid;
         let fast = instance
             .fast_endorsers()
             .is_some_and(|endorsers| self.swift_fast_quorum_reached(&endorsers));
-        // A majority having accepted the leader's value is enough for both the proposer
-        // (3 delays, answers came straight to it) and the leader (4 delays, but its Commit
-        // can still be the shorter route when the requester sits close to it — networks do
-        // not have to obey the triangle inequality).
-        let via_majority =
-            (am_proposer || my_pid == leader) && instance.accept_acked.len() >= slow_quorum;
+        // A majority holding the leader's value makes it chosen, as in Paxos.
+        let via_majority = instance.accept_acked.len() >= slow_quorum;
         if !fast && !via_majority {
             return Ok(());
         }
         self.on_commit(id, leader_deps.clone());
-        // Only the leader announces the decision. It always gets there — every replica
-        // acknowledges its accept — so one announcement is enough, and it is what unblocks
-        // replicas whose own commands are ordered after this one. Having the proposer
-        // announce as well would only delay its own client's response behind a broadcast.
+        // Nothing to announce: every replica sees the same acknowledgements and decides for
+        // itself. The one exception is a process that casts no vote — the replica-only
+        // filter keeps all of that traffic away from it — so the leader tells it, unless it
+        // is the proposer, which is served the answers as a priority destination and has
+        // decided already. With no such process, and that is the normal case, SwiftPaxos
+        // sends no decision message at all.
         if my_pid != leader {
             return Ok(());
         }
-        self.broadcast(
-            DepMsg::Commit {
-                id,
-                deps: leader_deps,
-            },
-            None,
-        )
-        .await
+        for dest in self.non_replicas.iter() {
+            if dest == proposer {
+                continue;
+            }
+            self.send(
+                DepMsg::Commit {
+                    id,
+                    deps: leader_deps.clone(),
+                },
+                dest,
+            )
+            .await?;
+        }
+        Ok(())
     }
 
     /// True if `endorsers` covers a fast quorum: the fixed one under the paper's C2, or

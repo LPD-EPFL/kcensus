@@ -18,8 +18,8 @@ pub enum DepMsg {
     Forward,
 
     /// EPaxos\* `PreAccept(id, c, D)`, and SwiftPaxos' `Propagate(c)`: the coordinator
-    /// broadcasts the command together with the dependencies it knows of. Always carries
-    /// the payload; in SwiftPaxos the leader's `Accept` carries it as well.
+    /// broadcasts the command together with the dependencies it knows of. This is the one
+    /// message that carries the payload, in either protocol.
     PreAccept { id: usize, deps: DepSet },
 
     /// A fast-quorum replica's own proposal: EPaxos\* `PreAcceptOK(id, dep)` and
@@ -43,16 +43,19 @@ pub enum DepMsg {
     /// dependencies reported by a quorum.
     ///
     /// In SwiftPaxos this is the **leader's** accept, broadcast as soon as the leader has
-    /// formed its proposal. It carries the command when `with_value`, so that a replica
-    /// whose link from the leader is better than its link from the proposer receives the
-    /// payload by the shorter of the two paths and can act on this message immediately.
-    Accept {
-        id: usize,
-        deps: DepSet,
-        with_value: bool,
-    },
+    /// formed its proposal. Like every other replica-to-replica message it travels without
+    /// the command: a replica that does not hold the payload yet waits for the proposer's
+    /// `PreAccept`, which is what the reference implementation's `afterPropagate` does
+    /// (`swift.go:418`).
+    Accept { id: usize, deps: DepSet },
 
-    /// EPaxos\* `AcceptOK(b, id)`.
+    /// EPaxos\* `AcceptOK(b, id)`, and SwiftPaxos' `SlowAck`.
+    ///
+    /// EPaxos unicasts it to the coordinator, which is the only process that decides.
+    /// SwiftPaxos broadcasts it to `R ∪ {client(id)}` (Fig. 4 line 27), from every replica
+    /// but the leader. It is what says "I hold the leader's value now", so it counts on
+    /// both routes: towards the fast quorum in place of a matching proposal, and towards
+    /// the majority that makes the leader's value chosen.
     AcceptOk { id: usize },
 
     /// EPaxos\* `Commit(b, id, c, D)`: the agreed dependencies.
@@ -84,23 +87,15 @@ impl DepMsg {
     #[inline]
     pub fn replicas_only(&self) -> bool {
         match self {
-            DepMsg::PreAcceptOk { .. } | DepMsg::Accept { .. } => true,
-            DepMsg::Forward
-            | DepMsg::PreAccept { .. }
-            | DepMsg::AcceptOk { .. }
-            | DepMsg::Commit { .. } => false,
+            DepMsg::PreAcceptOk { .. } | DepMsg::Accept { .. } | DepMsg::AcceptOk { .. } => true,
+            DepMsg::Forward | DepMsg::PreAccept { .. } | DepMsg::Commit { .. } => false,
         }
     }
 
-    /// The command travels with the proposer's `PreAccept` and, in SwiftPaxos, with the
-    /// leader's `Accept` as well: sending it down both paths means each replica gets it
-    /// over whichever is shorter, and the redundant copy is the fallback.
+    /// The command travels with the proposer's `PreAccept` and with nothing else: it
+    /// reaches every process by the one broadcast, and a message that overtakes it waits.
     #[inline]
     pub fn includes_value(&self) -> bool {
-        match self {
-            DepMsg::Forward | DepMsg::PreAccept { .. } => true,
-            DepMsg::Accept { with_value, .. } => *with_value,
-            _ => false,
-        }
+        matches!(self, DepMsg::Forward | DepMsg::PreAccept { .. })
     }
 }
