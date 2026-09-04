@@ -463,6 +463,32 @@ pub fn compute_propagation_graphs(
         let mut swift_leader_prio: Vec<_> = topology.alive_replicas.iter().collect();
         swift_leader_prio.sort_by_key(|leader| quorum_link_rtts[*leader][maj_quorum - 1]);
 
+        // A replica acts on the leader's proposal only once it also holds the command, and the
+        // command travels straight from the proposer: the leader's accept carries no value, as
+        // in the reference implementation (`afterPropagate`, `swift.go:418`). Adopting the
+        // leader's value is therefore gated by the later of the two paths.
+        let adopt_leader_at = |requester: usize, leader: usize, replica: usize| {
+            topology.link_latency(requester, replica).max(
+                topology.link_latency(requester, leader) + topology.link_latency(leader, replica),
+            )
+        };
+        // The route through the leader: a majority acknowledging its accept, three delays.
+        // Those acknowledgements are broadcast, as in the reference implementation, so they
+        // reach the proposer directly and there is no fourth-delay route relaying them back
+        // through the leader — the protocol has no decision message to relay them with.
+        let swift_mpaxos_latency = |requester: usize, leader: usize| {
+            let mut to_requester: Vec<Duration> = topology
+                .alive_replicas
+                .iter()
+                .map(|replica| {
+                    adopt_leader_at(requester, leader, replica)
+                        + topology.link_latency(replica, requester)
+                })
+                .collect();
+            to_requester.sort();
+            to_requester[maj_quorum - 1]
+        };
+
         // Find best swift-paxos strategy, checking fast-paxos quorums first
         let fast_paxos_quorum = (((topology.nb_replicas * 3 - 1) / 4) + 1).max(maj_quorum);
         if topology.alive_replicas.len() > fast_paxos_quorum {
@@ -475,20 +501,12 @@ pub fn compute_propagation_graphs(
                     let mut requester_quorum_rtts: Vec<_> = topology
                         .alive_replicas
                         .iter()
-                        .map(|replica| {
-                            link_rtts[requester][replica].min(
-                                topology.link_latency(requester, leader)
-                                    + topology.link_latency(leader, replica)
-                                    + topology.link_latency(replica, requester),
-                            )
-                        })
+                        .map(|replica| link_rtts[requester][replica])
                         .collect();
                     requester_quorum_rtts.sort();
                     let fast_paxos_latency = requester_quorum_rtts[fast_paxos_quorum - 1]
                         .max(link_rtts[requester][leader]);
-                    let mpaxos_latency = (topology.link_latency(requester, leader)
-                        + quorum_3p_link_rtts[leader][requester][maj_quorum - 1])
-                        .min(multi_paxos_latencies[leader][requester]);
+                    let mpaxos_latency = swift_mpaxos_latency(requester, leader);
 
                     final_latencies[requester] = if fast_paxos_latency < mpaxos_latency {
                         fast_paxos_latency
@@ -529,22 +547,14 @@ pub fn compute_propagation_graphs(
                     latencies[requester] = quorum
                         .iter()
                         .copied()
-                        .map(|replica| {
-                            link_rtts[requester][replica].min(
-                                topology.link_latency(requester, leader)
-                                    + topology.link_latency(leader, replica)
-                                    + topology.link_latency(replica, requester),
-                            )
-                        })
+                        .map(|replica| link_rtts[requester][replica])
                         .max()
                         .unwrap();
                 }
 
                 let mut use_mpaxos = BitSet::with_capacity(nb_processes);
                 for requester in 0..nb_processes {
-                    let mpaxos_latency = (topology.link_latency(requester, leader)
-                        + quorum_3p_link_rtts[leader][requester][maj_quorum - 1])
-                        .min(multi_paxos_latencies[leader][requester]);
+                    let mpaxos_latency = swift_mpaxos_latency(requester, leader);
                     if mpaxos_latency < latencies[requester] {
                         use_mpaxos.insert(requester);
                         latencies[requester] = mpaxos_latency;
