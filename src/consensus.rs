@@ -5,6 +5,7 @@ use crate::consensus::read_tracker::ReadTracker;
 use crate::eval;
 use crate::message::Message::{ConsensusM, Done};
 use crate::message::MsgWithSource;
+use crate::consensus::shard_pool::{PooledShard, ShardPool};
 use crate::multi_sink::{MultiSink, ShardMultiSink};
 use bit_set::BitSet;
 use command::Command;
@@ -24,9 +25,9 @@ pub mod kcensus;
 pub(crate) mod message;
 pub(crate) mod paxos_family;
 mod read_tracker;
+pub(crate) mod shard_pool;
 
-/// Number of physical shards preallocated when no explicit pool size is requested.
-pub const DEFAULT_SHARD_POOL_SIZE: usize = 64;
+pub use shard_pool::DEFAULT_SHARD_POOL_SIZE;
 
 pub(crate) struct ConsensusShard<AlgoSettings, AlgoRoundState> {
     // Settings
@@ -79,39 +80,12 @@ impl SleepingShard {
     }
 }
 
-/// End-of-run report on the physical shard pool.
-#[derive(serde::Serialize)]
-struct ShardPoolStats {
-    /// Size of the pool at the end of the run.
-    pool_size: usize,
-    /// Size it was preallocated with. A larger `pool_size` means it was too small.
-    initial_pool_size: usize,
-}
-
-/// Builds an unassigned physical shard, used to fill (and, if needed, grow) the pool.
-type ShardFactory<AlgoSettings, AlgoRoundState> =
-    Box<dyn Fn() -> ConsensusShard<AlgoSettings, AlgoRoundState> + Send>;
-
-pub(crate) struct Consensus<AlgoSettings, AlgoRoundState> {
+pub(crate) struct Consensus<AlgoSettings, AlgoRoundState>
+where
+    ConsensusShard<AlgoSettings, AlgoRoundState>: ConsensusShardTrait,
+{
     process_count: usize,
-
-    /// Compressed state of every logical shard, indexed by shard id.
-    /// Only meaningful for the shards that are not in `active_shards`.
-    sleeping_shards: Vec<SleepingShard>,
-    /// The physical shards. They are allocated once and never moved out of the pool,
-    /// so waking a logical shard up only overwrites the few fields of `SleepingShard`.
-    shard_pool: Vec<ConsensusShard<AlgoSettings, AlgoRoundState>>,
-    /// Logical shard id -> index in `shard_pool` of the shard currently serving it.
-    active_shards: HashMap<usize, usize>,
-    /// Indices in `shard_pool` that no logical shard is currently using.
-    /// Together with `active_shards` it covers each index of `shard_pool` exactly once,
-    /// which is what guarantees a physical shard is never used by two logical shards.
-    free_shards: Vec<usize>,
-    /// Only used when more shards are active at once than the pool was sized for.
-    new_shard: ShardFactory<AlgoSettings, AlgoRoundState>,
-    /// Size the pool was preallocated with, kept to report how far it had to grow.
-    initial_pool_size: usize,
-
+    pool: ShardPool<ConsensusShard<AlgoSettings, AlgoRoundState>>,
     sinks: Arc<Mutex<MultiSink>>,
 }
 
@@ -150,40 +124,23 @@ where
         shard_count: usize,
         pool_size: usize,
         sinks: Arc<Mutex<MultiSink>>,
-        new_shard: ShardFactory<AS, ARS>,
+        new_shard: Box<dyn Fn() -> ConsensusShard<AS, ARS> + Send>,
     ) -> Self {
-        assert!(shard_count > 0);
-        let pool_size = pool_size.clamp(1, shard_count);
         Self {
             process_count,
-            sleeping_shards: vec![SleepingShard::new(my_pid); shard_count],
-            shard_pool: (0..pool_size).map(|_| new_shard()).collect(),
-            active_shards: HashMap::with_capacity(pool_size),
-            // Reversed so that the lowest indices are handed out first.
-            free_shards: (0..pool_size).rev().collect(),
-            new_shard,
-            initial_pool_size: pool_size,
+            pool: ShardPool::new(
+                shard_count,
+                pool_size,
+                SleepingShard::new(my_pid),
+                new_shard,
+            ),
             sinks,
         }
     }
 
-    /// Returns the physical shard serving `shard_id`, waking the logical shard up
-    /// (i.e. claiming a free physical shard and restoring its state) if needed.
+    #[inline]
     fn wake_shard(&mut self, shard_id: usize) -> &mut ConsensusShard<AS, ARS> {
-        let physical = if let Some(&physical) = self.active_shards.get(&shard_id) {
-            physical
-        } else {
-            let physical = match self.free_shards.pop() {
-                Some(physical) => physical,
-                None => self.grow_pool(shard_id),
-            };
-            self.shard_pool[physical].wake_up(shard_id, self.sleeping_shards[shard_id]);
-            let previously_serving = self.active_shards.insert(shard_id, physical);
-            debug_assert!(previously_serving.is_none());
-            self.debug_assert_pool_invariant();
-            physical
-        };
-        &mut self.shard_pool[physical]
+        self.pool.wake(shard_id)
     }
 
     /// True if `msg` is provably a no-op for `shard_id`, so that it can be dropped
@@ -199,7 +156,7 @@ where
     /// in kcensus, kept travelling along the propagation graph) whatever slot it belongs
     /// to, otherwise peers wait forever for a value that no one relays any more.
     fn is_noop_for_sleeping_shard(&self, shard_id: usize, msg: &ConsensusMessage) -> bool {
-        if self.active_shards.contains_key(&shard_id) {
+        if self.pool.is_active(shard_id) {
             return false;
         }
         // A sleeping shard has no pending read (`can_sleep` requires it), and its uid
@@ -214,70 +171,17 @@ where
         // `is_some_and` matters here: `None < Some(slot)` holds, and the messages with no
         // slot (ReadRequest, SpreadValueOnly, ForwardRequest) all still have to be served.
         msg.get_slot()
-            .is_some_and(|slot| slot < self.sleeping_shards[shard_id].slot)
-    }
-
-    /// Appends one physical shard to the pool, because more logical shards are awake at
-    /// once than it was sized for, and returns its index.
-    ///
-    /// One at a time is deliberate: the cost is dominated by building the shard (its own
-    /// maps and vectors), which no batching would avoid, while the `Vec` reallocation it
-    /// may trigger is already amortised. Growing in bigger steps would only make the rare
-    /// hiccup bigger. Experiments should size the pool up front and run with `Warn` or
-    /// `Panic` rather than rely on this path.
-    #[cold]
-    fn grow_pool(&mut self, shard_id: usize) -> usize {
-        let pool_size = self.shard_pool.len();
-        // Only the first growth is reported here: one line per added shard would be a
-        // problem of its own with many shards. The end-of-run report gives the size the
-        // pool had to reach, which is the number an experiment should be resized with.
-        if pool_size == self.initial_pool_size {
-            warn!(
-                "the pool of {pool_size} physical shards is too small: growing it to \
-                 serve logical shard {shard_id} (raise --shard-pool to avoid this)"
-            );
-        }
-        self.shard_pool.push((self.new_shard)());
-        pool_size
+            .is_some_and(|slot| slot < self.pool.sleeping_state(shard_id).slot)
     }
 
     #[inline]
     fn active_shard(&mut self, shard_id: usize) -> &mut ConsensusShard<AS, ARS> {
-        let physical = *self
-            .active_shards
-            .get(&shard_id)
-            .expect("shard should still be awake");
-        &mut self.shard_pool[physical]
+        self.pool.active_shard(shard_id)
     }
 
-    /// Puts `shard_id` back to sleep if it has nothing left to do, freeing its
-    /// physical shard for any other logical shard to claim.
-    fn try_sleep(&mut self, shard_id: usize) {
-        let Some(&physical) = self.active_shards.get(&shard_id) else {
-            return;
-        };
-        let shard = &mut self.shard_pool[physical];
-        if !shard.can_sleep() {
-            return;
-        }
-        self.sleeping_shards[shard_id] = shard.fall_asleep();
-        self.active_shards.remove(&shard_id);
-        debug_assert!(
-            !self.free_shards.contains(&physical),
-            "physical shard {physical} freed twice"
-        );
-        self.free_shards.push(physical);
-        self.debug_assert_pool_invariant();
-    }
-
-    /// Every physical shard is either free or serving exactly one logical shard.
     #[inline]
-    fn debug_assert_pool_invariant(&self) {
-        debug_assert_eq!(
-            self.active_shards.len() + self.free_shards.len(),
-            self.shard_pool.len(),
-            "a physical shard is either used twice or lost"
-        );
+    fn try_sleep(&mut self, shard_id: usize) {
+        self.pool.try_sleep(shard_id)
     }
 }
 
@@ -296,7 +200,7 @@ where
         let mut done = false;
 
         {
-            let sample = self.shard_pool.first().expect("pool should not be empty");
+            let sample = self.pool.sample();
             assert!(sample.can_forward_proposals() || sample.can_propose());
         }
 
@@ -312,8 +216,7 @@ where
                 res = &mut deadlock_deadline => {
                     res.expect("should wait until deadlock_deadline");
                     eprintln!("deadlock detected ! Checking all active shards...");
-                    for (shard_id, &physical) in self.active_shards.iter() {
-                        let shard = &self.shard_pool[physical];
+                    for (shard_id, shard) in self.pool.iter_active() {
                         // A read still short of its quorum keeps a shard awake without
                         // showing up in any of the other three, so it is checked here too.
                         let awaiting_read = !shard.read_tracker.is_empty();
@@ -325,7 +228,7 @@ where
                             }
                         }
                     }
-                    eprintln!("checked all active shards ({} asleep).", self.sleeping_shards.len() - self.active_shards.len());
+                    eprintln!("checked all active shards ({} asleep).", self.pool.shard_count() - self.pool.active_count());
                     panic!("deadlock detected, terminating.");
                 },
                 command = new_client_commands_rx.recv(), if !done => {
@@ -348,9 +251,9 @@ where
                         }
                         None => {
                             debug_assert!(self
-                                .active_shards
-                                .values()
-                                .all(|&p| self.shard_pool[p].my_queued_commands.is_empty()));
+                                .pool
+                                .iter_active()
+                                .all(|(_, shard)| shard.my_queued_commands.is_empty()));
                             done = true;
                             self.sinks.lock().await.broadcast(Done, None).await?;
                             count_done += 1;
@@ -460,25 +363,7 @@ where
             self.try_sleep(shard_id);
         } // 'main_loop: loop
 
-        let pool_size = self.shard_pool.len();
-        if pool_size > self.initial_pool_size {
-            warn!(
-                "the shard pool had to grow from {} to {pool_size} physical shards: \
-                 pass --shard-pool {pool_size} to preallocate it",
-                self.initial_pool_size
-            );
-        }
-        eval::log(
-            "shard-pool-done",
-            &format!(
-                "{pool_size} physical shards ({} preallocated)",
-                self.initial_pool_size
-            ),
-            &ShardPoolStats {
-                pool_size,
-                initial_pool_size: self.initial_pool_size,
-            },
-        );
+        self.pool.report();
 
         let sinks = self.sinks.lock().await;
         eval::log(
@@ -496,10 +381,12 @@ where
     } // run
 }
 
-impl<AS, ARS> ConsensusShard<AS, ARS>
+impl<AS, ARS> PooledShard for ConsensusShard<AS, ARS>
 where
     ConsensusShard<AS, ARS>: ConsensusShardTrait,
 {
+    type Sleeping = SleepingShard;
+
     /// Assigns this (pooled, hence pristine) physical shard to a logical shard.
     #[inline]
     fn wake_up(&mut self, shard_id: usize, state: SleepingShard) {
@@ -551,7 +438,12 @@ where
         );
         true
     }
+}
 
+impl<AS, ARS> ConsensusShard<AS, ARS>
+where
+    ConsensusShard<AS, ARS>: ConsensusShardTrait,
+{
     #[inline]
     async fn start_read(&mut self, command: Command) -> io::Result<()> {
         let local_ready = self.get_my_v().is_none();
@@ -608,6 +500,10 @@ where
             return Ok(Some(self.commit_slot(v, true)));
         };
         if let ReadRequest { id } = msg.msg {
+            // TODO: dependency-based ordering has no slot for this to name. Reads will
+            // have to either become instances carrying their own dependencies, or answer
+            // "readable" as "no uncommitted conflicting instance on this shard".
+            // See docs/dependency-ordering-plan.md.
             let next_readable_slot = self.slot + self.get_my_v().is_some() as usize;
             self.sinks
                 .send(
