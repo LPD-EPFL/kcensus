@@ -669,8 +669,8 @@ impl DepShard {
         let fast_quorum = self.fast_quorum;
         let slow_quorum = self.slow_quorum;
         // With fewer replicas reachable than a fast quorum we can never be unanimous over
-        // one, so the slow path has to trigger on what we can actually collect.
-        let fast_target = fast_quorum.min(self.reachable());
+        // one, so the slow path has to trigger earlier
+        let reachable = self.reachable();
         let my_pid = self.my_pid;
 
         let instance = self
@@ -691,18 +691,14 @@ impl DepShard {
             let deps = instance.leader_deps().expect("we proposed it").clone();
             debug!("Fast-commit id={id} (shard={})", self.sinks.shard_id);
             self.commit_and_broadcast(id, deps).await
-        } else if preaccepts >= slow_quorum && (!unanimous || preaccepts >= fast_target) {
+        } else if preaccepts >= slow_quorum && (!unanimous || reachable < fast_quorum) {
             // Slow path: accept the union of what the quorum reported. There is no
             // arbitration to do — the union is the answer.
             let deps = instance.union().clone();
             instance.accept(deps.clone());
             instance.accept_acked.insert(my_pid);
             debug!("Slow path for id={id} (shard={})", self.sinks.shard_id);
-            self.broadcast(
-                DepMsg::Accept { id, deps },
-                None,
-            )
-            .await?;
+            self.broadcast(DepMsg::Accept { id, deps }, None).await?;
             self.epaxos_try_commit_accepted(id).await
         } else {
             Ok(())
