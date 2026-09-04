@@ -1,6 +1,6 @@
 use crate::consensus::command::Command;
-use crate::consensus::kcensus::propagation::compute_propagation_graphs;
 use crate::consensus::deps::{DepConsensus, DepMode};
+use crate::consensus::kcensus::propagation::compute_propagation_graphs;
 use crate::consensus::kcensus::KCensus;
 use crate::consensus::paxos_family::{PFModeSetting, PaxosFamily};
 use crate::delayer::Delayer;
@@ -89,22 +89,28 @@ enum Algo {
     KCensus,
     #[value(name = "paxos", alias = "Paxos")]
     Paxos,
-    #[value(name = "epaxos", alias = "EPaxos")]
+    /// EPaxos*, agreeing on a dependency set per command.
+    #[value(name = "epaxos", aliases = ["EPaxos", "epaxos-deps", "EPaxosDeps"])]
     EPaxos,
-    /// EPaxos agreeing on dependency sets rather than on which command takes a slot.
-    #[value(name = "epaxos-deps", alias = "EPaxosDeps")]
-    EPaxosDeps,
-    /// SwiftPaxos agreeing on dependency sets.
-    #[value(name = "swift-paxos-deps", alias = "SwiftPaxosDeps")]
-    SwiftPaxosDeps,
+    /// SwiftPaxos, agreeing on a dependency set per command.
+    #[value(
+        name = "swift-paxos",
+        aliases = ["SwiftPaxos", "swiftpaxos", "swift-paxos-deps", "SwiftPaxosDeps"]
+    )]
+    SwiftPaxos,
+    /// EPaxos encoded over the slot layer: agreement is on which command takes a slot,
+    /// with one instance per slot. Superseded by `epaxos`; kept to compare the encodings.
+    #[value(name = "epaxos-slots", alias = "EPaxosSlots")]
+    EPaxosSlots,
+    /// SwiftPaxos over the slot layer. Superseded by `swift-paxos`.
+    #[value(name = "swift-paxos-slots", alias = "SwiftPaxosSlots")]
+    SwiftPaxosSlots,
     #[value(name = "multi-paxos", alias = "Multi-Paxos")]
     MultiPaxos,
     #[value(name = "multi-paxos-3p", alias = "Multi-Paxos-3P")]
     MultiPaxos3P,
     #[value(name = "pando", alias = "Pando")]
     Pando,
-    #[value(name = "swift-paxos", alias = "SwiftPaxos")]
-    SwiftPaxos,
     #[value(name = "no-replication", alias = "NoReplication")]
     NoReplication,
     #[value(name = "weak-replication", alias = "WeakReplication")]
@@ -152,11 +158,11 @@ pub async fn run() -> io::Result<()> {
 
     let epaxos_quorum = (topology.nb_replicas * 3) / 4;
     let algo = match args.algo {
-        Algo::EPaxos => {
+        Algo::EPaxosSlots => {
             if topology.alive_replicas.len() < epaxos_quorum {
                 Algo::Paxos
             } else {
-                Algo::EPaxos
+                Algo::EPaxosSlots
             }
         }
         x => x,
@@ -185,8 +191,12 @@ pub async fn run() -> io::Result<()> {
     let ((client, mut new_client_request_rx), (app, committed_request_tx)) =
         cassandra::App::new(args.db, args.speedup, my_pid, shards).await;
 
-    let (consensus_msg_sinks, consensus_msg_streams) =
-        connector::connect_all(my_pid, topology.clone(), matches!(algo, Algo::SwiftPaxos)).await;
+    let (consensus_msg_sinks, consensus_msg_streams) = connector::connect_all(
+        my_pid,
+        topology.clone(),
+        matches!(algo, Algo::SwiftPaxosSlots),
+    )
+    .await;
     let (delayer, delayed_msg_rx) = Delayer::new();
 
     let delayer_task = tokio::task::spawn(delayer.run(
@@ -318,8 +328,8 @@ pub async fn run() -> io::Result<()> {
             let _ = tokio::join!(app.run(), client.run(workload), consensus);
             propagation_graphs.pando_latencies[my_pid]
         }
-        Algo::EPaxosDeps | Algo::SwiftPaxosDeps => {
-            let (mode, expected_latency) = if algo == Algo::EPaxosDeps {
+        Algo::EPaxos | Algo::SwiftPaxos => {
+            let (mode, expected_latency) = if algo == Algo::EPaxos {
                 (
                     DepMode::EPaxos {
                         coordinator: propagation_graphs.epaxos_committers[my_pid],
@@ -352,7 +362,7 @@ pub async fn run() -> io::Result<()> {
             let _ = tokio::join!(app.run(), client.run(workload), consensus);
             expected_latency
         }
-        Algo::EPaxos => {
+        Algo::EPaxosSlots => {
             let mut leader_prio: Vec<_> = topology.alive_replicas.iter().collect();
             leader_prio.sort_by_key(|pid| propagation_graphs.epaxos_latencies[*pid]);
             let committers = propagation_graphs.epaxos_committers;
@@ -375,7 +385,7 @@ pub async fn run() -> io::Result<()> {
             let _ = tokio::join!(app.run(), client.run(workload), consensus);
             propagation_graphs.epaxos_latencies[my_pid]
         }
-        Algo::SwiftPaxos => {
+        Algo::SwiftPaxosSlots => {
             let mut consensus_obj = PaxosFamily::new(
                 &topology,
                 my_pid,
