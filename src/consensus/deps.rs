@@ -11,6 +11,7 @@ use crate::consensus::deps::dep_set::{requester_of, DepSet};
 use crate::consensus::deps::execution::{cycle_possible, executable_order, next_executable};
 use crate::consensus::deps::instance::{Instance, Phase};
 use crate::consensus::deps::message::DepMsg;
+use crate::consensus::deps::read_tracker::ReadTracker;
 use crate::consensus::message::{CommandBatch, ConsensusMessage, ConsensusMsg};
 use crate::consensus::shard_pool::{PooledShard, ShardPool};
 use crate::eval;
@@ -33,6 +34,7 @@ pub(crate) mod dep_set;
 pub(crate) mod execution;
 pub(crate) mod instance;
 pub(crate) mod message;
+pub(crate) mod read_tracker;
 
 /// Which protocol drives agreement on the dependency set.
 #[derive(Clone, Debug)]
@@ -63,6 +65,7 @@ pub enum DepMode {
 #[derive(Clone, Debug)]
 pub(crate) struct SleepingDepShard {
     next_uid: usize,
+    next_read_id: usize,
     watermark: DepSet,
 }
 
@@ -70,6 +73,7 @@ impl SleepingDepShard {
     fn new(my_pid: usize, process_count: usize) -> Self {
         Self {
             next_uid: 2 * my_pid,
+            next_read_id: 0,
             watermark: DepSet::new(process_count),
         }
     }
@@ -112,6 +116,8 @@ pub(crate) struct DepShard {
     /// `blocked_by` answer without looking at anything: no `Accept` waiting means every
     /// dependency the leader can name is already accepted here.
     parked_accepts: HashSet<usize>,
+    /// The reads we have issued for this shard and not served yet.
+    reads: ReadTracker,
     /// Commands executed since the last drain, in execution order.
     ready: Vec<Command>,
 }
@@ -130,6 +136,12 @@ impl DepShard {
             // SwiftPaxos C1: more than 3/4 of the replicas, including the leader.
             DepMode::SwiftPaxos { .. } => ((replica_count * 3 - 1) / 4 + 1).max(slow_quorum),
         };
+        // EPaxos has no leader, and its own read dependencies would be a quorum union like
+        // ours; SwiftPaxos' leader bounds that union. See `submit_read`.
+        let read_leader = match &mode {
+            DepMode::EPaxos { .. } => None,
+            DepMode::SwiftPaxos { leader, .. } => Some(*leader),
+        };
         Self {
             process_count,
             my_pid,
@@ -145,6 +157,7 @@ impl DepShard {
             seen: DepSet::new(process_count),
             executed: DepSet::new(process_count),
             instances: HashMap::new(),
+            reads: ReadTracker::new(slow_quorum, read_leader),
             deferred: HashMap::new(),
             parked_accepts: HashSet::new(),
             ready: Vec::new(),
@@ -239,6 +252,7 @@ impl DepShard {
     /// another to finish, it just starts its own instance. That parallelism is the whole
     /// point of dependency ordering.
     pub async fn submit(&mut self, command: Command) -> io::Result<()> {
+        debug_assert!(!command.read_only, "a read is submitted by `submit_read`");
         if let DepMode::EPaxos { coordinator } = self.mode
             && coordinator != self.my_pid
         {
@@ -294,6 +308,49 @@ impl DepShard {
         }
 
         self.try_commit(id).await
+    }
+
+    /// Submits a read.
+    ///
+    /// A read takes no instance and no dependency set of its own: it asks every replica
+    /// what it has seen, and is served once the union of a majority of those answers has
+    /// been executed here. That is enough for linearizability — a write that completed was
+    /// voted on by a quorum, every quorum is a majority, and two majorities meet, so at
+    /// least one answer names it.
+    ///
+    /// In SwiftPaxos the union is also bounded by the leader's own answer, which is what
+    /// the protocol would have used as the read's dependencies (Fig. 4 line 26: the
+    /// leader's `D` overwrites everyone's). The bound is sound in both directions. Nothing
+    /// completed is lost by dropping what the leader has not seen, because every committed
+    /// command passes through the leader; and nothing completed is lost by dropping what
+    /// no answer names, because a completed command was seen by a majority, which meets
+    /// ours. Both halves assume a single leader, which holds here: the dependency layer has
+    /// no ballots and no recovery. **With recovery this needs the answers to carry their
+    /// ballot and a majority to agree on it** — otherwise a superseded leader's view would
+    /// prune a command committed under its successor.
+    ///
+    /// EPaxos has no leader to bound with, and its own read dependencies are a quorum union
+    /// like this one.
+    pub async fn submit_read(&mut self, command: Command) -> io::Result<()> {
+        debug_assert!(command.read_only);
+        let id = self.reads.insert(command, self.process_count);
+        if self.is_replica(self.my_pid) {
+            // "Self-addressed messages are delivered immediately."
+            let seen = self.seen.clone();
+            self.reads.receive(id, self.my_pid, &seen);
+        }
+        self.broadcast(DepMsg::ReadRequest { id }, None).await?;
+        self.serve_ready_reads();
+        Ok(())
+    }
+
+    /// Hands over every read whose answers we have now executed. Reads are appended after
+    /// the writes they had to wait for, so the store applies them in that order.
+    fn serve_ready_reads(&mut self) {
+        if self.reads.is_empty() {
+            return;
+        }
+        self.ready.extend(self.reads.take_ready(&self.executed));
     }
 
     /// The instance `id`, which by then always exists: `handle` creates it as soon as the
@@ -355,6 +412,26 @@ impl DepShard {
             "Processing dep msg from {src} (shard={}): {msg:?}",
             self.sinks.shard_id
         );
+        match msg {
+            DepMsg::ReadRequest { id } => {
+                // Whatever we have seen, which is what the reader has to catch up to.
+                return self
+                    .send(
+                        DepMsg::ReadResponse {
+                            id,
+                            seen: self.seen.clone(),
+                        },
+                        src,
+                    )
+                    .await;
+            }
+            DepMsg::ReadResponse { id, seen } => {
+                self.reads.receive(id, src, &seen);
+                self.serve_ready_reads();
+                return Ok(());
+            }
+            _ => {}
+        }
         let Some(id) = msg.id() else {
             // A forwarded request: it *is* the command, and has no instance yet.
             let Some(CommandBatch::Single(command)) = value else {
@@ -478,6 +555,9 @@ impl DepShard {
     async fn dispatch(&mut self, src: usize, msg: DepMsg) -> io::Result<()> {
         match msg {
             DepMsg::Forward => unreachable!("a forwarded request has no instance"),
+            DepMsg::ReadRequest { .. } | DepMsg::ReadResponse { .. } => {
+                unreachable!("a read takes no instance and is answered in `handle`")
+            }
             DepMsg::PreAccept { id, deps } => self.on_pre_accept(src, id, deps).await,
             DepMsg::PreAcceptOk { id, deps } => self.on_pre_accept_ok(src, id, deps).await,
             DepMsg::Accept { id, deps, .. } => self.on_accept(src, id, deps).await,
@@ -748,6 +828,7 @@ impl DepShard {
             // blocked by something it did not execute: there is never a second round.
             debug_assert!(next_executable(&self.instances, &self.executed).is_none());
         }
+        self.serve_ready_reads();
     }
 
     /// Hands one committed command over to the application and advances the watermark.
@@ -906,12 +987,14 @@ impl PooledShard for DepShard {
 
     fn wake_up(&mut self, shard_id: usize, state: SleepingDepShard) {
         debug_assert!(self.instances.is_empty());
+        debug_assert!(self.reads.is_empty());
         debug_assert!(self.ready.is_empty());
         debug_assert!(self.seen.is_empty());
         debug_assert!(self.executed.is_empty());
 
         self.sinks.shard_id = shard_id;
         self.next_uid = state.next_uid;
+        self.reads.set_next_id(state.next_read_id);
         self.seen = state.watermark.clone();
         self.executed = state.watermark;
     }
@@ -926,6 +1009,7 @@ impl PooledShard for DepShard {
         self.seen = DepSet::new(self.process_count);
         SleepingDepShard {
             next_uid: self.next_uid,
+            next_read_id: self.reads.next_id(),
             watermark,
         }
     }
@@ -933,7 +1017,10 @@ impl PooledShard for DepShard {
     /// Nothing unfinished is left: every instance has been executed and handed over, and
     /// nothing is waiting for a payload or for a dependency — sleeping would drop it.
     fn can_sleep(&self) -> bool {
-        let idle = self.instances.is_empty() && self.deferred.is_empty() && self.ready.is_empty();
+        let idle = self.instances.is_empty()
+            && self.deferred.is_empty()
+            && self.reads.is_empty()
+            && self.ready.is_empty();
         debug_assert!(
             !self.deferred.is_empty() || self.parked_accepts.is_empty(),
             "an empty hold-back table holds no `Accept`s"
@@ -1015,6 +1102,12 @@ impl DepConsensus {
                                 eprintln!("  id={id}: {instance:?}");
                             }
                         }
+                        if !shard.reads.is_empty() {
+                            eprintln!(
+                                "shard={shard_id} is stuck on reads: {:?}, executed={:?}",
+                                shard.reads, shard.executed
+                            );
+                        }
                     }
                     eprintln!("checked all active shards ({} asleep).", self.pool.shard_count() - self.pool.active_count());
                     panic!("deadlock detected, terminating.");
@@ -1023,7 +1116,12 @@ impl DepConsensus {
                     match command {
                         Some(command) => {
                             let shard_id = command.shard;
-                            self.pool.wake(shard_id).submit(command).await?;
+                            let shard = self.pool.wake(shard_id);
+                            if command.read_only {
+                                shard.submit_read(command).await?;
+                            } else {
+                                shard.submit(command).await?;
+                            }
                             Some(shard_id)
                         }
                         None => {

@@ -86,6 +86,21 @@ impl DepSet {
         self
     }
 
+    /// Elementwise min: the intersection of the two sets. Both are downward closed, so the
+    /// smaller watermark per replica *is* the intersection.
+    ///
+    /// SwiftPaxos reads use it to bound a quorum's union by the leader's own view. See
+    /// `DepShard::submit_read`.
+    #[inline]
+    pub fn intersect_with(&mut self, other: &DepSet) {
+        debug_assert_eq!(self.marks.len(), other.marks.len());
+        for (mark, other_mark) in self.marks.iter_mut().zip(other.marks.iter()) {
+            if *mark > *other_mark {
+                *mark = *other_mark;
+            }
+        }
+    }
+
     /// True if `uid` is in the set.
     #[inline]
     pub fn contains(&self, uid: usize) -> bool {
@@ -168,6 +183,26 @@ mod tests {
             }
             assert_eq!(uid(replica, 1) - uid(replica, 0), uid_step(N));
         }
+    }
+
+    #[test]
+    fn intersect_keeps_the_lower_watermark_of_each_replica() {
+        let mut mine = DepSet::new(N);
+        mine.insert(uid(0, 3));
+        mine.insert(uid(1, 1));
+        let mut leaders = DepSet::new(N);
+        leaders.insert(uid(0, 1));
+        leaders.insert(uid(1, 4));
+        leaders.insert(uid(2, 0)); // not in `mine`: stays out
+        mine.intersect_with(&leaders);
+        assert_eq!(mine.get(0), Some(uid(0, 1)));
+        assert_eq!(mine.get(1), Some(uid(1, 1)));
+        assert_eq!(mine.get(2), None);
+        // Intersecting is idempotent, and bounded by both sides.
+        let bounded = mine.clone();
+        mine.intersect_with(&leaders);
+        assert_eq!(mine, bounded);
+        assert!(mine.is_covered_by(&leaders));
     }
 
     #[test]

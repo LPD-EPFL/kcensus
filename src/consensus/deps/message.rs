@@ -1,4 +1,5 @@
 use crate::consensus::deps::dep_set::DepSet;
+use crate::consensus::message::ReadId;
 use serde::{Deserialize, Serialize};
 
 /// Messages of the dependency-based ordering layer.
@@ -60,6 +61,14 @@ pub enum DepMsg {
 
     /// EPaxos\* `Commit(b, id, c, D)`: the agreed dependencies.
     Commit { id: usize, deps: DepSet },
+
+    /// A read asking every replica what it has seen. Read-only commands take no instance
+    /// and no dependency set of their own; see `DepShard::submit_read`.
+    ReadRequest { id: ReadId },
+
+    /// What the answering replica had seen when the request reached it. The reader waits
+    /// until it has executed the union of a majority of these.
+    ReadResponse { id: ReadId, seen: DepSet },
 }
 
 impl DepMsg {
@@ -68,7 +77,7 @@ impl DepMsg {
     #[inline]
     pub fn id(&self) -> Option<usize> {
         match self {
-            DepMsg::Forward => None,
+            DepMsg::Forward | DepMsg::ReadRequest { .. } | DepMsg::ReadResponse { .. } => None,
             DepMsg::PreAccept { id, .. }
             | DepMsg::PreAcceptOk { id, .. }
             | DepMsg::Accept { id, .. }
@@ -87,8 +96,16 @@ impl DepMsg {
     #[inline]
     pub fn replicas_only(&self) -> bool {
         match self {
-            DepMsg::PreAcceptOk { .. } | DepMsg::Accept { .. } | DepMsg::AcceptOk { .. } => true,
-            DepMsg::Forward | DepMsg::PreAccept { .. } | DepMsg::Commit { .. } => false,
+            // Only a replica has a view worth reporting, so only a replica is asked. The
+            // answer is a unicast back to the reader, which may cast no vote itself.
+            DepMsg::PreAcceptOk { .. }
+            | DepMsg::Accept { .. }
+            | DepMsg::AcceptOk { .. }
+            | DepMsg::ReadRequest { .. } => true,
+            DepMsg::Forward
+            | DepMsg::PreAccept { .. }
+            | DepMsg::Commit { .. }
+            | DepMsg::ReadResponse { .. } => false,
         }
     }
 
