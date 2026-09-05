@@ -4,7 +4,7 @@ import matplotlib as mpl
 from matplotlib.patches import Patch
 from matplotlib.ticker import MultipleLocator, NullFormatter
 
-from common import ALGORITHMS, args, local_throughput, PLOT_PREFIX
+from common import ALGORITHMS, args, local_throughput, PLOT_PREFIX, local_duration
 from logparser import *
 from prelude import lighten_color, plt
 
@@ -109,7 +109,7 @@ for c in range(2):
             algo=experiment,
             config=config,
             writes=writes,
-            duration=duration,
+            duration=local_duration(duration, int(''.join(c for c in config if c.isdigit()))),
             ingress=ingress,
             throughput=local_throughput(throughput, int(''.join(c for c in config if c.isdigit()))),
             speedup=speedup,

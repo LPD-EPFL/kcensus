@@ -149,6 +149,24 @@ logparser.LOG_DIR = "../local-logs" if args.local else "../logs"
 PLOT_PREFIX = "local-" if args.local else ""
 
 
+def local_duration(nominal, num_replicas, sample_divisor=2):
+    """Measurement window a local run used, e.g. "40s".
+
+    Local throughput falls with the replica count, so a fixed window would collect ever fewer
+    requests as the deployment grows. eval.sh stretches it to compensate.
+
+    `sample_divisor` says how much of an AWS run's request count is reproduced: 2 (default) for
+    half, which is plenty for latency percentiles, and 1 for the resource figures, where compute
+    scales with the number of requests processed. Must match `local_duration` in lib.sh exactly.
+    """
+    if not args.local:
+        return nominal
+    base = int(str(nominal).rstrip("s"))
+    target = (1000 * base) // sample_divisor
+    rate = local_throughput(1000, num_replicas)
+    return f"{max(base, -(-target // rate))}s"       # ceiling division
+
+
 def local_throughput(nominal, num_replicas):
     """Total throughput a run actually used.
 

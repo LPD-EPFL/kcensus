@@ -5,7 +5,7 @@ from itertools import combinations
 from matplotlib import patches
 from matplotlib.ticker import NullLocator, NullFormatter, MultipleLocator
 
-from common import ALGORITHMS, args, local_throughput, PLOT_PREFIX
+from common import ALGORITHMS, args, local_throughput, PLOT_PREFIX, local_duration
 from logparser import *
 from prelude import lighten_color, plt
 
@@ -71,7 +71,7 @@ for num_faults, plot in enumerate(plots):
                 algo=experiment,
                 config=args.config,
                 writes=args.writes,
-                duration=args.duration,
+                duration=local_duration(args.duration, num_replicas),
                 ingress=args.ingress,
                 throughput=local_throughput(args.throughput, num_replicas),
                 speedup=args.speedup,

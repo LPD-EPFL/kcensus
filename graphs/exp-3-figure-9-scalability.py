@@ -2,7 +2,7 @@
 from matplotlib.lines import Line2D
 from matplotlib.ticker import MultipleLocator, ScalarFormatter
 
-from common import ALGORITHMS, local_throughput, PLOT_PREFIX
+from common import ALGORITHMS, local_throughput, PLOT_PREFIX, local_duration
 from logparser import *
 from prelude import plt
 
@@ -63,7 +63,7 @@ for p in range(2):
                 algo=experiment,
                 config=config.replace("@", str(num_replicas)),
                 writes=writes,
-                duration=duration,
+                duration=local_duration(duration, num_replicas, 4),
                 ingress=ingress,
                 throughput=local_throughput(throughput, num_replicas),
                 speedup=speedup,

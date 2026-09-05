@@ -2,7 +2,7 @@
 from matplotlib.lines import Line2D
 from matplotlib.ticker import MultipleLocator
 
-from common import ALGORITHMS, args, k_formatter, local_throughput, PLOT_PREFIX
+from common import ALGORITHMS, args, k_formatter, local_throughput, PLOT_PREFIX, local_duration
 from logparser import *
 from prelude import plt
 
@@ -42,7 +42,7 @@ for i, experiment in enumerate(ALGORITHMS):
             config=config,
             writes=args.writes,
             ingress=args.ingress,
-            duration=args.duration,
+            duration=local_duration(args.duration, num_replicas, 1),
             throughput=local_throughput(args.throughput, num_replicas),
             faults=args.faults,
             speedup=args.speedup,

@@ -57,6 +57,11 @@ function run_one() {
   local throughput; throughput="$(local_throughput "$nb")"
   local per_proposer; per_proposer="$(per_proposer_rate "$throughput" "$nb")"
   local nonvoting; nonvoting="$(get_nonvoting "$configName" "$algo")"
+  # The binary needs warmup+duration+sustain = 1.4375x duration and its deadlock detector fires
+  # at 2.16x, but startup and connection establishment cost a fixed amount that does not scale
+  # with the run. 30s + 3x duration covers both, and still leaves the deadlock detector to fire
+  # first so a stuck run reports which shard hung instead of being killed silently.
+  local timeout_s=$(( 30 + 3 * ${duration%s} ))
 
   local title; title="$(make_title)"
   local logDir="${BASE_LOG_DIR}/${title}"
@@ -75,7 +80,7 @@ function run_one() {
       [ -n "$faults" ]     && faultsArg=(-f "$faults")
       [ -n "$nonvoting" ]  && nonvotingArg=(-v "$nonvoting")
       [ -n "$conflicts" ]  && conflictsArg=("--conflicts=$conflicts")
-      ( timeout 60s /usr/bin/time -f "$TIME_FORMAT" "$BIN" \
+      ( timeout "${timeout_s}s" /usr/bin/time -f "$TIME_FORMAT" "$BIN" \
           --simulate-delays true -p "$pid" --config "configs/${configFile}" \
           -a "$algo" -w "$writes" --duration "$duration" -i "$ingress" \
           -t "$per_proposer" -s "$speedup" -k "$keys" --skew "$skew" --shards "$shards" \
@@ -106,7 +111,7 @@ function exp-1() {
   local configName algo
   for configName in "${EXP1_CONFIGS[@]}"; do
     for algo in "${ALGOS[@]}"; do
-      run_one "$configName" "${configName}.toml" "$algo" 1 "$DURATION" exponential "$SPEEDUP"
+      run_one "$configName" "${configName}.toml" "$algo" 1 "$(local_duration "$(digits "$configName")")s" exponential "$SPEEDUP"
     done
   done
   echo "--- Finished Experiment 1 ---"
@@ -118,7 +123,7 @@ function exp-2() {
   local algo faults
   for algo in "${REPLICATED_ALGOS[@]}"; do
     for faults in "" $(all_faults "$(digits "$EXP2_CONFIG")" "$(get_nonvoting "$EXP2_CONFIG" "$algo")"); do
-      run_one "$EXP2_CONFIG" "${EXP2_CONFIG}.toml" "$algo" 1 "$DURATION" exponential "$SPEEDUP" "$faults"
+      run_one "$EXP2_CONFIG" "${EXP2_CONFIG}.toml" "$algo" 1 "$(local_duration "$(digits "$EXP2_CONFIG")")s" exponential "$SPEEDUP" "$faults"
     done
   done
   echo "--- Finished Experiment 2 ---"
@@ -131,7 +136,10 @@ function exp-3() {
   for type in "${EXP3_TYPES[@]}"; do
     for n in "${EXP3_SIZES[@]}"; do
       for algo in "${ALGOS[@]}"; do
-        run_one "${type}/${n}.toml" "${type}/${n}.toml" "$algo" 1 "$DURATION" exponential "$SPEEDUP"
+        # A quarter of an AWS run's requests: still >=2500 samples at every size, against ~1250
+        # with a fixed window. Half would be nicer statistically but costs 1.7h instead of 1.0h,
+        # and a local run is stable enough that the extra samples buy little.
+        run_one "${type}/${n}.toml" "${type}/${n}.toml" "$algo" 1 "$(local_duration "$n" 4)s" exponential "$SPEEDUP"
       done
       # One propagation measurement per deployment (Figure 12).
       local graphDir="${BASE_LOG_DIR}/c=${type}/${n}.toml"
@@ -145,12 +153,16 @@ function exp-3() {
 }
 
 # --- Experiment 4: resource consumption (Figures 10 and 11) ---
+# Note: unlike the others this asks for the *full* request count (sample divisor 1), not half.
+# Figure 11 plots total CPU time, and compute is essentially proportional to requests processed:
+# at 31 replicas a 10s local window would issue an eighth of the original run's requests, and the
+# shortfall grows with n, bending the very curve the figure is meant to show.
 function exp-4() {
   echo "--- Experiment 4: resource consumption (local) ---"
   local n algo
   for n in "${EXP4_SIZES[@]}"; do
     for algo in "${ALGOS[@]}"; do
-      run_one "${EXP4_TYPE}/${n}.toml" "${EXP4_TYPE}/${n}.toml" "$algo" 1 "$DURATION" exponential "$EXP4_SPEEDUP"
+      run_one "${EXP4_TYPE}/${n}.toml" "${EXP4_TYPE}/${n}.toml" "$algo" 1 "$(local_duration "$n" 1)s" exponential "$EXP4_SPEEDUP"
     done
   done
   echo "--- Finished Experiment 4 ---"

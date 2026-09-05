@@ -77,6 +77,30 @@ function per_proposer_rate() {
   awk -v t="$1" -v n="$2" 'BEGIN { printf "%.6g", t / n }'
 }
 
+# How long a local run measures for, in seconds.
+#
+# Local throughput falls with the replica count, so a fixed 10s window collects fewer and fewer
+# requests as the deployment grows. Stretch the window to compensate.
+#
+# <sample_divisor> says how much of an AWS run's request count to reproduce:
+#   2 (default) -- half. Enough for stable latency percentiles, and a local run is far less noisy
+#                  than a wide-area one, so matching exactly would cost hours for no benefit.
+#   1           -- all of them. Experiment 4 needs this: it measures compute, which is essentially
+#                  proportional to the number of requests processed. A shorter local run would
+#                  understate CPU, and understate it *more* at larger n -- distorting the very
+#                  axis Figure 11 plots against.
+#
+# `local_duration` in graphs/common.py must compute the same value, or the `d=` in the path it
+# looks for will not exist.
+function local_duration() {
+  local num_replicas="$1" sample_divisor="${2:-2}"
+  local base="${DURATION%s}"
+  local target=$(( (THROUGHPUT * base) / sample_divisor ))
+  local rate; rate="$(local_throughput "$num_replicas")"
+  awk -v target="$target" -v rate="$rate" -v base="$base" \
+      'BEGIN { d = target / rate; d = (d == int(d) ? d : int(d) + 1); print (d > base ? d : base) }'
+}
+
 # Every fault combination up to a minority of the voting replicas.
 function all_faults() {
 python3 - <<END
