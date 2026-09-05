@@ -148,8 +148,8 @@ region the experiments can deploy to (31 today):
 ```hcl
 locals {
   ami_ids = {
-    "af-south-1"     = "ami-0d3fdcf99c39e3437"
-    "ap-east-1"      = "ami-0d1ed5125e83f96a0"
+    "af-south-1" = "ami-0d3fdcf99c39e3437"
+    "ap-east-1"  = "ami-0d1ed5125e83f96a0"
     ...
   }
 }
@@ -230,6 +230,17 @@ The Northern-Hemisphere deployment, with every combination of up to 3 crashed re
 ```
 
 *Output: `graphs/plots/exp-2-figure-8-faults.pdf` (+ `.txt`)*
+
+> **Run order.** `exp-2` needs a zero-fault baseline for its "0 Faults" subfigure, and re-runs the
+> same six `aws-ring-7` configurations `exp-1` already ran. Both write to the same log directory,
+> so the last one to run wins — which is why `all` runs `exp-1` first.
+>
+> Running `exp-1` *after* `exp-2` is therefore not wrong, but it leaves Figure 8's 0-fault
+> subfigure measured on a different deployment from the 1-, 2- and 3-fault ones. The effect is
+> small and does not bias the comparison: every algorithm within a subfigure is still measured on
+> the same deployment, so only the overall level of the 0-fault bars can shift, never the ordering
+> between algorithms. Re-run `exp-2` afterwards if you want all four subfigures from one
+> deployment, as in the paper.
 
 ---
 
