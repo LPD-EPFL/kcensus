@@ -111,11 +111,11 @@ EOF
 
 function run_all_plots() {
   plot-1
-  plot-2
   plot-3
   plot-4
   plot-5
   plot-6
+  # plot-2 needs exp-2 data, which no current figure uses - run it explicitly.
 }
 
 function main() {

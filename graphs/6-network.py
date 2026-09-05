@@ -49,7 +49,7 @@ for i, experiment in enumerate(ALGORITHMS):
             keys=args.keys,
             skew=args.skew,
             shards=args.shards,
-            conflicts="",
+            conflicts="conflicts=false",
         )
         assert (
                 len(logs["network-done"]) == num_replicas

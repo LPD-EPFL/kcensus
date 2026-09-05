@@ -57,7 +57,7 @@ for i, experiment in enumerate(ALGORITHMS):
                 skew=args.skew,
                 shards=args.shards,
                 std=source,
-                conflicts="",
+                conflicts="conflicts=false",
             )
             assert (
                     len(raw_output["time"]) == num_replicas

@@ -57,7 +57,7 @@ plot.set_axisbelow(True)
 max_x = 0
 for experiment in algos:
     algo = experiment
-    conflicts = "no-conflicts"
+    conflicts = "conflicts=false"
     skew = 0.0
     if experiment == "kcensus conflicts":
         algo = "kcensus"

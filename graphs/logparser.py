@@ -20,7 +20,7 @@ def parse(
         shards=100,
         std="out",
         stop_at=0,  # 0 means take all requests
-        conflicts="no-conflicts"
+        conflicts="conflicts=false"
 ):
     if not pids:
         num_replicas = int("".join([char for char in config if char.isdigit()]))

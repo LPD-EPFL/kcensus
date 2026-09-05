@@ -112,10 +112,7 @@ function run() {
   local nonvoting="$(get_nonvoting "$configName" "$algo")"
 
   local inventoryFile="inventory-${expId}.ini"
-  local title="c=${configName}/a=${algo}/w=${writes}/d=${duration}/i=${ingress}/t=${throughput}/s=${SPEEDUP}/f=${faults}/k=${keys}/skew=${skew}/shards=${shards}/no-conflicts"
-  if [ "$conflicts" != "" ]; then
-      title="c=${configName}/a=${algo}/w=${writes}/d=${duration}/i=${ingress}/t=${throughput}/s=${SPEEDUP}/f=${faults}/k=${keys}/skew=${skew}/shards=${shards}/conflicts=${conflicts}"
-  fi
+  local title="c=${configName}/a=${algo}/w=${writes}/d=${duration}/i=${ingress}/t=${throughput}/s=${SPEEDUP}/f=${faults}/k=${keys}/skew=${skew}/shards=${shards}/conflicts=${conflicts:-false}"
   local resultPath="${ABSOLUTE_BASE_LOG_DIR}/${title}"
   mkdir -p "${resultPath}"
 
@@ -381,7 +378,7 @@ function exp-3-5() {
       # step 3.3: run the scalability experiments
       for writes in 1; do
         for algo in "${ALGOS[@]}"; do
-            run_title="c=${configs_type}/${num_replicas}.toml/a=${algo}/w=${writes}/d=${duration}/i=exponential/t=${THROUGHPUT}/s=${SPEEDUP}/f=/k=${KEYS}/skew=${SKEW}/shards=${SHARDS}"
+            run_title="c=${configs_type}/${num_replicas}.toml/a=${algo}/w=${writes}/d=${duration}/i=exponential/t=${THROUGHPUT}/s=${SPEEDUP}/f=/k=${KEYS}/skew=${SKEW}/shards=${SHARDS}/conflicts=false"
             resultPath="${ABSOLUTE_BASE_LOG_DIR}/${run_title}"
             mkdir -p "$resultPath"
 
@@ -457,10 +454,11 @@ function init_environment() {
 function run_all_experiments() {
   echo "Running All Experiments"
   exp-1
-  exp-2
   exp-4
   exp-3-5
   exp-6
+  # exp-2 is not part of any figure in the current paper; it is kept above as the
+  # starting point for the new conflicts experiment. Run it explicitly if needed.
 }
 
 function main() {

@@ -57,7 +57,7 @@ function run() {
   local KEYS="$8"
   local SKEW="$9"
   local SHARDS="${10}"
-  local TITLE="c=$CONFIG/a=$ALGO/w=$WRITES/d=$DURATION/i=$INGRESS/t=$THROUGHPUT/s=$SPEEDUP/f=$FAULTS/k=$KEYS/skew=$SKEW/shards=$SHARDS"
+  local TITLE="c=$CONFIG/a=$ALGO/w=$WRITES/d=$DURATION/i=$INGRESS/t=$THROUGHPUT/s=$SPEEDUP/f=$FAULTS/k=$KEYS/skew=$SKEW/shards=$SHARDS/conflicts=false"
   local LOG_DIR="$BASE_LOG_DIR/$TITLE/"
   local NB=$(digits "$CONFIG")
   local PER_PROPOSER_THROUGHPUT=$(($THROUGHPUT / $NB))

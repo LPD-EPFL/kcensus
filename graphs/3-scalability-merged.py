@@ -71,7 +71,7 @@ for p in range(2):
                 keys=keys,
                 skew=skew,
                 shards=shards,
-                conflicts="",
+                conflicts="conflicts=false",
             )
 
             flattened_output = defaultdict(list)
