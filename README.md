@@ -56,13 +56,25 @@ Install the following tools:
     * [Packer](https://learn.hashicorp.com/tutorials/packer/get-started-install-cli) (`packer` on arch) (if you plan to
       rebuild the image)
 * **Runtimes & Build Tools**:
-    * [Python 3](https://www.python.org/downloads/)
+    * [Python 3](https://www.python.org/downloads/), including `venv` and `pip` (`python3-venv` and
+      `python3-pip` on Debian/Ubuntu; included with `python` on arch). The plotting scripts run in
+      a virtual environment that `graphs/env.sh` creates on first use.
     * [Rust Toolchain](https://www.rust-lang.org/tools/install) (`rustup`, `cargo`)
 * **Ansible Docker Collection**:
   After successfully installing Ansible, run this command:
     ```bash
     ansible-galaxy collection install community.docker
     ```
+
+**Optional — matching the paper's typography.** The figures are drawn in Linux Libertine. If the
+font is not installed, matplotlib prints `findfont: Font family 'Linux Libertine O' not found` and
+falls back to a default face: the figures are still numerically correct, only the lettering
+differs. To silence the warnings and match the paper exactly:
+
+```bash
+mkdir -p ~/.local/share/fonts/otf && cp -r graphs/LinLibertine ~/.local/share/fonts/otf/
+fc-cache && rm -rf ~/.cache/matplotlib
+```
 
 ### 2.3 SSH Key Configuration
 
@@ -103,6 +115,14 @@ Compile the `kcensus` and `graph_bench` executables:
 rustup target add x86_64-unknown-linux-musl
 cargo build --target x86_64-unknown-linux-musl --release
 ```
+
+> **CPU requirement.** `.cargo/config.toml` builds with `-C target_cpu=x86-64-v3`, so the binaries
+> require an AVX2-era CPU (Haswell, 2013, or newer). This never affects the AWS runs — the
+> `t3.medium` and `m5.16xlarge` instances used by the experiments both support it — but a binary
+> *run* on older hardware dies with `SIGILL` ("Illegal instruction").
+>
+> If that applies to you, delete `.cargo/config.toml` and rebuild. Nothing else reads that file;
+> the build simply falls back to the portable baseline. It affects speed, not results.
 
 ### 3.2 Building the Custom AMI (Packer)
 
