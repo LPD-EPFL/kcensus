@@ -4,9 +4,9 @@ use serde::{Deserialize, Serialize};
 
 /// Messages of the dependency-based ordering layer.
 ///
-/// There are no ballots: the repository assumes stable failures, so a command's
-/// coordinator never changes and no other process ever proposes for it. That is the same
-/// reason the recovery protocol of EPaxos\*/SwiftPaxos is not implemented.
+/// There are no ballots, because recovery is not implemented — only because the runs we
+/// measure have no failures. Both protocols do have it (EPaxos\* §3.3, SwiftPaxos Fig. 5),
+/// and with it a command's coordinator can change and another process can propose for it.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum DepMsg {
     /// A non-voting process handing its command to the replica that will coordinate it.

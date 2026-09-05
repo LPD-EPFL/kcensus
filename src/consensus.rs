@@ -501,10 +501,8 @@ where
             return Ok(Some(self.commit_slot(v, true)));
         };
         if let ReadRequest { id } = msg.msg {
-            // TODO: dependency-based ordering has no slot for this to name. Reads will
-            // have to either become instances carrying their own dependencies, or answer
-            // "readable" as "no uncommitted conflicting instance on this shard".
-            // See docs/dependency-ordering-plan.md.
+            // Slot-layer reads only: there is no slot for this to name in dependency mode,
+            // which answers reads with its own `DepMsg::ReadRequest` instead.
             let next_readable_slot = self.slot + self.get_my_v().is_some() as usize;
             self.sinks
                 .send(

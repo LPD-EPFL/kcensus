@@ -25,8 +25,8 @@ pub enum Phase {
 /// each piece — EPaxos' `PreAcceptOk` reaches only the coordinator, SwiftPaxos' `FastAck`
 /// reaches everyone — and in the rule that reads it, not in what is worth remembering.
 /// Every process keeps all of it rather than only the coordinator, following EPaxos\*
-/// Fig. 2: that is exactly the state a recovery would have to read, and recovery is the
-/// one part of both protocols this repository leaves out (stable failures, §4 of the plan).
+/// Fig. 2: that is exactly the state a recovery would have to read, and recovery is the one
+/// part of both protocols this repository does not implement.
 #[derive(Debug)]
 pub struct Instance {
     /// Who submitted the command, derived from its uid. Also read through `Debug` in the

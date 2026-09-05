@@ -3,8 +3,7 @@
 //!
 //! This is a second ordering layer, running beside the slot-based one rather than
 //! replacing it: the two share the shard pool, the sinks, the command types and the eval
-//! logging, but nothing of their instance state or their commit-to-execution path. See
-//! `docs/dependency-ordering-plan.md`.
+//! logging, but nothing of their instance state or their commit-to-execution path.
 
 use crate::consensus::command::Command;
 use crate::consensus::deps::dep_set::{requester_of, DepSet};
@@ -61,7 +60,8 @@ pub enum DepMode {
 /// With no epochs, the dependency watermark has to survive sleep — it is what a freshly
 /// submitted command depends on. Once every instance is executed, "seen" and "executed"
 /// coincide, so one vector is enough. This is `O(n)` per logical shard rather than the
-/// `O(1)` of the slot layer; see §5 and §12 of the plan.
+/// `O(1)` of the slot layer; epochs would bring it back down, if it ever shows up in the
+/// memory figures.
 #[derive(Clone, Debug)]
 pub(crate) struct SleepingDepShard {
     next_uid: usize,
@@ -324,10 +324,10 @@ impl DepShard {
     /// completed is lost by dropping what the leader has not seen, because every committed
     /// command passes through the leader; and nothing completed is lost by dropping what
     /// no answer names, because a completed command was seen by a majority, which meets
-    /// ours. Both halves assume a single leader, which holds here: the dependency layer has
-    /// no ballots and no recovery. **With recovery this needs the answers to carry their
-    /// ballot and a majority to agree on it** — otherwise a superseded leader's view would
-    /// prune a command committed under its successor.
+    /// ours. Both halves assume a single leader, which holds here only because recovery is
+    /// not implemented. **Implementing it means the answers must carry their ballot, with a
+    /// majority agreeing on it** — otherwise a superseded leader's view would prune a
+    /// command committed under its successor.
     ///
     /// EPaxos has no leader to bound with, and its own read dependencies are a quorum union
     /// like this one.
