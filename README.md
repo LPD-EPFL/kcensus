@@ -17,7 +17,7 @@ The workflow is automated using Packer, Terraform, Ansible, and shell scripts.
 First, clone the KCensus repository to your local machine:
 
 ```bash
-git clone https://github.com/lPD-EPFL/kcensus/
+git clone https://github.com/LPD-EPFL/kcensus/
 cd kcensus
 ```
 
