@@ -11,6 +11,12 @@ macro_rules! my_state {
     };
 }
 
+/// One slot's worth of KCensus state.
+///
+/// `node_states` is the knowledge census: our latest view of every process's report. It is
+/// filled from `Spread` messages, either explicitly or by reconstructing what the
+/// propagation graph says the sender must have known. Everything else is bookkeeping over
+/// it.
 pub struct KCensusRoundState {
     my_pid: usize,
     majority: usize,
@@ -18,7 +24,11 @@ pub struct KCensusRoundState {
     node_states: Vec<NodeState>,
     propagation_states: Vec<Duration>,
 
+    /// Every proposer we have heard of this slot. More than one *is* the conflict of
+    /// Algorithm 2 line 17.
     proposers: Vec<usize>,
+    /// Their leaders. Only the highest one can drive the fallback, since a frozen process
+    /// promises `max(leaders)` — see `can_start_paxos_accept`.
     leaders: Vec<usize>,
     received_msgs: HashSet<MessageId>,
 
@@ -68,6 +78,9 @@ impl KCensusRoundState {
         my_state!(self).get_prepared_for()
     }
 
+    /// Algorithm 2 line 16: accept the first command heard of, and never switch. Refusing
+    /// under a conflict is what makes a process end the round with no value of its own,
+    /// which is fine — it still freezes and still reports.
     #[inline]
     pub fn kcensus_try_accept(
         &mut self,
@@ -109,6 +122,10 @@ impl KCensusRoundState {
         my_state!(self).prepare_for(leader);
     }
 
+    /// The second way to freeze: on seeing a conflict, freeze at once rather than waiting
+    /// to reach the end of the schedule (the first way is `NodeState::update_k_state`).
+    /// This is Algorithm 2 lines 17-18 and 27-29 collapsed into local state — with stable
+    /// failures nobody has to be told to adopt.
     #[inline]
     pub fn freeze_and_prepare_for_leaders(&mut self) {
         for leader in self.leaders.iter() {
@@ -136,6 +153,8 @@ impl KCensusRoundState {
         &self.leaders
     }
 
+    /// Two proposers seen, or we have already voted in the fallback. Either way the fast
+    /// path is off for us and our knowledge state stops growing.
     #[inline]
     pub fn has_conflict(&self) -> bool {
         self.proposers().len() > 1 || my_state!(self).get_paxos_accept_round().is_some()
@@ -154,6 +173,11 @@ impl KCensusRoundState {
 
     /**
      * This method simply saves new remote states while keeping proposers/leaders lists up to date.
+     *
+     * `remote_states` is `None` when the sender had no conflict: the propagation graph then
+     * predicts what everyone knew at that point, so the states are implied by the message
+     * rather than carried in it. Only `NodeState`s that are strictly newer are taken, which
+     * is what lets the two sources be merged in any order.
      */
     #[inline]
     pub fn update_remote_states(
@@ -223,6 +247,17 @@ impl KCensusRoundState {
         my_state!(self).get_paxos_accept_round()
     }
 
+    /// Whether we may run the fallback's accept phase: a majority of the processes we have
+    /// heard from have promised us.
+    ///
+    /// Safety needs a majority promised to *at least* us — a lower promise does not bind
+    /// them to our ballot. Asking for exactly us is stricter, and deliberately so: a
+    /// promise above us belongs to a higher process id, which takes priority, and only the
+    /// highest leader ever has to get through.
+    ///
+    /// Retries and timeouts are **not implemented**, only because the runs we measure have
+    /// no failures; a deployment needs them. Without them the propagation graph has to
+    /// deliver the majority on its own — see the `min_quorum` note in `propagation.rs`.
     #[inline]
     pub fn can_start_paxos_accept(&self, alive_replicas: &BitSet) -> bool {
         if self.prepared_for() != Some(self.my_pid)
@@ -241,6 +276,9 @@ impl KCensusRoundState {
         prepared_count >= self.majority
     }
 
+    /// Debug only: "a majority is frozen", i.e. the census exists even if it does not name
+    /// us. Deliberately unused by the protocol — it is what tells a deadlock report whether
+    /// the round is short of freezes or merely short of freezes *for this leader*.
     pub fn could_adopt(&self, alive_replicas: &BitSet) -> bool {
         self.node_states
             .iter()
@@ -250,6 +288,13 @@ impl KCensusRoundState {
             >= self.majority
     }
 
+    /// The adoption check of the paper's line 9-11, read off the census: is there a command
+    /// that could still have met its requirements before the freeze? If so it is the only
+    /// safe candidate; if not, nothing was committed and the caller is free to propose
+    /// anything, which is what lets it batch.
+    ///
+    /// A value already accepted in the fallback wins outright, at the highest round — that
+    /// is ordinary Paxos, and it comes first because such a value may already be committed.
     pub fn adopt(&self, graph: &PropagationGraphs) -> Option<usize> {
         let mut highest_paxos_accept_round = None;
         let mut highest_paxos_accept_value = None;
@@ -303,6 +348,9 @@ impl KCensusRoundState {
         None // Means nothing was committed; thus we can batch
     }
 
+    /// The fast path: we are our command's leader and we hold every acceptance its
+    /// requirements ask for. Unreachable once we have a conflict, since the knowledge state
+    /// stops advancing then.
     #[inline]
     pub fn can_kcensus_commit(&self, graph: &PropagationGraphs) -> bool {
         if let Some(proposer) = my_state!(self).get_k_proposer() {

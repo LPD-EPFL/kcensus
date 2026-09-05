@@ -1,3 +1,15 @@
+//! KCensus over the slot layer: one instance of the paper's protocol per slot.
+//!
+//! A slot runs the fast path — proposers spread their command, processes accept the first
+//! they see and disseminate the evidence — and commits when a proposer's leader holds every
+//! acceptance its requirements name. A conflict abandons that and falls back to Paxos, with
+//! the frozen reports as the census the leader adopts from.
+//!
+//! Two things are worth knowing before reading:
+//! `KCensusMsg` merges four of the paper's messages into `Spread`, and a process freezes
+//! itself as soon as it can rather than when asked. Both are explained where they are
+//! defined.
+
 use crate::consensus::kcensus::message::KCensusMsg;
 use crate::consensus::kcensus::message::KCensusMsg::{PaxosAccept, Spread, SpreadValueOnly};
 use crate::consensus::kcensus::propagation::{MessageId, PropagationGraphs};
@@ -38,6 +50,9 @@ impl KCensusShard {
         let process_count = topology.nb_processes;
         let replica_count = topology.nb_replicas;
         assert!(my_pid < process_count);
+        // The fallback's quorum. `propagation.rs` must build the graph so a leader's
+        // frozen knowledge covers at least this many processes when adopting, or the
+        // census can never be assembled and a conflicting slot never finishes.
         let majority = 1 + (replica_count / 2);
         let replica = topology.alive_replicas.contains(my_pid);
         Self {
@@ -144,7 +159,8 @@ impl ConsensusShardTrait for KCensusShard {
                     assert_eq!(old_leader_count, 0);
                 }
 
-                // Freeze if conflict
+                // Freeze if conflict (Algorithm 2 lines 17-18). The other way to freeze is
+                // reaching the end of our schedule, inside `update_k_state` below.
                 let conflict = self.round_state.has_conflict();
                 if conflict {
                     self.round_state.freeze_and_prepare_for_leaders();
@@ -167,6 +183,11 @@ impl ConsensusShardTrait for KCensusShard {
                         self.round_state
                             .set_propagation_state(msg_id.proposer, next_state);
                         // but only update knowledge state when there's no conflict (= non-frozen)
+                        //
+                        // This is what "stop handling Accept&Spread" (line 28) means here: a
+                        // frozen process stops *learning*, but keeps *disseminating* on the
+                        // same schedule, so a conflict does not change what anyone else
+                        // receives or when.
                         if !conflict {
                             self.round_state.update_k_state(next_state, graphs)
                         }
@@ -177,7 +198,9 @@ impl ConsensusShardTrait for KCensusShard {
                     }
                 };
 
-                // A leader reaching final knowledge state can fast-commit
+                // A leader reaching final knowledge state can fast-commit: it holds all the
+                // knowledge its requirements name, so no conflicting command can have met
+                // its own. `reached_final_k_state` is false under a conflict by construction.
                 let leading = graphs.get_leader(msg_id.proposer) == self.my_pid;
                 if leading && reached_final_k_state {
                     // Fast-commiting
@@ -190,7 +213,17 @@ impl ConsensusShardTrait for KCensusShard {
                     return Ok(Some(value));
                 }
 
-                // Try switching to paxos if I'm leading and there are conflicts.
+                // Otherwise fall back to Paxos, with our own id as the ballot.
+                // `prepared_for == me` means we are the highest leader we know of, so the
+                // processes we have heard from are prepared for us rather than for someone
+                // higher, and count towards the quorum below.
+                //
+                // A leader that has not heard of a higher one reaches here too, and may
+                // well commit: that is an ordinary Paxos round at its own ballot. It stays
+                // safe because a voter keeps its `paxos_accept_round` when it later freezes
+                // for a higher leader — and it must have, to be counted in that leader's
+                // census — so the census carries the accepted value and `adopt` returns it
+                // ahead of anything the evidence suggests.
                 if self.round_state.prepared_for() == Some(self.my_pid) {
                     assert!(conflict, "no-conflict: should have fast committed!?");
                     assert!(self.replica);
@@ -228,6 +261,9 @@ impl ConsensusShardTrait for KCensusShard {
                     return Ok(None);
                 }
 
+                // Phase 2 of the fallback. Freezing here is the promise: after it, our
+                // answer is bound to `leader` unless we have already promised a higher one,
+                // in which case we stay silent and let that one drive.
                 self.round_state.freeze_and_prepare_for(leader);
                 if self.round_state.prepared_for() != Some(leader) {
                     return Ok(None);
@@ -310,6 +346,7 @@ impl ConsensusShardTrait for KCensusShard {
         self.round_state.get_my_v()
     }
 
+    /// A slot is under way from the moment we hear of any proposer for it.
     fn ongoing(&self) -> bool {
         !self.round_state.proposers().is_empty()
     }
@@ -395,7 +432,9 @@ impl KCensusShard {
 
             if !value_only {
                 let remote_states = if !self.round_state.has_conflict() {
-                    // state is implicit when there's no conflict
+                    // State is implicit when there's no conflict: the graph determines what
+                    // we knew at this point, so the receiver rebuilds it. Once conflicted we
+                    // have deviated from that schedule and must say so explicitly.
                     None
                 } else {
                     let node_states = self.round_state.clone_node_states();
