@@ -102,7 +102,7 @@ function exp-6() {
   local shards=10000
   for configs in aws-random; do
     for writes in "${WRITES[@]}"; do
-      for num_replicas in $(seq 3 2 33); do
+      for num_replicas in $(seq 3 2 31); do
         for algo in "${ALGOS[@]}"; do
           until run "${configs}/${num_replicas}.toml" "$algo" "$writes" "$duration" exponential "$throughput" "" "$keys" "$skew" "$shards"; do
             echo "Retrying ${algo} on ${configs}/${num_replicas}.toml"
