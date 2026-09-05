@@ -55,7 +55,7 @@ function run_one() {
 
   local nb; nb="$(digits "$configName")"
   local throughput; throughput="$(local_throughput "$nb")"
-  local per_proposer=$(( throughput / nb ))
+  local per_proposer; per_proposer="$(per_proposer_rate "$throughput" "$nb")"
   local nonvoting; nonvoting="$(get_nonvoting "$configName" "$algo")"
 
   local title; title="$(make_title)"

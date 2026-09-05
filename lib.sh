@@ -67,6 +67,16 @@ function local_throughput() {
   echo $(( (THROUGHPUT * 4) / (num_replicas + 1) ))
 }
 
+# The rate each proposer is given, so that the deployment as a whole issues `total` req/s.
+#
+# Deliberately fractional: `-t` is an f32, and integer division here would silently lose the
+# remainder. At 29 replicas `133/29` truncates to 4, i.e. 116 req/s against a path that claims
+# 133 -- a 12.8% understatement, and one that varies with the replica count, which is exactly
+# the axis the scalability figure plots against.
+function per_proposer_rate() {
+  awk -v t="$1" -v n="$2" 'BEGIN { printf "%.6g", t / n }'
+}
+
 # Every fault combination up to a minority of the voting replicas.
 function all_faults() {
 python3 - <<END

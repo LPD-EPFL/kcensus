@@ -139,7 +139,7 @@ function run() {
   echo "--> RUNNING: ${title} (Exp ID: ${expId})"
 
   local proposer_count="$(digits "$configName")"
-  local per_proposer_throughput=$((throughput / proposer_count))
+  local per_proposer_throughput; per_proposer_throughput="$(per_proposer_rate "$throughput" "$proposer_count")"
 
   local attempt
   for attempt in $(seq 1 "${MAX_ATTEMPTS}"); do
@@ -377,7 +377,7 @@ function exp-3() {
             resultPath="${ABSOLUTE_BASE_LOG_DIR}/${run_title}"
             mkdir -p "$resultPath"
 
-            local per_proposer_throughput=$((THROUGHPUT / num_replicas))
+            local per_proposer_throughput; per_proposer_throughput="$(per_proposer_rate "$THROUGHPUT" "$num_replicas")"
 
             echo "--> RUNNING: ${run_title}"
             for attempt in $(seq 1 "${MAX_ATTEMPTS}"); do
