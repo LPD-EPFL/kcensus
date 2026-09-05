@@ -2,6 +2,20 @@
 
 set -e
 
+# Infrastructure currently provisioned. An abort (exhausted retries, `set -e`, or Ctrl-C) must
+# still tear it down: `run` aborting with `exit` would otherwise skip the `destroy` at the end of
+# the calling experiment and leave 7-31 instances billing.
+CURRENT_VAR_FILE=""
+CURRENT_EXP_ID=""
+
+# Bounded retries for a failed experiment run. A failure here is rare -- a kcensus panic (e.g.
+# the deadlock detector), the 60s timeout, or a transient SSH/node problem -- so exhausting all
+# attempts means something is genuinely wrong and the script aborts rather than looping forever.
+# The delay is applied *before* the retry: it gives a transient cause time to clear and gives
+# `pkill` time to actually reap the process that would otherwise still hold port 8000.
+MAX_ATTEMPTS=5
+RETRY_DELAYS=(0 60 120 300)   # before attempts 2, 3, 4 and 5 respectively
+
 BASE_LOG_DIR="./logs"
 # REPLICATED_ALGOS=(kcensus "weak-replication" "swift-paxos" pando epaxos "multi-paxos" paxos)
 # ALGOS=(no-replication "${REPLICATED_ALGOS[@]}")
@@ -69,6 +83,8 @@ function provision() {
     # terraform plan -var-file="../../${varFile}" -var="experiment_id=${expId}"
     terraform apply -parallelism=50 -var-file="../../${varFile}" -var="experiment_id=${expId}" -auto-approve
   )
+  CURRENT_VAR_FILE="${varFile}"
+  CURRENT_EXP_ID="${expId}"
   echo "--> Infrastructure is UP for Exp ID ${expId}; VMs might still be booting."
 }
 
@@ -92,7 +108,22 @@ function destroy() {
     cd deployment/terraform
     terraform destroy -parallelism=50 -var-file="../../${varFile}" -var="experiment_id=${expId}" -auto-approve
   )
+  CURRENT_VAR_FILE=""
+  CURRENT_EXP_ID=""
   echo "--> Infrastructure is DOWN."
+}
+
+# Tear down whatever is still provisioned when the script exits non-zero or is interrupted.
+function teardown_on_abort() {
+  local code=$?
+  trap - EXIT INT TERM
+  if [ "${code}" -ne 0 ] && [ -n "${CURRENT_EXP_ID}" ]; then
+    echo "--> Aborting: tearing down ${CURRENT_EXP_ID} before exit..." >&2
+    destroy "${CURRENT_VAR_FILE}" "${CURRENT_EXP_ID}" || echo \
+      "--> WARNING: teardown FAILED. Destroy manually:" \
+      "./geo_eval.sh destroy ${CURRENT_VAR_FILE} ${CURRENT_EXP_ID}" >&2
+  fi
+  exit "${code}"
 }
 
 function run() {
@@ -121,26 +152,48 @@ function run() {
   local proposer_count="$(digits "$configName")"
   local per_proposer_throughput=$((throughput / proposer_count))
 
-  (
-    cd deployment/ansible
-    until ansible-playbook -i "${inventoryFile}" 03-run-experiment.yml \
-      -e "algo=${algo}" \
-      -e "writes=${writes}" \
-      -e "duration=${duration}" \
-      -e "ingress=${ingress}" \
-      -e "throughput=${per_proposer_throughput}" \
-      -e "speedup=${SPEEDUP}" \
-      -e "faults=${faults}" \
-      -e "keys=${keys}" \
-      -e "skew=${skew}" \
-      -e "shards=${shards}" \
-      -e "nonvoting=${nonvoting}" \
-      -e "conflicts=${conflicts}" \
-      -e "result_path=${resultPath}"; do
-      echo "Experiment failed, retrying $algo on $configName (faults=$faults)..."
-    done
-  )
+  local attempt
+  for attempt in $(seq 1 "${MAX_ATTEMPTS}"); do
+    if (
+      cd deployment/ansible
+      ansible-playbook -i "${inventoryFile}" 03-run-experiment.yml \
+        -e "algo=${algo}" \
+        -e "writes=${writes}" \
+        -e "duration=${duration}" \
+        -e "ingress=${ingress}" \
+        -e "throughput=${per_proposer_throughput}" \
+        -e "speedup=${SPEEDUP}" \
+        -e "faults=${faults}" \
+        -e "keys=${keys}" \
+        -e "skew=${skew}" \
+        -e "shards=${shards}" \
+        -e "nonvoting=${nonvoting}" \
+        -e "conflicts=${conflicts}" \
+        -e "result_path=${resultPath}"
+    ); then
+      break
+    fi
+    echo "--> Attempt ${attempt}/${MAX_ATTEMPTS} failed: ${algo} on ${configName} (faults=${faults})" >&2
+    if [ "${attempt}" -eq "${MAX_ATTEMPTS}" ]; then
+      echo "--> FAILED after ${MAX_ATTEMPTS} attempts: ${title}" >&2
+      exit 1
+    fi
+    # A crashed run can leave a kcensus process holding port 8000, which would make every
+    # further attempt fail too.
+    cleanup_processes "${expId}"
+    retry_backoff "${attempt}"
+  done
   echo "--> COMPLETED. Logs are in ${resultPath}"
+}
+
+# Wait before the retry that follows a failed attempt.
+function retry_backoff() {
+  local attempt="$1"
+  local delay="${RETRY_DELAYS[$((attempt - 1))]}"
+  if [ "${delay}" -gt 0 ]; then
+    echo "--> Waiting ${delay}s before attempt $((attempt + 1))/${MAX_ATTEMPTS}..."
+    sleep "${delay}"
+  fi
 }
 
 function cleanup_processes() {
@@ -385,16 +438,25 @@ function exp-3-5() {
             local per_proposer_throughput=$((THROUGHPUT / num_replicas))
 
             echo "--> RUNNING: ${run_title}"
-            (
-              cd deployment/ansible
-              until ansible-playbook -i "${subInventoryFile}" 03-run-experiment.yml \
-                -e "algo=${algo}" -e "writes=${writes}" -e "duration=${duration}" \
-                -e "ingress=exponential" -e "throughput=${per_proposer_throughput}" -e "speedup=${SPEEDUP}" \
-                -e "keys=${KEYS}" -e "skew=${SKEW}" -e "shards=${SHARDS}" \
-                -e "result_path=${resultPath}" -e "sub_config_file=${subConfigFile}"; do
-                echo "Experiment failed, retrying $algo on $configName..."
-              done
-            )
+            for attempt in $(seq 1 "${MAX_ATTEMPTS}"); do
+              if (
+                cd deployment/ansible
+                ansible-playbook -i "${subInventoryFile}" 03-run-experiment.yml \
+                  -e "algo=${algo}" -e "writes=${writes}" -e "duration=${duration}" \
+                  -e "ingress=exponential" -e "throughput=${per_proposer_throughput}" -e "speedup=${SPEEDUP}" \
+                  -e "keys=${KEYS}" -e "skew=${SKEW}" -e "shards=${SHARDS}" \
+                  -e "result_path=${resultPath}" -e "sub_config_file=${subConfigFile}"
+              ); then
+                break
+              fi
+              echo "--> Attempt ${attempt}/${MAX_ATTEMPTS} failed: ${algo} on ${configName}" >&2
+              if [ "${attempt}" -eq "${MAX_ATTEMPTS}" ]; then
+                echo "--> FAILED after ${MAX_ATTEMPTS} attempts: ${run_title}" >&2
+                exit 1
+              fi
+              cleanup_processes "${EXPERIMENT_ID}"
+              retry_backoff "${attempt}"
+            done
         done
       done
 
@@ -510,5 +572,7 @@ function main() {
       ;;
   esac
 }
+
+trap teardown_on_abort EXIT INT TERM
 
 main "$@"
