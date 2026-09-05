@@ -145,6 +145,15 @@ pub async fn run() -> io::Result<()> {
         x => x,
     };
     debug!("Loaded topology:{topology}");
+    // The latency matrix decides the leaders and quorums, and on AWS it is measured fresh at
+    // deploy time, so record it in the log. Pid 0 only: every process holds the same matrix, and
+    // 31 copies per run would dominate the log bundle. The delimiters make it easy to lift out --
+    // everything between them is a valid config file.
+    if my_pid == 0 {
+        println!("--- BEGIN topology config.toml ---");
+        print!("{}", topology.to_config_toml());
+        println!("--- END topology config.toml ---");
+    }
     println!("Region: {}", topology.regions[my_pid]);
     let start = Instant::now();
     let propagation_graphs = compute_propagation_graphs(
