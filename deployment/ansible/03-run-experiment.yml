@@ -17,6 +17,10 @@
     nonvoting: ""
     conflicts: ""
     result_path: "./results_default"
+    # Where the output of a failed attempt is kept so a deadlock or panic can be investigated
+    # afterwards. Without this a failing run left no logs at all: the shell task marked the host
+    # failed and Ansible skipped the save, and the retry then overwrote nothing.
+    failed_path: ""
 
   tasks:
     - name: Set sub_exp_id for regular inventory (fallback to host index)
@@ -24,6 +28,8 @@
         sub_exp_id: "{{ sub_exp_id | default(groups['kcensus_nodes'].index(inventory_hostname) if 'kcensus_nodes' in groups else groups['all'].index(inventory_hostname)) }}"
         cassandra_port: "{{ cassandra_port | default(9041 + (groups['kcensus_nodes'].index(inventory_hostname) if 'kcensus_nodes' in groups else groups['all'].index(inventory_hostname)) + 1) }}"
 
+    # `failed_when: false` keeps every host in the play whatever kcensus returns, so the save
+    # tasks below always run. The play is failed explicitly at the end instead.
     - name: Run kcensus
       ansible.builtin.shell:
         cmd: >
@@ -43,6 +49,7 @@
           {{ "--conflicts=" + conflicts if conflicts else "" }}
         chdir: /home/ec2-user/kcensus_app
       register: job_result
+      failed_when: false
 
     - name: Save output from each server
       delegate_to: localhost
@@ -54,3 +61,29 @@
 
           STDERR:
           {{ job_result.stderr | default('NO STDERR CAPTURED') }}
+
+    # A deadlock is a distributed symptom, so when any server fails keep *every* server's output,
+    # not just the one that panicked.
+    - name: Keep every server's output when any server failed
+      delegate_to: localhost
+      when:
+        - failed_path | length > 0
+        - ansible_play_hosts | map('extract', hostvars, 'job_result')
+          | map(attribute='rc') | reject('equalto', 0) | list | length > 0
+      ansible.builtin.copy:
+        dest: "{{ failed_path }}/server_{{ sub_exp_id }}.log"
+        content: |
+          EXIT CODE: {{ job_result.rc | default('unknown') }}
+
+          STDOUT:
+          {{ job_result.stdout | default('NO STDOUT CAPTURED') }}
+
+          STDERR:
+          {{ job_result.stderr | default('NO STDERR CAPTURED') }}
+
+    - name: Fail if this server's run failed
+      ansible.builtin.fail:
+        msg: >-
+          kcensus exited {{ job_result.rc }} on {{ inventory_hostname }} (pid {{ sub_exp_id }}){{
+          '; output kept in ' + failed_path if failed_path | length > 0 else '' }}
+      when: job_result.rc != 0

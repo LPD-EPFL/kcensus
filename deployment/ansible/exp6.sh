@@ -95,6 +95,16 @@ function run() {
     fi
   done
 
+  # Keep the output of a failed attempt: the next attempt writes to the same directory and would
+  # otherwise erase the only evidence of a deadlock or panic. Every replica's log is kept, since
+  # a deadlock is visible across the group and not only on the process that gave up.
+  if [ "$failed" -ne 0 ]; then
+    local FAILED_DIR="$BASE_LOG_DIR/failed/$TITLE/attempt=${ATTEMPT:-1}"
+    mkdir -p "$FAILED_DIR"
+    cp -a "$LOG_DIR"/. "$FAILED_DIR"/ 2>/dev/null
+    echo "Attempt ${ATTEMPT:-1} failed; output kept in $FAILED_DIR" >&2
+  fi
+
   return $failed
 }
 
@@ -110,6 +120,7 @@ function exp-6() {
       for num_replicas in $(seq 3 2 31); do
         for algo in "${ALGOS[@]}"; do
           for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
+            ATTEMPT="$attempt"
             if run "${configs}/${num_replicas}.toml" "$algo" "$writes" "$duration" exponential "$throughput" "" "$keys" "$skew" "$shards"; then
               break
             fi

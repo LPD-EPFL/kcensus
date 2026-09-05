@@ -169,7 +169,8 @@ function run() {
         -e "shards=${shards}" \
         -e "nonvoting=${nonvoting}" \
         -e "conflicts=${conflicts}" \
-        -e "result_path=${resultPath}"
+        -e "result_path=${resultPath}" \
+        -e "failed_path=${ABSOLUTE_BASE_LOG_DIR}/failed/${title}/attempt=${attempt}"
     ); then
       break
     fi
@@ -445,7 +446,8 @@ function exp-3-5() {
                   -e "algo=${algo}" -e "writes=${writes}" -e "duration=${duration}" \
                   -e "ingress=exponential" -e "throughput=${per_proposer_throughput}" -e "speedup=${SPEEDUP}" \
                   -e "keys=${KEYS}" -e "skew=${SKEW}" -e "shards=${SHARDS}" \
-                  -e "result_path=${resultPath}" -e "sub_config_file=${subConfigFile}"
+                  -e "result_path=${resultPath}" -e "sub_config_file=${subConfigFile}" \
+                  -e "failed_path=${ABSOLUTE_BASE_LOG_DIR}/failed/${run_title}/attempt=${attempt}"
               ); then
                 break
               fi
