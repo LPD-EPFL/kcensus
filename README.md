@@ -101,18 +101,7 @@ ssh-keygen -t ed25519 -f ~/.ssh/kcensus_key -N ""
 - Private key: `~/.ssh/kcensus_key`
 - Public key: `~/.ssh/kcensus_key.pub`
 
-#### Link it to AWS
-
-1. In the AWS Console (on your browser), go to EC2 > Key Pairs.
-2. Click "Import Key Pair".
-3. Name it `kcensus_key` and paste the contents of `~/.ssh/kcensus_key.pub`. you can get the contents of this file by
-   running the following command on your terminal:
-
-```bash
-cat ~/.ssh/kcensus_key.pub
-```
-
-You should not call your key something other than `kcensus_key` because it is hardcoded in the Terraform configuration.
+Keep these exact file paths: the evaluation scripts expect `~/.ssh/kcensus_key` and `~/.ssh/kcensus_key.pub`.
 
 ### 2.4 Linking Terraform, Packer, and Ansible to AWS
 
