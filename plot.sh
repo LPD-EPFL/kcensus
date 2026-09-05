@@ -5,14 +5,16 @@ set -e
 
 SPEEDUP=1
 
-# `--local` plots the output of eval.sh (./local-logs) instead of the AWS results (./logs).
-# It is forwarded to every figure script, which also applies the reduced local throughput when
-# rebuilding log paths -- see local_throughput in lib.sh and graphs/common.py.
+# `--local` plots the output of `eval.sh --local` (./local-logs) instead of the AWS results
+# (./logs). It is forwarded to every figure script, which also applies the reduced local
+# throughput and stretched window when rebuilding log paths -- see local_throughput and
+# local_duration in lib.sh and graphs/common.py. It may appear anywhere in the arguments.
 LOCAL_FLAG=""
-if [[ "${1:-}" == "--local" ]]; then
-  LOCAL_FLAG="--local"
-  shift
-fi
+ARGS=()
+for arg in "$@"; do
+  if [ "$arg" = "--local" ]; then LOCAL_FLAG="--local"; else ARGS+=("$arg"); fi
+done
+set -- ${ARGS[@]+"${ARGS[@]}"}
 
 function parse_geo_logs() {
   (

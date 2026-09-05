@@ -34,6 +34,33 @@ EXP4_SPEEDUP=2
 # A failed run is rare, so exhausting the attempts means something is genuinely wrong.
 MAX_ATTEMPTS=5
 
+# The one help text. eval.sh, geo_eval.sh and local_eval.sh all print this, so the command list
+# cannot drift between them.
+function show_help() {
+    cat << HELP
+Usage: ./eval.sh [--local] [COMMAND]
+
+Runs the KCensus experiments. Without --local they run on AWS, provisioning and tearing down a
+deployment per experiment; with --local every replica runs as a process on this machine and the
+wide-area link delays are simulated. The commands are the same either way, and --local may go
+before or after the command.
+
+Available commands:
+  exp-1             End-to-end latency              -> Figures 1 and 7
+  exp-2             Impact of failures              -> Figure 8
+  exp-3             Scalability + optimization time -> Figures 9 and 12
+  exp-4             Resource consumption            -> Figures 10 and 11
+  all               Run every experiment the paper depends on (exp-1..exp-4)
+  destroy           Tear down a deployment by hand (AWS only):
+                      ./eval.sh destroy <terraform-var-file> <experiment-id>
+  help/-h/--help    Show this help
+
+Results go to ./logs, or ./local-logs with --local. Plot them with the matching flag:
+  ./plot.sh         plot-N
+  ./plot.sh --local plot-N
+HELP
+}
+
 function digits() {
   echo "$1" | tr -d -c 0-9
 }

@@ -36,24 +36,6 @@ CONFIGS["old/aws-europe-7"]="deployment/terraform/regions/europe-7.tfvars"
 CONFIGS["old/aws-europe-3"]="deployment/terraform/regions/europe-3.tfvars"
 CONFIGS["old/aws-europe-2"]="deployment/terraform/regions/europe-2.tfvars"
 
-function show_help() {
-    cat << EOF
-Usage: $0 [COMMAND]
-
-Available commands:
-  exp-1             End-to-end latency      -> Figures 1 and 7
-  exp-2             Impact of failures      -> Figure 8
-  exp-3             Scalability + optimization time -> Figures 9 and 12
-  exp-4             Resource consumption    -> Figures 10 and 11
-  all               Run every experiment the paper depends on (exp-1..exp-4)
-  destroy           Destroy infrastructure for a given experiment
-  help/-h/--help    Show help
-
-destroy usage:
-  $0 destroy <terraform-var-file> <experiment-id>
-
-EOF
-}
 
 function activate_env() {
   pushd graphs >/dev/null

@@ -175,16 +175,15 @@ wide-area link delays simulated from the topologies in `configs/`. This needs no
 no credentials.
 
 **§5 is still the reference for what each experiment does**, which figures it produces and where
-they are written. Everything there applies unchanged, with two substitutions:
+they are written. Everything there applies unchanged — just add `--local` to both commands:
 
-| on AWS (§5)      | locally             |
-|------------------|---------------------|
-| `./geo_eval.sh …` | `./eval.sh …`      |
-| `./plot.sh …`     | `./plot.sh --local …` |
+```bash
+./eval.sh --local exp-3      # instead of ./eval.sh exp-3
+./plot.sh --local plot-3     # instead of ./plot.sh plot-3
+```
 
-The experiment and plot names are identical, so `./geo_eval.sh exp-3` becomes `./eval.sh exp-3`,
-and `./plot.sh plot-3` becomes `./plot.sh --local plot-3`. There is no provisioning step and
-nothing to clean up afterwards, so §6 does not apply.
+The experiment and plot names are identical either way. There is no provisioning step and nothing
+to clean up afterwards, so §6 does not apply.
 
 To check the whole pipeline works before committing to a long run:
 
@@ -247,7 +246,7 @@ the reported numbers.
 
 All commands below assume you are in the root `kcensus` directory.
 
-Each experiment is run with `geo_eval.sh`, which provisions the infrastructure, deploys the code,
+Each experiment is run with `eval.sh`, which provisions the infrastructure, deploys the code,
 runs the experiment and collects the logs. `plot.sh` then turns those logs into the figures.
 
 There are four experiments, numbered in the order their figures first appear in the paper. Each
@@ -266,7 +265,7 @@ figure is produced by exactly one experiment:
 To produce a figure, run its experiment and then plot it:
 
 ```bash
-./geo_eval.sh exp-N     # provision, run, collect the logs, tear down
+./eval.sh exp-N     # provision, run, collect the logs, tear down
 ./plot.sh     plot-N    # draw every figure that experiment produces
 ```
 
@@ -278,7 +277,7 @@ mean provisioning 31 instances across every region a second time.
 To run everything the paper depends on:
 
 ```bash
-./geo_eval.sh all     # exp-1 .. exp-4
+./eval.sh all     # exp-1 .. exp-4
 ./plot.sh all         # every figure
 ```
 
@@ -300,7 +299,7 @@ Each figure script writes a `.pdf` (the figure) and a `.txt` (the numbers behind
 Four 7-replica deployments: Northern Hemisphere, Europe, North America and East Asia.
 
 ```bash
-./geo_eval.sh exp-1
+./eval.sh exp-1
 ./plot.sh plot-1
 ```
 
@@ -313,7 +312,7 @@ Four 7-replica deployments: Northern Hemisphere, Europe, North America and East 
 The Northern-Hemisphere deployment, with every combination of up to 3 crashed replicas.
 
 ```bash
-./geo_eval.sh exp-2
+./eval.sh exp-2
 ./plot.sh plot-2
 ```
 
@@ -338,7 +337,7 @@ Deployments from 3 to 31 replicas worldwide. Both figures come from this one 31-
 provisioning, which is why they are bundled.
 
 ```bash
-./geo_eval.sh exp-3
+./eval.sh exp-3
 ./plot.sh plot-3
 ```
 
@@ -352,7 +351,7 @@ provisioning, which is why they are bundled.
 A single large machine, simulating link delays locally.
 
 ```bash
-./geo_eval.sh exp-4
+./eval.sh exp-4
 ./plot.sh plot-4
 ```
 
@@ -363,12 +362,12 @@ A single large machine, simulating link delays locally.
 
 **Always clean up resources to avoid unexpected AWS bills.**
 
-The `geo_eval.sh` script automatically destroys resources after each experiment. But if not terminated correctly or
+The `eval.sh` script automatically destroys resources after each experiment. But if not terminated correctly or
 interrupted, resources may remain running.
 
 ### Manual Cleanup
 
-To manually clean up resources, use the `destroy` function in `geo_eval.sh`. Provide the Terraform variable file and the
+To manually clean up resources, use the `destroy` command of `eval.sh`. Provide the Terraform variable file and the
 experiment ID used during provisioning.
 
 `exp-1` provisions one deployment per region set, so its experiment ID carries the deployment
@@ -377,20 +376,20 @@ name; the others use a single ID.
 Example 1: if `exp-1` was interrupted on the Europe deployment:
 
 ```bash
-./geo_eval.sh destroy deployment/terraform/regions/europe-7.tfvars exp-1-aws-europe-7
+./eval.sh destroy deployment/terraform/regions/europe-7.tfvars exp-1-aws-europe-7
 ```
 
 Example 2: if `exp-2` (faults) was interrupted:
 
 ```bash
-./geo_eval.sh destroy deployment/terraform/regions/ring-7.tfvars exp-2
+./eval.sh destroy deployment/terraform/regions/ring-7.tfvars exp-2
 ```
 
 Example 3: if `exp-3` (scalability) or `exp-4` (resources) was interrupted:
 
 ```bash
-./geo_eval.sh destroy deployment/terraform/regions/aws-31.tfvars exp-3
-./geo_eval.sh destroy deployment/terraform/regions/one.tfvars    exp-4
+./eval.sh destroy deployment/terraform/regions/aws-31.tfvars exp-3
+./eval.sh destroy deployment/terraform/regions/one.tfvars    exp-4
 ```
 
 **Always verify in the AWS EC2 Console** that all instances with "kcensus" in their name have been terminated after you

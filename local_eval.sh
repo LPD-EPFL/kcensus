@@ -19,25 +19,6 @@ BIN=./target/x86_64-unknown-linux-musl/release/kcensus
 GRAPH_BENCH=./target/x86_64-unknown-linux-musl/release/graph_bench
 TIME_FORMAT='[log=time] Memory (KB): %M, System (s): %S User (s): %U | {"memory": %M, "system": %S, "user": %U}'
 
-function show_help() {
-    cat << EOF
-Usage: $0 [COMMAND]
-
-Runs the experiments locally instead of on AWS. Results go to ./local-logs and are plotted with
-\`./plot.sh --local ...\`. Throughput is reduced (see lib.sh), so the numbers are not comparable
-with the paper's -- this is for checking that the pipeline works end to end without an AWS
-account, not for reproducing the reported latencies.
-
-Available commands:
-  exp-1             End-to-end latency      -> Figures 1 and 7
-  exp-2             Impact of failures      -> Figure 8
-  exp-3             Scalability + optimization time -> Figures 9 and 12
-  exp-4             Resource consumption    -> Figures 10 and 11
-  all               Run every experiment
-  help/-h/--help    Show help
-
-EOF
-}
 
 function build_binaries() {
   rustup target add x86_64-unknown-linux-musl
