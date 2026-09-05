@@ -140,7 +140,20 @@ cd ../..
 ```
 
 This step builds the AMI in one AWS region and copies it to others. It may take ~30 minutes.
-Then, update AMIs in `deployment/terraform/modules/server/main.tf`.
+
+Packer prints one AMI ID per region at the end. Copy them into the `ami_ids` map in
+`deployment/terraform/modules/server/main.tf` — it is keyed by region name, with one entry per
+region the experiments can deploy to (31 today):
+
+```hcl
+locals {
+  ami_ids = {
+    "af-south-1"     = "ami-0d3fdcf99c39e3437"
+    "ap-east-1"      = "ami-0d1ed5125e83f96a0"
+    ...
+  }
+}
+```
 
 ## 4. Running Experiments and Generating Plots
 
