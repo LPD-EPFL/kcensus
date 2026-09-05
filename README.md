@@ -12,6 +12,16 @@ This guide provides instructions to reproduce the plots from the KCensus paper. 
 
 The workflow is automated using Packer, Terraform, Ansible, and shell scripts.
 
+> **No AWS account? Every experiment can also run on a single machine**, with the wide-area link
+> delays simulated. It needs only the Rust toolchain and Python — no cloud credentials, no cost —
+> and produces all the same figures. The latency and communication figures come out close to the
+> paper's; only the CPU and memory figures depend on your hardware.
+>
+> If that is what you are after, the route is: §1 (clone), §2.2 (dependencies — you can skip the
+> Terraform/Ansible/Packer entries), §3.1 (build), then
+> [§4 Running Locally, Without AWS](#4-running-locally-without-aws), which tells you how the
+> commands in §5 map onto the local runner. §2.1, §2.3, §2.4, §3.2 and §6 are AWS-only.
+
 ## 1. Clone the Repository
 
 First, clone the KCensus repository to your local machine:
@@ -23,8 +33,11 @@ cd kcensus
 
 ## 2. Environment Configuration
 
-All experiments run on AWS, but they are orchestrated from your local machine. This README assumes that your machine is
-running Linux.
+The experiments run on AWS but are orchestrated from your local machine. This README assumes that
+your machine is running Linux.
+
+> Running locally instead (§4)? You still need **§2.2**, minus its Terraform, Ansible and Packer
+> entries. §2.1, §2.3 and §2.4 are AWS-only.
 
 ### 2.1 Cloud Prerequisites
 
@@ -155,7 +168,82 @@ locals {
 }
 ```
 
-## 4. Running Experiments and Generating Plots
+## 4. Running Locally, Without AWS
+
+Every experiment can also run on a single machine, with all replicas as local processes and the
+wide-area link delays simulated from the topologies in `configs/`. This needs no AWS account and
+no credentials.
+
+**§5 is still the reference for what each experiment does**, which figures it produces and where
+they are written. Everything there applies unchanged, with two substitutions:
+
+| on AWS (§5)      | locally             |
+|------------------|---------------------|
+| `./geo_eval.sh …` | `./eval.sh …`      |
+| `./plot.sh …`     | `./plot.sh --local …` |
+
+The experiment and plot names are identical, so `./geo_eval.sh exp-3` becomes `./eval.sh exp-3`,
+and `./plot.sh plot-3` becomes `./plot.sh --local plot-3`. There is no provisioning step and
+nothing to clean up afterwards, so §6 does not apply.
+
+To check the whole pipeline works before committing to a long run:
+
+```bash
+./eval.sh exp-1              # ~6 minutes: build, run, and produce Figures 1 and 7
+./plot.sh --local plot-1
+```
+
+and the full set, if you want every figure:
+
+```bash
+./eval.sh all                # ~4 hours
+./plot.sh --local all
+```
+
+Requirements are the same as §2.2 minus the cloud tooling: the Rust toolchain, Python with `venv`,
+and GNU `time` at `/usr/bin/time` (the resource figures parse its output).
+
+### What is different from the AWS runs
+
+**Results never mix with the AWS ones.** Local runs write to `./local-logs`, never `./logs`, and
+`plot.sh --local` writes figures with a `local-` prefix. Running locally cannot overwrite results
+collected on AWS.
+
+**Throughput is reduced.** One machine cannot sustain the aggregate rate of a wide-area
+deployment, so local runs divide it by `(f+1)/2` — half rate at 7 replicas, an eighth at 31. The
+log path records the reduced value it actually used (`t=500`, `t=125`), which is why `plot.sh`
+needs the `--local` flag to find it.
+
+**Measurement windows are stretched to compensate.** A lower rate over a fixed 10 s window would
+collect ever fewer requests as the deployment grows, so the window grows instead: experiments 1–3
+collect at least a quarter of the requests an AWS run does at every size, and experiment 4
+reproduces the request count *exactly*, because it measures compute and compute tracks requests
+processed.
+
+### How to read the results
+
+The link delays that dominate these protocols are simulated faithfully, based on latency
+measurements that come from the same AWS datacenters as we used, so the **latency figures
+(1, 7, 8, 9)** should land close to the paper's. As a reference point, a local 7-replica run of
+experiment 1 reproduced the reported average latencies to within about 1%.
+
+**Figure 10** (traffic and communication) should also be faithful: bytes and messages per
+application request are properties of the protocol and the topology, not of the machine.
+
+**Figures 11 and 12 depend on your hardware**, and are the two that will not match. Figure 11
+reports CPU time and memory; Figure 12 reports the time to compute optimal requirements on a
+single core. The paper measured them on different instances — an `m5.16xlarge` for Figure 11, and
+one of experiment 3's `t3.medium` machines for Figure 12 — so expect the absolute values to differ
+by roughly the performance ratio between your machine and those. A modern laptop is typically
+faster than either, so the numbers will usually come out lower.
+
+What carries over is the shape of the curves: how cost grows with the replica count, and how the
+protocols compare with each other.
+
+Treat a local run as a check that the pipeline and the protocols behave, not as a reproduction of
+the reported numbers.
+
+## 5. Running Experiments on AWS
 
 All commands below assume you are in the root `kcensus` directory.
 
@@ -200,7 +288,7 @@ To run everything the paper depends on:
 > Each experiment destroys its own resources when it finishes, and attempts to do so if it gives
 > up on a run. **Do not rely on that.** If you interrupt a script, or anything else goes wrong,
 > always check for surviving instances yourself — see
-> [§5 Cleaning Up Cloud Resources](#5-crucial-cleaning-up-cloud-resources).
+> [§6 Cleaning Up Cloud Resources](#6-crucial-cleaning-up-cloud-resources).
 
 Each figure script writes a `.pdf` (the figure) and a `.txt` (the numbers behind it) into
 `graphs/plots/`, named `exp-<experiment>-figure-<number>-<content>`:
@@ -271,7 +359,7 @@ A single large machine, simulating link delays locally.
 *Outputs: `graphs/plots/exp-4-figure-10-network.pdf` and `exp-4-figure-11-cpu-mem.pdf`
 (+ `.txt`)*
 
-## 5. Crucial: Cleaning Up Cloud Resources
+## 6. Crucial: Cleaning Up Cloud Resources
 
 **Always clean up resources to avoid unexpected AWS bills.**
 
