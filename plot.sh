@@ -2,16 +2,6 @@
 
 SPEEDUP=1
 
-if ! command -v "/usr/bin/time" >/dev/null 2>&1
-then
-    echo "/usr/bin/time not installed"
-    exit 1
-fi
-
-function digits() {
-  echo "$1" | tr -d -c 0-9
-}
-
 function parse_geo_logs() {
   (
     cd graphs &&
@@ -45,7 +35,6 @@ function plot-2() {
 }
 
 function plot-3() {
-  local requests=10
   (
     cd graphs &&
     python3 3-scalability-merged.py -g 1 > "./plots/3-scalability.txt" &&
