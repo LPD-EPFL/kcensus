@@ -56,8 +56,8 @@ Available commands:
   help/-h/--help    Show this help
 
 Results go to ./logs, or ./local-logs with --local. Plot them with the matching flag:
-  ./plot.sh         plot-N
-  ./plot.sh --local plot-N
+  ./plot.sh         exp-N
+  ./plot.sh --local exp-N
 HELP
 }
 

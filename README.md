@@ -179,7 +179,7 @@ they are written. Everything there applies unchanged — just add `--local` to b
 
 ```bash
 ./eval.sh --local exp-3      # instead of ./eval.sh exp-3
-./plot.sh --local plot-3     # instead of ./plot.sh plot-3
+./plot.sh --local exp-3     # instead of ./plot.sh exp-3
 ```
 
 The experiment and plot names are identical either way. There is no provisioning step and nothing
@@ -188,14 +188,14 @@ to clean up afterwards, so §6 does not apply.
 To check the whole pipeline works before committing to a long run:
 
 ```bash
-./eval.sh exp-1              # ~6 minutes: build, run, and produce Figures 1 and 7
-./plot.sh --local plot-1
+./eval.sh --local exp-1              # ~6 minutes: build, run, and produce Figures 1 and 7
+./plot.sh --local exp-1
 ```
 
 and the full set, if you want every figure:
 
 ```bash
-./eval.sh all                # ~4 hours
+./eval.sh --local all                # ~4 hours
 ./plot.sh --local all
 ```
 
@@ -266,7 +266,7 @@ To produce a figure, run its experiment and then plot it:
 
 ```bash
 ./eval.sh exp-N     # provision, run, collect the logs, tear down
-./plot.sh     plot-N    # draw every figure that experiment produces
+./plot.sh exp-N     # draw every figure that experiment produces
 ```
 
 Note where an experiment appears twice above: `exp-1` and `exp-3` each produce **two figures, in
@@ -277,8 +277,8 @@ mean provisioning 31 instances across every region a second time.
 To run everything the paper depends on:
 
 ```bash
-./eval.sh all     # exp-1 .. exp-4
-./plot.sh all         # every figure
+./eval.sh all       # exp-1 .. exp-4
+./plot.sh all       # every figure
 ```
 
 > **Note**: The experiments take several hours and incur AWS costs — `exp-2` (faults) dominates,
@@ -300,7 +300,7 @@ Four 7-replica deployments: Northern Hemisphere, Europe, North America and East 
 
 ```bash
 ./eval.sh exp-1
-./plot.sh plot-1
+./plot.sh exp-1
 ```
 
 *Outputs: `graphs/plots/exp-1-figure-1-intro.pdf` and `exp-1-figure-7-latency.pdf` (+ `.txt`)*
@@ -313,7 +313,7 @@ The Northern-Hemisphere deployment, with every combination of up to 3 crashed re
 
 ```bash
 ./eval.sh exp-2
-./plot.sh plot-2
+./plot.sh exp-2
 ```
 
 *Output: `graphs/plots/exp-2-figure-8-faults.pdf` (+ `.txt`)*
@@ -338,7 +338,7 @@ provisioning, which is why they are bundled.
 
 ```bash
 ./eval.sh exp-3
-./plot.sh plot-3
+./plot.sh exp-3
 ```
 
 *Outputs: `graphs/plots/exp-3-figure-9-scalability.pdf` and `exp-3-figure-12-propagation.pdf`
@@ -352,7 +352,7 @@ A single large machine, simulating link delays locally.
 
 ```bash
 ./eval.sh exp-4
-./plot.sh plot-4
+./plot.sh exp-4
 ```
 
 *Outputs: `graphs/plots/exp-4-figure-10-network.pdf` and `exp-4-figure-11-cpu-mem.pdf`
