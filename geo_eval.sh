@@ -30,8 +30,6 @@ CONFIGS["aws-exp-4"]="deployment/terraform/regions/one.tfvars"
 # Old
 CONFIGS["aws-east-asia-9"]="deployment/terraform/regions/east-asia-9.tfvars"
 CONFIGS["aws-europe-8"]="deployment/terraform/regions/europe-8.tfvars"
-CONFIGS["old/aws-world-ring-13"]="deployment/terraform/regions/world-ring-13.tfvars"
-CONFIGS["old/aws-world-ring-9"]="deployment/terraform/regions/world-ring-9.tfvars"
 CONFIGS["old/aws-europe-7"]="deployment/terraform/regions/europe-7.tfvars"
 CONFIGS["old/aws-europe-3"]="deployment/terraform/regions/europe-3.tfvars"
 CONFIGS["old/aws-europe-2"]="deployment/terraform/regions/europe-2.tfvars"
