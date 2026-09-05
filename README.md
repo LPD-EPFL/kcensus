@@ -60,10 +60,10 @@ Install the following tools:
       `python3-pip` on Debian/Ubuntu; included with `python` on arch). The plotting scripts run in
       a virtual environment that `graphs/env.sh` creates on first use.
     * [Rust Toolchain](https://www.rust-lang.org/tools/install) (`rustup`, `cargo`)
-* **Ansible Docker Collection**:
+* **Ansible Collection**:
   After successfully installing Ansible, run this command:
     ```bash
-    ansible-galaxy collection install community.docker
+    ansible-galaxy collection install community.general
     ```
 
 **Optional — matching the paper's typography.** The figures are drawn in Linux Libertine. If the
