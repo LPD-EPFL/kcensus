@@ -53,7 +53,6 @@ Available commands:
   exp-3             Scalability + optimization time -> Figures 9 and 12
   exp-4             Resource consumption    -> Figures 10 and 11
   all               Run every experiment the paper depends on (exp-1..exp-4)
-  exp-conflicts     Legacy: latency under conflicts, maps to no current figure
   destroy           Destroy infrastructure for a given experiment
   help/-h/--help    Show help
 

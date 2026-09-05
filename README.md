@@ -227,14 +227,6 @@ A single large machine, simulating link delays locally.
 *Outputs: `graphs/plots/exp-4-figure-10-network.pdf` and `exp-4-figure-11-cpu-mem.pdf`
 (+ `.txt`)*
 
----
-
-### Legacy: latency under conflicts
-
-`./geo_eval.sh exp-conflicts` and `./plot.sh plot-conflicts` map to no figure in the current
-paper and are excluded from `all`. They are kept as the starting point for a future
-conflict-and-throughput experiment; `plot-conflicts` fails until that data exists.
-
 ## 5. Crucial: Cleaning Up Cloud Resources
 
 **Always clean up resources to avoid unexpected AWS bills.**

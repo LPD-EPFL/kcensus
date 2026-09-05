@@ -96,7 +96,6 @@ Available commands:
   plot-3           Figures 9 and 12 - scalability, and time to optimize requirements
   plot-4           Figures 10 and 11 - resource consumption (traffic/messages, CPU/memory)
   all              Plot every figure in the paper
-  plot-conflicts   Legacy CDF plot - maps to no figure in the current paper
   help/-h/--help   Show help
 
 EOF
