@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 
+# Abort as soon as a plot fails, so a broken figure cannot be mistaken for a clean run.
+set -e
+
 SPEEDUP=1
 
 function parse_geo_logs() {
