@@ -71,6 +71,6 @@ fig.legend(
     handletextpad=0.5,
 )
 
-pdf_path = f"plots/5-propagation.pdf"
+pdf_path = f"plots/exp-3-figure-12-propagation.pdf"
 plt.savefig(pdf_path, format="pdf", bbox_inches="tight", pad_inches=0.01)
 print(pdf_path)

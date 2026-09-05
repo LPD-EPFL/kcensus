@@ -2,7 +2,7 @@
 from matplotlib.lines import Line2D
 from matplotlib.ticker import MultipleLocator
 
-from common import ALGORITHMS, args, serialized_args, ki_formatter
+from common import ALGORITHMS, args, ki_formatter
 from logparser import *
 from prelude import plt
 
@@ -98,6 +98,6 @@ fig.legend(
     handletextpad=0.5,
 )
 
-pdf_path = f"plots/7-cpu-mem{serialized_args}.pdf"
+pdf_path = f"plots/exp-4-figure-11-cpu-mem.pdf"
 plt.savefig(pdf_path, format="pdf", bbox_inches="tight", pad_inches=0.01)
 print(pdf_path)

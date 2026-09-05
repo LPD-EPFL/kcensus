@@ -135,7 +135,6 @@ parser.add_argument(
     "--shards", type=int, default=100, help="Shard count"
 )
 args = parser.parse_args()
-serialized_args = f'-c={args.config.replace("/", "-")}-w={args.writes:g}-d={args.duration}-i={args.ingress}-t={args.throughput:g}-s={args.speedup}-f={args.faults}-g={args.geo}-keys={args.keys}-skew={args.skew}-shards={args.shards}'
 
 
 def k_formatter(x, _):

@@ -253,6 +253,6 @@ fig.legend(
 )
 
 # plt.xticks(ha="center", va="center", rotation=45)
-pdf_path = f"plots/1-bars-new.pdf"
+pdf_path = f"plots/exp-1-figure-7-latency.pdf"
 plt.savefig(pdf_path, format="pdf", bbox_inches="tight", pad_inches=0.01)
 print(pdf_path)

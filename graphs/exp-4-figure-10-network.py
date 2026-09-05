@@ -2,7 +2,7 @@
 from matplotlib.lines import Line2D
 from matplotlib.ticker import MultipleLocator
 
-from common import ALGORITHMS, args, serialized_args, k_formatter
+from common import ALGORITHMS, args, k_formatter
 from logparser import *
 from prelude import plt
 
@@ -91,6 +91,6 @@ fig.legend(
     handletextpad=0.5,
 )
 
-pdf_path = f"plots/6-network{serialized_args}.pdf"
+pdf_path = f"plots/exp-4-figure-10-network.pdf"
 plt.savefig(pdf_path, format="pdf", bbox_inches="tight", pad_inches=0.01)
 print(pdf_path)

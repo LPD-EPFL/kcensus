@@ -5,7 +5,7 @@ from itertools import combinations
 from matplotlib import patches
 from matplotlib.ticker import NullLocator, NullFormatter, MultipleLocator
 
-from common import ALGORITHMS, args, serialized_args
+from common import ALGORITHMS, args
 from logparser import *
 from prelude import lighten_color, plt
 
@@ -172,6 +172,6 @@ fig.legend(
     handletextpad=0.5,
 )
 
-pdf_path = f"plots/4-faults{serialized_args}.pdf"
+pdf_path = f"plots/exp-2-figure-8-faults.pdf"
 plt.savefig(pdf_path, format="pdf", bbox_inches="tight", pad_inches=0.01)
 print(pdf_path)

@@ -127,6 +127,6 @@ plt.axes(frameon=False)
 plt.xticks([])
 plt.yticks([])
 plt.ylabel("Latency (ms)", labelpad=20)
-pdf_path = f"plots/3-scalability.pdf"
+pdf_path = f"plots/exp-3-figure-9-scalability.pdf"
 plt.savefig(pdf_path, format="pdf", bbox_inches="tight", pad_inches=0.01)
 print(pdf_path)

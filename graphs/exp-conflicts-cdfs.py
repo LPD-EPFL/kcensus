@@ -174,6 +174,6 @@ fig.legend(
     handletextpad=0.5,
 )
 
-pdf_path = f"plots/2-cdfs.pdf"
+pdf_path = f"plots/exp-conflicts-cdfs.pdf"
 plt.savefig(pdf_path, format="pdf", bbox_inches="tight", pad_inches=0.01)
 print(pdf_path)

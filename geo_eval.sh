@@ -33,7 +33,7 @@ CONFIGS["aws-ring-7"]="deployment/terraform/regions/ring-7.tfvars"
 CONFIGS["aws-north-america-7"]="deployment/terraform/regions/north-america-7.tfvars"
 CONFIGS["aws-europe-7"]="deployment/terraform/regions/europe-7.tfvars"
 CONFIGS["aws-east-asia-7"]="deployment/terraform/regions/east-asia-7.tfvars"
-CONFIGS["aws-exp-6"]="deployment/terraform/regions/one.tfvars"
+CONFIGS["aws-exp-4"]="deployment/terraform/regions/one.tfvars"
 # Old
 CONFIGS["aws-east-asia-9"]="deployment/terraform/regions/east-asia-9.tfvars"
 CONFIGS["aws-europe-8"]="deployment/terraform/regions/europe-8.tfvars"
@@ -48,12 +48,12 @@ function show_help() {
 Usage: $0 [COMMAND]
 
 Available commands:
-  exp-1             Run Experiment 1: Pure Latency
-  exp-2             Run Experiment 2: Latency under load
-  exp-3-5           Run Experiments 3 & 5: Scalability and Propagation
-  exp-4             Run Experiment 4: Faults
-  exp-6             Run Experiment 6: Resources
-  all               Run all experiments
+  exp-1             End-to-end latency      -> Figures 1 and 7
+  exp-2             Impact of failures      -> Figure 8
+  exp-3             Scalability + optimization time -> Figures 9 and 12
+  exp-4             Resource consumption    -> Figures 10 and 11
+  all               Run every experiment the paper depends on (exp-1..exp-4)
+  exp-conflicts     Legacy: latency under conflicts, maps to no current figure
   destroy           Destroy infrastructure for a given experiment
   help/-h/--help    Show help
 
@@ -303,8 +303,8 @@ get_nonvoting() {
   esac
 }
 
-# No load, pure latency
-# exp-1 <=> 7.1
+# Experiment 1: end-to-end latency. Feeds Figure 1 (Introduction) and Figure 7
+# (End-to-End Latency) -- one set of runs, two figures in two different sections.
 function exp-1() {
   echo "--- Starting Experiment 1: Pure Latency ---"
   for configName in "aws-ring-7" "aws-europe-7" "aws-north-america-7" "aws-east-asia-7"; do
@@ -325,13 +325,13 @@ function exp-1() {
   echo "--- Finished Experiment 1 ---"
 }
 
-# Latency under load
-# exp-2 <=> 7.3
-function exp-2() {
+# Legacy: latency under conflicts. Maps to no figure in the current paper; kept as the
+# starting point for the camera-ready conflicts experiment. Not part of `all`.
+function exp-conflicts() {
   echo "--- Starting Experiment 2: Latency under load ---"
 
   local configName="aws-ring-7"
-  local EXPERIMENT_ID="exp-2"
+  local EXPERIMENT_ID="exp-conflicts"
   local varFile="${CONFIGS[$configName]}"
 
   provision "$varFile" "$EXPERIMENT_ID"
@@ -355,13 +355,12 @@ function exp-2() {
   echo "--- Finished Experiment 2 ---"
 }
 
-# Faults
-# exp-4 <=> 7.2
-function exp-4() {
+# Experiment 2: impact of failures on latency. Feeds Figure 8.
+function exp-2() {
   echo "--- Starting Experiment 4: Faults ---"
 
   local configName="aws-ring-7"
-  local EXPERIMENT_ID="exp-4"
+  local EXPERIMENT_ID="exp-2"
   local varFile="${CONFIGS[$configName]}"
   local writes=1
   local duration="10s"
@@ -381,10 +380,10 @@ function exp-4() {
   echo "--- Finished Experiment 4 ---"
 }
 
-function exp-3-5() {
+function exp-3() {
   echo "--- Starting Experiments 3 & 5: Scalability and Propagation ---"
 
-  local EXPERIMENT_ID="exp-3-5"
+  local EXPERIMENT_ID="exp-3"
   local varFile="deployment/terraform/regions/aws-31.tfvars"
   local tmpDir="$(pwd)/.tmp_configs_${EXPERIMENT_ID}"
   local masterConfigFile="${tmpDir}/master-config.json"
@@ -482,11 +481,11 @@ function exp-3-5() {
   echo "--- Finished Experiments 3 & 5 ---"
 }
 
-function exp-6() {
+function exp-4() {
   echo "--- Starting Experiment 6: Resources ---"
 
-  local configName="aws-exp-6"
-  local EXPERIMENT_ID="exp-6"
+  local configName="aws-exp-4"
+  local EXPERIMENT_ID="exp-4"
   local varFile="${CONFIGS[$configName]}"
   local inventoryFile="inventory-${EXPERIMENT_ID}.ini"
 
@@ -494,13 +493,13 @@ function exp-6() {
 
   (
     cd deployment/ansible/
-    ansible-playbook -i "${inventoryFile}" exp6.yml
+    ansible-playbook -i "${inventoryFile}" exp-4-resources.yml
   )
 
   destroy "$varFile" "$EXPERIMENT_ID"
 
   echo "--> Processing and merging experiment results..."
-  local archive="${ABSOLUTE_BASE_LOG_DIR}/exp6_logs.tar.gz"
+  local archive="${ABSOLUTE_BASE_LOG_DIR}/exp-4-resources_logs.tar.gz"
   echo "--> Extracting and merging $archive..."
   tar -xzf "$archive" -C "${ABSOLUTE_BASE_LOG_DIR}" --strip-components=1
   echo "--> Results successfully merged into ${ABSOLUTE_BASE_LOG_DIR}"
@@ -518,11 +517,10 @@ function init_environment() {
 function run_all_experiments() {
   echo "Running All Experiments"
   exp-1
+  exp-2
+  exp-3
   exp-4
-  exp-3-5
-  exp-6
-  # exp-2 is not part of any figure in the current paper; it is kept above as the
-  # starting point for the new conflicts experiment. Run it explicitly if needed.
+  # exp-conflicts is deliberately excluded: it maps to no figure in the current paper.
 }
 
 function main() {
@@ -544,14 +542,14 @@ function main() {
     "exp-2")
       exp-2
       ;;
-    "exp-3-5")
-      exp-3-5
+    "exp-3")
+      exp-3
       ;;
     "exp-4")
       exp-4
       ;;
-    "exp-6")
-      exp-6
+    "exp-conflicts")
+      exp-conflicts
       ;;
     "all")
       run_all_experiments
