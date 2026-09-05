@@ -29,6 +29,10 @@ impl Delayer {
         mut input_stream: impl Stream<Item = io::Result<MsgWithSource>> + Unpin,
         simulate_delays: bool,
     ) {
+        let jitter: f64 = std::env::var("KC_JITTER")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0.0);
         let delay = Delay::new(Instant::now()).expect("Delayer failed to init delay");
         pin!(delay);
 
@@ -81,7 +85,18 @@ impl Delayer {
                     }
 
                     if simulate_delays {
-                        let deadline = Instant::now() + topology.link_latency(msg.src,my_pid) / speedup;
+                        // XJITTER (experiment only): scale each link latency by a random
+                        // factor in [1 - j, 1 + j]. FIFO per source is preserved by never
+                        // scheduling before the message already queued behind it.
+                        let base = topology.link_latency(msg.src, my_pid) / speedup;
+                        let latency = match jitter {
+                            0.0 => base,
+                            j => base.mul_f64(1.0 - j + 2.0 * j * rand::random::<f64>()),
+                        };
+                        let mut deadline = Instant::now() + latency;
+                        if let Some(last) = queues[msg.src].back() {
+                            deadline = deadline.max(last.deadline);
+                        }
                         queues[msg.src].push_back(
                             msg.with_deadline(deadline)
                         );
