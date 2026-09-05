@@ -10,6 +10,11 @@ ALGOS=("${REPLICATED_ALGOS[@]}")
 WRITES=(1)
 SPEEDUP=2 # latency precision does not matter
 
+# Bounded retries for a failed run: abort if 5 consecutive attempts fail. No delay is needed
+# here -- everything runs locally on a single machine and `run` already does `killall kcensus`
+# at the start of every attempt.
+MAX_ATTEMPTS=5
+
 if ! command -v "/usr/bin/time" >/dev/null 2>&1
 then
     echo "/usr/bin/time not installed"
@@ -104,8 +109,15 @@ function exp-6() {
     for writes in "${WRITES[@]}"; do
       for num_replicas in $(seq 3 2 31); do
         for algo in "${ALGOS[@]}"; do
-          until run "${configs}/${num_replicas}.toml" "$algo" "$writes" "$duration" exponential "$throughput" "" "$keys" "$skew" "$shards"; do
-            echo "Retrying ${algo} on ${configs}/${num_replicas}.toml"
+          for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
+            if run "${configs}/${num_replicas}.toml" "$algo" "$writes" "$duration" exponential "$throughput" "" "$keys" "$skew" "$shards"; then
+              break
+            fi
+            echo "Attempt ${attempt}/${MAX_ATTEMPTS} failed: ${algo} on ${configs}/${num_replicas}.toml" >&2
+            if [ "$attempt" -eq "$MAX_ATTEMPTS" ]; then
+              echo "FAILED after ${MAX_ATTEMPTS} attempts: ${algo} on ${configs}/${num_replicas}.toml" >&2
+              exit 1
+            fi
           done
         done
       done
