@@ -13,20 +13,13 @@ CURRENT_EXP_ID=""
 # attempts means something is genuinely wrong and the script aborts rather than looping forever.
 # The delay is applied *before* the retry: it gives a transient cause time to clear and gives
 # `pkill` time to actually reap the process that would otherwise still hold port 8000.
-MAX_ATTEMPTS=5
+# MAX_ATTEMPTS comes from lib.sh; the delays are AWS-only (a local retry has nothing to wait for).
 RETRY_DELAYS=(0 60 120 300)   # before attempts 2, 3, 4 and 5 respectively
 
+# Experiment definitions shared with eval.sh (algorithms, workload, configs, log-path schema).
+source "$(dirname "$0")/lib.sh"
+
 BASE_LOG_DIR="./logs"
-# REPLICATED_ALGOS=(kcensus "weak-replication" "swift-paxos" pando epaxos "multi-paxos" paxos)
-# ALGOS=(no-replication "${REPLICATED_ALGOS[@]}")
-REPLICATED_ALGOS=(kcensus "swift-paxos" pando epaxos "multi-paxos" paxos)
-ALGOS=("${REPLICATED_ALGOS[@]}")
-DURATION=10s
-THROUGHPUT=1000 # 0.1 req /shard / sec total
-SPEEDUP=1
-KEYS=10000
-SKEW=0
-SHARDS=$KEYS
 
 declare -A CONFIGS
 CONFIGS["aws-ring-7"]="deployment/terraform/regions/ring-7.tfvars"
@@ -66,10 +59,6 @@ function activate_env() {
   pushd graphs >/dev/null
   source env.sh >/dev/null 2>&1
   popd >/dev/null
-}
-
-function digits() {
-  echo "$1" | tr -d -c 0-9
 }
 
 function provision() {
@@ -138,11 +127,12 @@ function run() {
   local skew="${10:-${SKEW}}"
   local shards="${11:-${SHARDS}}"
   local conflicts="${12:-}"
+  local speedup="${SPEEDUP}"
 
   local nonvoting="$(get_nonvoting "$configName" "$algo")"
 
   local inventoryFile="inventory-${expId}.ini"
-  local title="c=${configName}/a=${algo}/w=${writes}/d=${duration}/i=${ingress}/t=${throughput}/s=${SPEEDUP}/f=${faults}/k=${keys}/skew=${skew}/shards=${shards}/conflicts=${conflicts:-false}"
+  local title; title="$(make_title)"
   local resultPath="${ABSOLUTE_BASE_LOG_DIR}/${title}"
   mkdir -p "${resultPath}"
 
@@ -207,30 +197,6 @@ function cleanup_processes() {
   echo "--> Cleanup complete."
 }
 
-function all_faults() {
-python3 - <<END
-from itertools import combinations
-SERVERS=$1
-NON_VOTERS=[$2]
-FROM="$3"
-TO="$4"
-VOTERS=list(range(SERVERS))
-for non_voter in NON_VOTERS:
-  VOTERS.remove(non_voter)
-MINORITY=(len(VOTERS) - 1) // 2
-done = False
-should_yield = FROM == ''
-for r in range(1, MINORITY + 1):
-    if done: break
-    for comb in combinations(VOTERS, r):
-        formatted = ','.join(map(str, comb))
-        if formatted == FROM: should_yield = True
-        if formatted == TO and TO != '': done = True; break;
-        if should_yield:
-          print(formatted, end=' ')
-END
-}
-
 function build_binaries() {
   rustup target add x86_64-unknown-linux-musl
   cargo build --target x86_64-unknown-linux-musl --release
@@ -276,37 +242,11 @@ get_regions() {
   esac
 }
 
-get_nonvoting() {
-  local config=$1
-  local algo=$2
-  case "$config-$algo" in
-    aws-europe-8-weak-replication) echo "4";;
-    aws-europe-8-kcensus) echo "4";;
-    aws-europe-8-swift-paxos) echo "4";;
-    aws-europe-8-pando) echo "4";;
-    aws-europe-8-epaxos) echo "4";;
-    aws-europe-8-multi-paxos) echo "4";;
-    aws-europe-8-multi-paxos-3p) echo "4";;
-    aws-europe-8-paxos) echo "4";;
-
-    aws-east-asia-9-weak-replication) echo "1,8";;
-    aws-east-asia-9-kcensus) echo "1,8";;
-    aws-east-asia-9-swift-paxos) echo "2,4";;
-    aws-east-asia-9-pando) echo "2,4";;
-    aws-east-asia-9-epaxos) echo "1,4";;
-    aws-east-asia-9-multi-paxos) echo "2,4";; # any pair composed of 0,1,2,3,4 works
-    aws-east-asia-9-multi-paxos-3p) echo "2,4";;
-    aws-east-asia-9-paxos) echo "1,8";;
-
-    *) echo "";;
-  esac
-}
-
 # Experiment 1: end-to-end latency. Feeds Figure 1 (Introduction) and Figure 7
 # (End-to-End Latency) -- one set of runs, two figures in two different sections.
 function exp-1() {
   echo "--- Starting Experiment 1: Pure Latency ---"
-  for configName in "aws-ring-7" "aws-europe-7" "aws-north-america-7" "aws-east-asia-7"; do
+  for configName in "${EXP1_CONFIGS[@]}"; do
     local EXPERIMENT_ID="exp-1-$configName"
     local varFile="${CONFIGS[$configName]}"
     provision "$varFile" "$EXPERIMENT_ID"
@@ -430,7 +370,10 @@ function exp-3() {
       # step 3.3: run the scalability experiments
       for writes in 1; do
         for algo in "${ALGOS[@]}"; do
-            run_title="c=${configs_type}/${num_replicas}.toml/a=${algo}/w=${writes}/d=${duration}/i=exponential/t=${THROUGHPUT}/s=${SPEEDUP}/f=/k=${KEYS}/skew=${SKEW}/shards=${SHARDS}/conflicts=false"
+            local configName="${configs_type}/${num_replicas}.toml" ingress=exponential
+            local throughput="${THROUGHPUT}" speedup="${SPEEDUP}" faults="" conflicts=false
+            local keys="${KEYS}" skew="${SKEW}" shards="${SHARDS}"
+            run_title="$(make_title)"
             resultPath="${ABSOLUTE_BASE_LOG_DIR}/${run_title}"
             mkdir -p "$resultPath"
 

@@ -5,6 +5,15 @@ set -e
 
 SPEEDUP=1
 
+# `--local` plots the output of eval.sh (./local-logs) instead of the AWS results (./logs).
+# It is forwarded to every figure script, which also applies the reduced local throughput when
+# rebuilding log paths -- see local_throughput in lib.sh and graphs/common.py.
+LOCAL_FLAG=""
+if [[ "${1:-}" == "--local" ]]; then
+  LOCAL_FLAG="--local"
+  shift
+fi
+
 function parse_geo_logs() {
   (
     cd graphs &&
@@ -25,9 +34,9 @@ function plot-1() {
   # so they are always plotted together.
   (
     cd graphs &&
-    python3 exp-1-figure-1-intro.py   -g 1 > "./plots/exp-1-figure-1-intro.txt" &&
+    python3 exp-1-figure-1-intro.py $LOCAL_FLAG   -g 1 > "./plots/${LOCAL_FLAG:+local-}exp-1-figure-1-intro.txt" &&
     echo 'finished figure 1/2 (Figure 1).' &&
-    python3 exp-1-figure-7-latency.py -g 1 > "./plots/exp-1-figure-7-latency.txt" &&
+    python3 exp-1-figure-7-latency.py $LOCAL_FLAG -g 1 > "./plots/${LOCAL_FLAG:+local-}exp-1-figure-7-latency.txt" &&
     echo 'finished figure 2/2 (Figure 7).'
   )
 }
@@ -41,7 +50,7 @@ function plot-2() {
   local keys=10000
   (
     cd graphs &&
-    python3 exp-2-figure-8-faults.py -c "$config" -w "$writes" --duration "$duration" -i exponential -t $throughput -s "$SPEEDUP" --shards $shards --keys $keys -g 1 > "./plots/exp-2-figure-8-faults.txt" &&
+    python3 exp-2-figure-8-faults.py $LOCAL_FLAG -c "$config" -w "$writes" --duration "$duration" -i exponential -t $throughput -s "$SPEEDUP" --shards $shards --keys $keys -g 1 > "./plots/${LOCAL_FLAG:+local-}exp-2-figure-8-faults.txt" &&
     echo 'finished figure (Figure 8).'
   )
 }
@@ -51,9 +60,9 @@ function plot-3() {
   # Optimize Requirements). Both come from the same 31-node deployment.
   (
     cd graphs &&
-    python3 exp-3-figure-9-scalability.py  -g 1 > "./plots/exp-3-figure-9-scalability.txt" &&
+    python3 exp-3-figure-9-scalability.py $LOCAL_FLAG  -g 1 > "./plots/${LOCAL_FLAG:+local-}exp-3-figure-9-scalability.txt" &&
     echo 'finished figure 1/2 (Figure 9).' &&
-    python3 exp-3-figure-12-propagation.py -g 1 > "./plots/exp-3-figure-12-propagation.txt" &&
+    python3 exp-3-figure-12-propagation.py $LOCAL_FLAG -g 1 > "./plots/${LOCAL_FLAG:+local-}exp-3-figure-12-propagation.txt" &&
     echo 'finished figure 2/2 (Figure 12).'
   )
 }
@@ -69,9 +78,9 @@ function plot-4() {
   local shards=10000
   (
     cd graphs &&
-    python3 exp-4-figure-10-network.py -c aws-random/@.toml -w "$writes" --duration "$duration" -i exponential -t $throughput -s "$speedup" --shards $shards --keys $keys --skew $skew -g 1 > "./plots/exp-4-figure-10-network.txt" &&
+    python3 exp-4-figure-10-network.py $LOCAL_FLAG -c aws-random/@.toml -w "$writes" --duration "$duration" -i exponential -t $throughput -s "$speedup" --shards $shards --keys $keys --skew $skew -g 1 > "./plots/${LOCAL_FLAG:+local-}exp-4-figure-10-network.txt" &&
     echo 'finished figure 1/2 (Figure 10).' &&
-    python3 exp-4-figure-11-cpu-mem.py -c aws-random/@.toml -w "$writes" --duration "$duration" -i exponential -t $throughput -s "$speedup" --shards $shards --keys $keys --skew $skew -g 1 > "./plots/exp-4-figure-11-cpu-mem.txt" &&
+    python3 exp-4-figure-11-cpu-mem.py $LOCAL_FLAG -c aws-random/@.toml -w "$writes" --duration "$duration" -i exponential -t $throughput -s "$speedup" --shards $shards --keys $keys --skew $skew -g 1 > "./plots/${LOCAL_FLAG:+local-}exp-4-figure-11-cpu-mem.txt" &&
     echo 'finished figure 2/2 (Figure 11).'
   )
 }
@@ -81,7 +90,7 @@ function plot-4() {
 function plot-conflicts() {
   (
     cd graphs &&
-    python3 exp-conflicts-cdfs.py -g 1 > "./plots/exp-conflicts-cdfs.txt" &&
+    python3 exp-conflicts-cdfs.py $LOCAL_FLAG -g 1 > "./plots/${LOCAL_FLAG:+local-}exp-conflicts-cdfs.txt" &&
     echo 'finished plot.'
   )
 }
@@ -96,6 +105,10 @@ Available commands:
   plot-3           Figures 9 and 12 - scalability, and time to optimize requirements
   plot-4           Figures 10 and 11 - resource consumption (traffic/messages, CPU/memory)
   all              Plot every figure in the paper
+
+Options:
+  --local          Plot ./local-logs (produced by eval.sh) instead of ./logs. Figures are
+                   written with a 'local-' prefix so they never overwrite the real ones.
   help/-h/--help   Show help
 
 EOF

@@ -2,7 +2,7 @@
 from matplotlib.lines import Line2D
 from matplotlib.ticker import MultipleLocator
 
-from common import ALGORITHMS, args, k_formatter
+from common import ALGORITHMS, args, k_formatter, local_throughput, PLOT_PREFIX
 from logparser import *
 from prelude import plt
 
@@ -43,7 +43,7 @@ for i, experiment in enumerate(ALGORITHMS):
             writes=args.writes,
             ingress=args.ingress,
             duration=args.duration,
-            throughput=args.throughput,
+            throughput=local_throughput(args.throughput, num_replicas),
             faults=args.faults,
             speedup=args.speedup,
             keys=args.keys,
@@ -91,6 +91,6 @@ fig.legend(
     handletextpad=0.5,
 )
 
-pdf_path = f"plots/exp-4-figure-10-network.pdf"
+pdf_path = f"plots/{PLOT_PREFIX}exp-4-figure-10-network.pdf"
 plt.savefig(pdf_path, format="pdf", bbox_inches="tight", pad_inches=0.01)
 print(pdf_path)

@@ -2,7 +2,7 @@
 from matplotlib.lines import Line2D
 from matplotlib.ticker import MultipleLocator, ScalarFormatter
 
-from common import ALGORITHMS
+from common import ALGORITHMS, local_throughput, PLOT_PREFIX
 from logparser import *
 from prelude import plt
 
@@ -65,7 +65,7 @@ for p in range(2):
                 writes=writes,
                 duration=duration,
                 ingress=ingress,
-                throughput=throughput,
+                throughput=local_throughput(throughput, num_replicas),
                 speedup=speedup,
                 faults=faults,
                 keys=keys,
@@ -127,6 +127,6 @@ plt.axes(frameon=False)
 plt.xticks([])
 plt.yticks([])
 plt.ylabel("Latency (ms)", labelpad=20)
-pdf_path = f"plots/exp-3-figure-9-scalability.pdf"
+pdf_path = f"plots/{PLOT_PREFIX}exp-3-figure-9-scalability.pdf"
 plt.savefig(pdf_path, format="pdf", bbox_inches="tight", pad_inches=0.01)
 print(pdf_path)

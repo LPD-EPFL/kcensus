@@ -3,7 +3,7 @@
 from matplotlib.lines import Line2D
 from matplotlib.ticker import MultipleLocator, NullFormatter
 
-from common import ALGORITHMS, args
+from common import ALGORITHMS, args, local_throughput, PLOT_PREFIX
 from logparser import *
 from prelude import lighten_color, plt
 
@@ -123,7 +123,7 @@ for c, row in enumerate(subplots):
             writes=writes,
             duration=duration,
             ingress=ingress,
-            throughput=throughput,
+            throughput=local_throughput(throughput, int(''.join(c for c in config if c.isdigit()))),
             speedup=speedup,
             faults=faults,
             keys=keys,
@@ -253,6 +253,6 @@ fig.legend(
 )
 
 # plt.xticks(ha="center", va="center", rotation=45)
-pdf_path = f"plots/exp-1-figure-7-latency.pdf"
+pdf_path = f"plots/{PLOT_PREFIX}exp-1-figure-7-latency.pdf"
 plt.savefig(pdf_path, format="pdf", bbox_inches="tight", pad_inches=0.01)
 print(pdf_path)

@@ -5,7 +5,7 @@ from itertools import combinations
 from matplotlib import patches
 from matplotlib.ticker import NullLocator, NullFormatter, MultipleLocator
 
-from common import ALGORITHMS, args
+from common import ALGORITHMS, args, local_throughput, PLOT_PREFIX
 from logparser import *
 from prelude import lighten_color, plt
 
@@ -73,7 +73,7 @@ for num_faults, plot in enumerate(plots):
                 writes=args.writes,
                 duration=args.duration,
                 ingress=args.ingress,
-                throughput=args.throughput,
+                throughput=local_throughput(args.throughput, num_replicas),
                 speedup=args.speedup,
                 keys=args.keys,
                 skew=args.skew,
@@ -172,6 +172,6 @@ fig.legend(
     handletextpad=0.5,
 )
 
-pdf_path = f"plots/exp-2-figure-8-faults.pdf"
+pdf_path = f"plots/{PLOT_PREFIX}exp-2-figure-8-faults.pdf"
 plt.savefig(pdf_path, format="pdf", bbox_inches="tight", pad_inches=0.01)
 print(pdf_path)

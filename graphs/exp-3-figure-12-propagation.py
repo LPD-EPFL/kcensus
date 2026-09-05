@@ -2,6 +2,10 @@
 from matplotlib.lines import Line2D
 from matplotlib.ticker import MultipleLocator
 
+import logparser
+
+# `args` is unused here, but importing common parses --local and points logparser at the right root.
+from common import PLOT_PREFIX, args  # noqa: F401
 from logparser import *
 from prelude import plt
 
@@ -47,7 +51,7 @@ for config_list, cl_style in config_lists.items():
     # percentiles_ys = ([], [])
     for num_replicas in range(3, 31 + 2, 2):
         config = config_list.replace("@", str(num_replicas))
-        with open(f"../logs/c={config}/graph_bench.stdout") as file:
+        with open(f"{logparser.LOG_DIR}/c={config}/graph_bench.stdout") as file:
             logs = parse_file(file)["graph-generation"]
             assert len(logs) == 1
             xs.append(num_replicas)
@@ -71,6 +75,6 @@ fig.legend(
     handletextpad=0.5,
 )
 
-pdf_path = f"plots/exp-3-figure-12-propagation.pdf"
+pdf_path = f"plots/{PLOT_PREFIX}exp-3-figure-12-propagation.pdf"
 plt.savefig(pdf_path, format="pdf", bbox_inches="tight", pad_inches=0.01)
 print(pdf_path)

@@ -1,235 +1,180 @@
 #!/usr/bin/env bash
+#
+# Run every experiment locally, with all replicas as processes on this machine and link delays
+# simulated from the configs in `configs/`. Same experiments, same algorithms, same log-path
+# schema as geo_eval.sh -- see lib.sh, which both scripts share so they cannot drift apart.
+#
+# Two things differ from the AWS runs, and both are visible in the log path:
+#   * the log root is ./local-logs, never ./logs, so a local run can never overwrite AWS results;
+#   * throughput is divided by (f+1)/2, because one machine cannot sustain the wide-area rate.
+#     The path records the real reduced value (t=500 for 7 replicas, t=125 for 31), so `plot.sh
+#     --local` has to apply the same arithmetic to find it.
 
-CASSANDRA_BASE_PORT="9042"
-BASE_LOG_DIR="./logs"
-REPLICATED_ALGOS=(kcensus "weak-replication" "swift-paxos" pando epaxos "multi-paxos" paxos)
-ALGOS=(no-replication ${REPLICATED_ALGOS[@]})
-CONFIGS=(aws-europe-7-alt.toml aws-north-america-7.toml aws-world-ring-13.toml) # aws-europe-7.toml aws-world-ring-9.toml
-YCSB=(1 0.5 0.05)
-REQUESTS=100
-SPEEDUP=1
+set -e
 
-if ! command -v "/usr/bin/time" >/dev/null 2>&1
-then
-    echo "/usr/bin/time not installed"
-    exit 1
-fi
+source "$(dirname "$0")/lib.sh"
 
-function digits() {
-  echo "$1" | tr -d -c 0-9
+BASE_LOG_DIR="./local-logs"
+BIN=./target/x86_64-unknown-linux-musl/release/kcensus
+GRAPH_BENCH=./target/x86_64-unknown-linux-musl/release/graph_bench
+TIME_FORMAT='[log=time] Memory (KB): %M, System (s): %S User (s): %U | {"memory": %M, "system": %S, "user": %U}'
+
+function show_help() {
+    cat << EOF
+Usage: $0 [COMMAND]
+
+Runs the experiments locally instead of on AWS. Results go to ./local-logs and are plotted with
+\`./plot.sh --local ...\`. Throughput is reduced (see lib.sh), so the numbers are not comparable
+with the paper's -- this is for checking that the pipeline works end to end without an AWS
+account, not for reproducing the reported latencies.
+
+Available commands:
+  exp-1             End-to-end latency      -> Figures 1 and 7
+  exp-2             Impact of failures      -> Figure 8
+  exp-3             Scalability + optimization time -> Figures 9 and 12
+  exp-4             Resource consumption    -> Figures 10 and 11
+  all               Run every experiment
+  help/-h/--help    Show help
+
+EOF
 }
 
-function start_cassandra() {
-  local NB="$1"
-  for i in $(seq 1 "$NB"); do
-    (
-      local name="cassandra-$i"
-      if [ -z "$(docker ps -a -q --filter="name=$name")" ]; then
-        docker run -e JVM_OPTS="-Xms256M -Xmx1024M" --name "$name" -p $((CASSANDRA_BASE_PORT + i - 1)):9042 -d shotover/cassandra-test:5.0-rc1-r3
-      else
-        echo "$name already running" >/dev/null
-      fi
-    ) &
-  done
-  wait
-  for i in $(seq 1 "$NB"); do
-    (
-      local name="cassandra-$i"
-      until docker exec "$name" cqlsh -e "SELECT now() FROM system.local;" > /dev/null 2>&1; do
-        echo "Waiting for $name to be ready..."
-        sleep 2
-      done
-      echo "$name ready" >/dev/null
-    ) &
-  done
-  wait
+function build_binaries() {
+  rustup target add x86_64-unknown-linux-musl
+  cargo build --target x86_64-unknown-linux-musl --release
 }
 
-function stop_cassandra() {
-  docker ps -a -q --filter="name=cassandra" | xargs docker rm -f
-}
+# run <configName> <configFile> <algo> <writes> <duration> <ingress> <speedup> [faults] [keys] [skew] [shards] [conflicts]
+#
+# <configName> is what goes in the log path (matching geo_eval.sh exactly); <configFile> is the
+# toml under configs/. They differ for the 7-replica deployments, where the path has no suffix.
+function run_one() {
+  local configName="$1" configFile="$2" algo="$3" writes="$4" duration="$5" ingress="$6"
+  local speedup="$7" faults="${8:-}" keys="${9:-${KEYS}}" skew="${10:-${SKEW}}"
+  local shards="${11:-${SHARDS}}" conflicts="${12:-}"
 
-function run() {
-  local CONFIG="$1"
-  local ALGO="$2"
-  local WRITES="$3"
-  local REQUESTS="$4"
-  local INGRESS="$5"
-  local THROUGHPUT="$6"
-  local FAULTS="$7"
-  local TITLE="c=$CONFIG/a=$ALGO/w=$WRITES/r=$REQUESTS/i=$INGRESS/t=$THROUGHPUT/s=$SPEEDUP/f=$FAULTS/no-conflicts"
-  local LOG_DIR="$BASE_LOG_DIR/$TITLE/"
-  mkdir -p "$LOG_DIR"
-  killall kcensus 2>/dev/null
-  local NB=$(digits "$CONFIG")
-#  if [[ "${CASSANDRA,,}" != "false" && "$CASSANDRA" != "0" ]]; then
-#    start_cassandra "$NB"
-#  fi
-  echo "Starting $TITLE"
-  for pid in $(seq 0 $((NB - 1))); do
-    local CASSANDRA_ARG=""
-#    if [[ "${CASSANDRA,,}" != "false" && "$CASSANDRA" != "0" ]]; then
-#      CASSANDRA_ARG="-d 127.0.0.1:$((CASSANDRA_BASE_PORT + pid))"
-#    fi
-    local FAULTS_ARG=""
-    if [[ "$FAULTS" != "" ]]; then
-       FAULTS_ARG="-f $FAULTS"
+  local nb; nb="$(digits "$configName")"
+  local throughput; throughput="$(local_throughput "$nb")"
+  local per_proposer=$(( throughput / nb ))
+  local nonvoting; nonvoting="$(get_nonvoting "$configName" "$algo")"
+
+  local title; title="$(make_title)"
+  local logDir="${BASE_LOG_DIR}/${title}"
+  mkdir -p "$logDir"
+
+  echo "--> RUNNING: ${title}"
+
+  local attempt
+  for attempt in $(seq 1 "${MAX_ATTEMPTS}"); do
+    # Match the process *name* exactly: `pkill -f kcensus` would also match any shell whose
+    # command line merely mentions the repo path, including this script's own caller.
+    pkill -x kcensus 2>/dev/null || true
+    local pids=() pid
+    for pid in $(seq 0 $((nb - 1))); do
+      local faultsArg=() nonvotingArg=() conflictsArg=()
+      [ -n "$faults" ]     && faultsArg=(-f "$faults")
+      [ -n "$nonvoting" ]  && nonvotingArg=(-v "$nonvoting")
+      [ -n "$conflicts" ]  && conflictsArg=("--conflicts=$conflicts")
+      ( timeout 60s /usr/bin/time -f "$TIME_FORMAT" "$BIN" \
+          --simulate-delays true -p "$pid" --config "configs/${configFile}" \
+          -a "$algo" -w "$writes" --duration "$duration" -i "$ingress" \
+          -t "$per_proposer" -s "$speedup" -k "$keys" --skew "$skew" --shards "$shards" \
+          "${nonvotingArg[@]}" "${faultsArg[@]}" "${conflictsArg[@]}" \
+      ) > "${logDir}/${pid}.stdout" 2> "${logDir}/${pid}.stderr" &
+      pids+=($!)
+    done
+
+    local failed=0
+    for pid in "${pids[@]}"; do wait "$pid" || failed=1; done
+    [ "$failed" -eq 0 ] && return 0
+
+    # Keep the failed attempt: the next one overwrites this directory, and a deadlock or panic
+    # would otherwise leave no evidence at all.
+    local failedDir="${BASE_LOG_DIR}/failed/${title}/attempt=${attempt}"
+    mkdir -p "$failedDir" && cp -a "${logDir}/." "${failedDir}/" 2>/dev/null || true
+    echo "--> Attempt ${attempt}/${MAX_ATTEMPTS} failed: ${algo} on ${configName}; output kept in ${failedDir}" >&2
+    if [ "$attempt" -eq "${MAX_ATTEMPTS}" ]; then
+      echo "--> FAILED after ${MAX_ATTEMPTS} attempts: ${title}" >&2
+      exit 1
     fi
-    cargo build -r 2>"$LOG_DIR/$pid.stderr"
-    local time_format='[log=time] Memory (KB): %M, System (s): %S User (s): %U | {"memory": %M, "system": %S, "user": %U}'
-    (/usr/bin/time -f "$time_format" target/release/kcensus -p "$pid" --config "configs/$CONFIG" $CASSANDRA_ARG -a "$ALGO" -w "$WRITES" -r "$REQUESTS" -i "$INGRESS" -t "$THROUGHPUT" -s "$SPEEDUP" $FAULTS_ARG)>"$LOG_DIR/$pid.stdout" 2>>"$LOG_DIR/$pid.stderr" &
   done
-  wait
 }
 
-# No load, pure latency
+# --- Experiment 1: end-to-end latency (Figures 1 and 7) ---
 function exp-1() {
-  for writes in "${YCSB[@]}"; do
-    for config in "${CONFIGS[@]}"; do
-      for algo in "${ALGOS[@]}"; do
-        run "$config" "$algo" "$writes" "$REQUESTS" round-robin 0
-      done
-      (
-        cd graphs &&
-        source env.sh >/dev/null 2>&1 &&
-        python3 1-bars.py -c "$config" -w "$writes" -r "$REQUESTS" -i round-robin -t 0 -s "$SPEEDUP" &&
-        python3 2-cdfs.py -c "$config" -w "$writes" -r "$REQUESTS" -i round-robin -t 0 -s "$SPEEDUP"
-      )
+  echo "--- Experiment 1: end-to-end latency (local) ---"
+  local configName algo
+  for configName in "${EXP1_CONFIGS[@]}"; do
+    for algo in "${ALGOS[@]}"; do
+      run_one "$configName" "${configName}.toml" "$algo" 1 "$DURATION" exponential "$SPEEDUP"
     done
   done
+  echo "--- Finished Experiment 1 ---"
 }
 
-# Latency under load
+# --- Experiment 2: impact of failures (Figure 8) ---
 function exp-2() {
-  local LOADS=(0.05 0.1) # req/s per client
-  for writes in "${YCSB[@]}"; do
-    for config in aws-world-ring-13.toml; do # "${CONFIGS[@]}"; do
-      for load in "${LOADS[@]}"; do
-        for algo in "${ALGOS[@]}"; do
-          run "$config" "$algo" "$writes" "$REQUESTS" exponential "$load"
-        done
-        (
-          cd graphs &&
-          source env.sh >/dev/null 2>&1 &&
-          python3 1-bars.py -c "$config" -w "$writes" -r "$REQUESTS" -i exponential -t "$load" -s "$SPEEDUP" &&
-          python3 2-cdfs.py -c "$config" -w "$writes" -r "$REQUESTS" -i exponential -t "$load" -s "$SPEEDUP"
-        )
-      done
-    done
-  done
-}
-
-# Scalability
-function exp-3() {
-  local requests=10
-  for configs in aws-random aws-from-paris; do
-    for writes in "${YCSB[@]}"; do
-      for num_replicas in $(seq 3 2 31); do
-        for algo in "${ALGOS[@]}"; do
-          run "${configs}/${num_replicas}.toml" "$algo" "$writes" "$requests" round-robin 0
-        done
-      done
-      (
-        cd graphs &&
-        source env.sh >/dev/null 2>&1 &&
-        python3 3-scalability.py -c "${configs}/@.toml" -w "$writes" -r "$requests" -i round-robin -t 0 -s "$SPEEDUP"
-      )
-    done
-  done
-}
-
-function all_faults() {
-python3 - <<END
-from itertools import combinations
-REPLICAS=$1
-FROM="$2"
-TO="$3"
-MAJORITY=REPLICAS // 2
-done = False
-should_yield = FROM == ''
-for r in range(1, MAJORITY + 1):
-    if done: break
-    for comb in combinations(range(REPLICAS), r):
-        formatted = ','.join(map(str, comb))
-        if formatted == FROM: should_yield = True
-        if formatted == TO and TO != '': done = True; break;
-        if should_yield:
-          print(formatted, end=' ')
-END
-}
-
-# Faults
-function exp-4() {
-  local config=aws-world-ring-9.toml
-  local writes=1
-  local requests=10
+  echo "--- Experiment 2: impact of failures (local) ---"
+  local algo faults
   for algo in "${REPLICATED_ALGOS[@]}"; do
-    for faults in "" $(all_faults "$(digits "$config")"); do
-      run "$config" "$algo" $writes $requests round-robin 0 "$faults"
+    for faults in "" $(all_faults "$(digits "$EXP2_CONFIG")" "$(get_nonvoting "$EXP2_CONFIG" "$algo")"); do
+      run_one "$EXP2_CONFIG" "${EXP2_CONFIG}.toml" "$algo" 1 "$DURATION" exponential "$SPEEDUP" "$faults"
     done
   done
-  (
-    cd graphs &&
-    source env.sh >/dev/null 2>&1 &&
-    python3 4-faults.py -c "$config" -w "$writes" -r "$requests" -i round-robin -t 0 -s "$SPEEDUP"
-  )
+  echo "--- Finished Experiment 2 ---"
 }
 
-# Propagation
-function exp-5() {
-  for configs in aws-random aws-from-paris; do
-    for num_replicas in $(seq 3 2 31); do
-      local TITLE="c=$configs/${num_replicas}.toml"
-      local LOG_DIR="$BASE_LOG_DIR/$TITLE/"
-      local STDOUT="${LOG_DIR}/graph_bench.stdout"
-      local STDERR="${LOG_DIR}/graph_bench.stderr"
-      mkdir -p "$LOG_DIR"
-      echo "" >"$STDOUT" 2>>"$STDERR"
-      for num_faults in 0; do # $(seq 0 $(((num_replicas / 2) < 2 ? (num_replicas / 2) : 2))); do
-        echo "Running graph bench on $TITLE with $num_faults faults"
-        cargo run --bin graph_bench -r -- --config "configs/${configs}/${num_replicas}.toml" --fault-count "$num_faults">>"$STDOUT" 2>>"$STDERR"
+# --- Experiment 3: scalability and optimization time (Figures 9 and 12) ---
+function exp-3() {
+  echo "--- Experiment 3: scalability + optimization time (local) ---"
+  local type n algo
+  for type in "${EXP3_TYPES[@]}"; do
+    for n in "${EXP3_SIZES[@]}"; do
+      for algo in "${ALGOS[@]}"; do
+        run_one "${type}/${n}.toml" "${type}/${n}.toml" "$algo" 1 "$DURATION" exponential "$SPEEDUP"
       done
+      # One propagation measurement per deployment (Figure 12).
+      local graphDir="${BASE_LOG_DIR}/c=${type}/${n}.toml"
+      mkdir -p "$graphDir"
+      echo "--> RUNNING Graph Bench: c=${type}/${n}.toml"
+      "$GRAPH_BENCH" --config "configs/${type}/${n}.toml" --fault-count 0 -w 50 -s 200 \
+        > "${graphDir}/graph_bench.stdout" 2> "${graphDir}/graph_bench.stderr"
     done
   done
-  (
-    cd graphs &&
-    source env.sh >/dev/null 2>&1 &&
-    python3 5-propagation.py
-  )
+  echo "--- Finished Experiment 3 ---"
 }
 
-# Resources
-function exp-6() {
-  SPEEDUP=10000000 # latency precision does not matter
-  local requests=1000
-  for configs in aws-random aws-from-paris; do
-    for writes in "${YCSB[@]}"; do
-      for num_replicas in $(seq 3 2 31); do
-        for algo in "${ALGOS[@]}"; do
-          run "${configs}/${num_replicas}.toml" "$algo" "$writes" "$((requests / num_replicas))" round-robin 0
-        done
-      done
-      (
-        cd graphs &&
-        source env.sh >/dev/null 2>&1 &&
-        python3 6-network.py -c "${configs}/@.toml" -w "$writes" -r "$requests" -i round-robin -t 0 -s "$SPEEDUP" &&
-        python3 7-cpu-mem.py -c "${configs}/@.toml" -w "$writes" -r "$requests" -i round-robin -t 0 -s "$SPEEDUP"
-      )
+# --- Experiment 4: resource consumption (Figures 10 and 11) ---
+function exp-4() {
+  echo "--- Experiment 4: resource consumption (local) ---"
+  local n algo
+  for n in "${EXP4_SIZES[@]}"; do
+    for algo in "${ALGOS[@]}"; do
+      run_one "${EXP4_TYPE}/${n}.toml" "${EXP4_TYPE}/${n}.toml" "$algo" 1 "$DURATION" exponential "$EXP4_SPEEDUP"
     done
   done
+  echo "--- Finished Experiment 4 ---"
 }
 
-exp-1
-exp-2
-exp-3
-exp-4
-exp-5
-exp-6
+function main() {
+  if [[ $# -eq 0 ]]; then show_help; exit 0; fi
 
-#python3 1-bars-merged.py
-#python3 4-faults.py -c=aws-world-ring-9.toml -w=1 -r=10 -i=round-robin -t=0
-#python3 2-cdfs-merged.py
-#python3 3-scalability-merged.py
-#python3 5-propagation.py
-#python3 6-network.py -r 1000 -c aws-random/@.toml -s 10000000 -w 1 -t=0
-#python3 7-cpu-mem.py -r 1000 -c aws-random/@.toml -s 10000000 -w 1 -t=0
+  if ! command -v /usr/bin/time >/dev/null 2>&1; then
+    echo "/usr/bin/time (GNU time) is required: the resource figures parse its output." >&2
+    exit 1
+  fi
+  mkdir -p "$BASE_LOG_DIR"
+  build_binaries
+
+  case "$1" in
+    "exp-1") exp-1 ;;
+    "exp-2") exp-2 ;;
+    "exp-3") exp-3 ;;
+    "exp-4") exp-4 ;;
+    "all")   exp-1; exp-2; exp-3; exp-4 ;;
+    "help"|"-h"|"--help") show_help ;;
+    *) echo "Error: Unknown command '$1'"; echo; show_help; exit 1 ;;
+  esac
+}
+
+main "$@"

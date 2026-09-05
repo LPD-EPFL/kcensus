@@ -82,6 +82,8 @@ EXTRA_ALGORITHMS = {
 
 import argparse
 
+import logparser
+
 parser = argparse.ArgumentParser()
 parser.add_argument(
     "-c", "--config", type=str, default="aws-europe-7.toml", help="Topology"
@@ -134,7 +136,29 @@ parser.add_argument(
 parser.add_argument(
     "--shards", type=int, default=100, help="Shard count"
 )
+parser.add_argument(
+    "--local", action="store_true",
+    help="Read ../local-logs (produced by eval.sh) instead of ../logs, and expect the reduced "
+         "throughput a local run uses.",
+)
 args = parser.parse_args()
+
+# eval.sh writes to a separate root so a local run can never overwrite the AWS results.
+logparser.LOG_DIR = "../local-logs" if args.local else "../logs"
+# Local figures are prefixed so a local run never overwrites the real ones.
+PLOT_PREFIX = "local-" if args.local else ""
+
+
+def local_throughput(nominal, num_replicas):
+    """Total throughput a run actually used.
+
+    Local runs are throttled by (f+1)/2 because every replica shares one machine; with
+    f = (n-1)/2 that is a divisor of (n+1)/4. Must match `local_throughput` in lib.sh exactly,
+    including the integer division, or the path built here will not exist.
+    """
+    if not args.local:
+        return nominal
+    return (nominal * 4) // (num_replicas + 1)
 
 
 def k_formatter(x, _):
