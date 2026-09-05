@@ -14,8 +14,9 @@ The workflow is automated using Packer, Terraform, Ansible, and shell scripts.
 
 > **No AWS account? Every experiment can also run on a single machine**, with the wide-area link
 > delays simulated. It needs only the Rust toolchain and Python — no cloud credentials, no cost —
-> and produces all the same figures. The latency and communication figures come out close to the
-> paper's; only the CPU and memory figures depend on your hardware.
+> and produces all the same figures. It is a check that the pipeline and the protocols behave,
+> not a reproduction of the reported numbers: read "How to read the results" in §4 before drawing
+> conclusions from a local figure.
 >
 > If that is what you are after, the route is: §1 (clone), §2.2 (dependencies — you can skip the
 > Terraform/Ansible/Packer entries), §3.1 (build), then
@@ -171,8 +172,9 @@ locals {
 ## 4. Running Locally, Without AWS
 
 Every experiment can also run on a single machine, with all replicas as local processes and the
-wide-area link delays simulated from the topologies in `configs/`. This needs no AWS account and
-no credentials.
+wide-area link delays simulated from the latency matrices in `configs/`, measured earlier from the
+same AWS regions. This needs no AWS account and no credentials. It does not reproduce the paper's
+numbers — see "How to read the results" below for what does and does not carry over.
 
 **§5 is still the reference for what each experiment does**, which figures it produces and where
 they are written. Everything there applies unchanged — just add `--local` to both commands:
@@ -221,13 +223,28 @@ processed.
 
 ### How to read the results
 
-The link delays that dominate these protocols are simulated faithfully, based on latency
-measurements that come from the same AWS datacenters as we used, so the **latency figures
-(1, 7, 8, 9)** should land close to the paper's. As a reference point, a local 7-replica run of
-experiment 1 reproduced the reported average latencies to within about 1%.
+**The simulated link delays are not the ones the paper measured.** An AWS run pings the
+instances it just provisioned and builds its latency matrix from those measurements, so every
+deployment gets a slightly different one. A local run cannot do that; it uses the matrices checked
+into `configs/`, which are a snapshot taken from the same regions at some earlier point. Close,
+but not identical.
 
-**Figure 10** (traffic and communication) should also be faithful: bytes and messages per
-application request are properties of the protocol and the topology, not of the machine.
+That matters more than the size of the difference suggests, because **the protocols pick their
+leaders and quorums from that matrix by taking a minimum**, and when two candidates are within a
+few percent a small change in the pings flips a discrete choice. Concretely, in our local run of
+experiment 1, multi-paxos on `aws-east-asia-7` elected Osaka, where the AWS run elected Taipei —
+the two are within 7% of each other on the metric that decides it. Every subsequent latency in
+that subfigure is then measured against a different leader. The chosen leader is printed as
+`Leader: <pid>` at the top of each server's log, so you can check this yourself.
+
+So for the **latency figures (1, 7, 8, 9)**, expect the deployment-wide averages to land close and
+the detail to move around. In our local run of experiment 1 the per-protocol averages were within
+8% of the AWS ones, and usually within 5% — but the fastest and slowest proposer, which is what
+the whiskers show, differed by as much as 15%, and individual regions can reorder.
+
+**Figure 10** (traffic and communication) should carry over cleanly: bytes and messages per application request are
+properties of the protocol, not of the machine or of the
+exact delays.
 
 **Figures 11 and 12 depend on your hardware**, and are the two that will not match. Figure 11
 reports CPU time and memory; Figure 12 reports the time to compute optimal requirements on a
