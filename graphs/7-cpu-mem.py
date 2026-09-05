@@ -58,7 +58,6 @@ for i, experiment in enumerate(ALGORITHMS):
                 shards=args.shards,
                 std=source,
                 conflicts="",
-                retries=None,
             )
             assert (
                     len(raw_output["time"]) == num_replicas

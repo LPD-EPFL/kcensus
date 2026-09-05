@@ -71,7 +71,6 @@ for p in range(2):
                 keys=keys,
                 skew=skew,
                 shards=shards,
-                retries=2,
                 conflicts="",
             )
 

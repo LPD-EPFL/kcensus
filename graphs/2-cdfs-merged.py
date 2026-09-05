@@ -75,7 +75,6 @@ for experiment in algos:
         keys=keys,
         skew=skew,
         shards=shards,
-        retries=3,
         conflicts=conflicts
     )
 

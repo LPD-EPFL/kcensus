@@ -49,7 +49,6 @@ for i, experiment in enumerate(ALGORITHMS):
             keys=args.keys,
             skew=args.skew,
             shards=args.shards,
-            retries=None,
             conflicts="",
         )
         assert (

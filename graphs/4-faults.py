@@ -79,7 +79,6 @@ for num_faults, plot in enumerate(plots):
                 skew=args.skew,
                 shards=args.shards,
                 faults=faults,
-                retries=3,
             )
             for pid, pid_data in logs["executed"].items():
                 all_executed_by_replica[pid].extend(pid_data)

@@ -20,38 +20,22 @@ def parse(
         shards=100,
         std="out",
         stop_at=0,  # 0 means take all requests
-        retries=3,
         conflicts="no-conflicts"
 ):
     if not pids:
         num_replicas = int("".join([char for char in config if char.isdigit()]))
         pids = list(range(num_replicas))
-    best_avg = float('inf')
-    best_output = None
-    for retry in range(retries if retries is not None else 1):
-        output = defaultdict(lambda: defaultdict(list))
-        for pid in pids:
-            file_path = f"{LOG_DIR}/c={config}/a={algo}/w={writes:g}/d={duration}/i={ingress}/t={throughput:g}/s={speedup}/f={faults}/k={keys}/skew={skew:g}/shards={shards}/{conflicts}/retry={retry}/{pid}.std{std}"
-            if retries is None:
-                file_path = f"{LOG_DIR}/c={config}/a={algo}/w={writes:g}/d={duration}/i={ingress}/t={throughput:g}/s={speedup}/f={faults}/k={keys}/skew={skew:g}/shards={shards}/{conflicts}/{pid}.std{std}"
-            print(file_path)
-            with open(file_path) as file:
-                for key, items in parse_file(file).items():
-                    if stop_at:
-                        output[key][pid] = items[:stop_at]
-                    else:
-                        output[key][pid] = items
-
-        all_executed = []
-        for pid_data in output["executed"].values():
-            all_executed.extend(pid_data)
-        avg = 0
-        if retries is not None:
-            avg = compute_average(all_executed, lambda log: duration_to_ms(log["latency"]))
-        if avg < best_avg:
-            best_avg = avg
-            best_output = output
-    return best_output
+    output = defaultdict(lambda: defaultdict(list))
+    for pid in pids:
+        file_path = f"{LOG_DIR}/c={config}/a={algo}/w={writes:g}/d={duration}/i={ingress}/t={throughput:g}/s={speedup}/f={faults}/k={keys}/skew={skew:g}/shards={shards}/{conflicts}/{pid}.std{std}"
+        print(file_path)
+        with open(file_path) as file:
+            for key, items in parse_file(file).items():
+                if stop_at:
+                    output[key][pid] = items[:stop_at]
+                else:
+                    output[key][pid] = items
+    return output
 
 
 def parse_file(file):
