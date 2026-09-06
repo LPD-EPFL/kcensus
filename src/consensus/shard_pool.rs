@@ -3,7 +3,7 @@ use log::warn;
 use std::collections::HashMap;
 
 /// Number of physical shards preallocated when no explicit pool size is requested.
-pub const DEFAULT_SHARD_POOL_SIZE: usize = 64;
+pub const DEFAULT_SHARD_POOL_SIZE: usize = 1000;
 
 /// A shard that a [`ShardPool`] can recycle: it can compress itself into a small
 /// `Sleeping` state, hand its physical slot to another logical shard, and be restored
