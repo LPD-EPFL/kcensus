@@ -1,6 +1,9 @@
 # KCensus
 
-KCensus is a faster alternative to Paxos-like consensus protocols.
+KCensus is a framework for strongly consistent geo-replication that synthesizes optimal consensus
+fast-path schemes for a given network topology, workload, and latency objective. This repository includes
+the framework, a geo-replicated key-value store built with it, and experiments across AWS regions
+against competing protocols.
 
 # Running Experiments & Reproducing Results
 
