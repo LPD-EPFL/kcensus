@@ -24,7 +24,7 @@ function build_binaries() {
   cargo build --release
 }
 
-# run <configName> <configFile> <algo> <writes> <duration> <ingress> <speedup> [faults] [keys] [skew] [shards] [conflicts]
+# run <configName> <configFile> <algo> <writes> <duration> <ingress> <speedup> [faults] [keys] [skew] [shards] [conflicts] [shard_pool]
 #
 # <configName> is what goes in the log path (matching geo_eval.sh exactly); <configFile> is the
 # TOML under configs/. They differ when the log-path name omits a suffix and when an experiment
@@ -32,7 +32,7 @@ function build_binaries() {
 function run_one() {
   local configName="$1" configFile="$2" algo="$3" writes="$4" duration="$5" ingress="$6"
   local speedup="$7" faults="${8:-}" keys="${9:-${KEYS}}" skew="${10:-${SKEW}}"
-  local shards="${11:-${SHARDS}}" conflicts="${12:-}"
+  local shards="${11:-${SHARDS}}" conflicts="${12:-}" shard_pool="${13:-}"
 
   local nb; nb="$(digits "$configName")"
   local throughput; throughput="$(local_throughput "$nb")"
@@ -57,15 +57,16 @@ function run_one() {
     pkill -x kcensus 2>/dev/null || true
     local pids=() pid
     for pid in $(seq 0 $((nb - 1))); do
-      local faultsArg=() nonvotingArg=() conflictsArg=()
+      local faultsArg=() nonvotingArg=() conflictsArg=() shardPoolArg=()
       [ -n "$faults" ]     && faultsArg=(-f "$faults")
       [ -n "$nonvoting" ]  && nonvotingArg=(-v "$nonvoting")
       [ -n "$conflicts" ]  && conflictsArg=("--conflicts=$conflicts")
+      [ -n "$shard_pool" ] && shardPoolArg=(--shard-pool "$shard_pool")
       ( timeout "${timeout_s}s" /usr/bin/time -f "$TIME_FORMAT" "$BIN" \
           --simulate-delays true -p "$pid" --config "configs/${configFile}" \
           -a "$algo" -w "$writes" --duration "$duration" -i "$ingress" \
           -t "$per_proposer" -s "$speedup" -k "$keys" --skew "$skew" --shards "$shards" \
-          "${nonvotingArg[@]}" "${faultsArg[@]}" "${conflictsArg[@]}" \
+          "${nonvotingArg[@]}" "${faultsArg[@]}" "${conflictsArg[@]}" "${shardPoolArg[@]}" \
       ) > "${logDir}/${pid}.stdout" 2> "${logDir}/${pid}.stderr" &
       pids+=($!)
     done
@@ -145,7 +146,11 @@ function exp-4() {
   for n in "${EXP4_SIZES[@]}"; do
     configFile="exp-4/${EXP4_TYPE}/${n}.toml"
     for algo in "${ALGOS[@]}"; do
-      run_one "${EXP4_TYPE}/${n}.toml" "$configFile" "$algo" 1 "$(local_duration "$n" 1)s" exponential "$EXP4_SPEEDUP"
+      # Figure 11 normalizes memory by SHARDS, so disable recycling for this experiment by
+      # making the physical shard pool as large as the logical shard count.
+      run_one "${EXP4_TYPE}/${n}.toml" "$configFile" "$algo" 1 \
+        "$(local_duration "$n" 1)s" exponential "$EXP4_SPEEDUP" \
+        "" "$KEYS" "$SKEW" "$SHARDS" "" "$SHARDS"
     done
   done
   echo "--- Finished Experiment 4 ---"
