@@ -182,10 +182,16 @@ function cleanup_processes() {
   local expId="$1"
   local inventoryFile="inventory-${expId}.ini"
   echo "--> Cleaning up stray processes on all nodes..."
-  (
+  # Best-effort. This runs between retries, and whatever is being retried may be a transient SSH
+  # problem that makes this playbook fail too. Aborting here (`set -e`) would end the experiment
+  # and tear the deployment down after a single attempt, spending none of the retry budget.
+  if ! (
     cd deployment/ansible
     ansible-playbook -i "${inventoryFile}" 04-kill-processes.yml
-  )
+  ); then
+    echo "--> WARNING: cleanup failed; retrying the run anyway." >&2
+    return 0
+  fi
   echo "--> Cleanup complete."
 }
 
