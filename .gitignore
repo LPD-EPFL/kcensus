@@ -1,4 +1,9 @@
 /target
-/logs
+/*log*/
 /configs/tmp.toml
 /.tmp_configs*/
+/aws/
+/awscliv2.zip
+/local/
+*.zip
+*.pyc
