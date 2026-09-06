@@ -36,10 +36,12 @@ function exp-1() {
   # so they are always plotted together.
   (
     cd graphs &&
+    echo -n 'plotting exp-1 figure 1/2 (Figure 1)... ' &&
     python3 exp-1-figure-1-intro.py $LOCAL_FLAG   -g 1 > "./plots/${LOCAL_FLAG:+local-}exp-1-figure-1-intro.txt" &&
-    echo 'finished figure 1/2 (Figure 1).' &&
+    echo 'done.' &&
+    echo -n 'finished exp-1 figure 2/2 (Figure 7)... ' &&
     python3 exp-1-figure-7-latency.py $LOCAL_FLAG -g 1 > "./plots/${LOCAL_FLAG:+local-}exp-1-figure-7-latency.txt" &&
-    echo 'finished figure 2/2 (Figure 7).'
+    echo 'done.'
   )
 }
 
@@ -52,8 +54,9 @@ function exp-2() {
   local keys=10000
   (
     cd graphs &&
+    echo -n 'plotting exp-2 figure (Figure 8)... ' &&
     python3 exp-2-figure-8-faults.py $LOCAL_FLAG -c "$config" -w "$writes" --duration "$duration" -i exponential -t $throughput -s "$SPEEDUP" --shards $shards --keys $keys -g 1 > "./plots/${LOCAL_FLAG:+local-}exp-2-figure-8-faults.txt" &&
-    echo 'finished figure (Figure 8).'
+    echo 'done.'
   )
 }
 
@@ -62,10 +65,12 @@ function exp-3() {
   # Optimize Requirements). Both come from the same 31-node deployment.
   (
     cd graphs &&
+    echo -n 'plotting exp-3 figure 1/2 (Figure 9)... ' &&
     python3 exp-3-figure-9-scalability.py $LOCAL_FLAG  -g 1 > "./plots/${LOCAL_FLAG:+local-}exp-3-figure-9-scalability.txt" &&
-    echo 'finished figure 1/2 (Figure 9).' &&
+    echo 'done.' &&
+    echo -n 'plotting exp-3 figure 2/2 (Figure 12)... ' &&
     python3 exp-3-figure-12-propagation.py $LOCAL_FLAG -g 1 > "./plots/${LOCAL_FLAG:+local-}exp-3-figure-12-propagation.txt" &&
-    echo 'finished figure 2/2 (Figure 12).'
+    echo 'done.'
   )
 }
 
@@ -80,10 +85,12 @@ function exp-4() {
   local shards=10000
   (
     cd graphs &&
+    echo -n 'plotting exp-4 figure 1/2 (Figure 10)... ' &&
     python3 exp-4-figure-10-network.py $LOCAL_FLAG -c aws-random/@.toml -w "$writes" --duration "$duration" -i exponential -t $throughput -s "$speedup" --shards $shards --keys $keys --skew $skew -g 1 > "./plots/${LOCAL_FLAG:+local-}exp-4-figure-10-network.txt" &&
-    echo 'finished figure 1/2 (Figure 10).' &&
+    echo 'done.' &&
+    echo -n 'plotting exp-4 figure 2/2 (Figure 11).' &&
     python3 exp-4-figure-11-cpu-mem.py $LOCAL_FLAG -c aws-random/@.toml -w "$writes" --duration "$duration" -i exponential -t $throughput -s "$speedup" --shards $shards --keys $keys --skew $skew -g 1 > "./plots/${LOCAL_FLAG:+local-}exp-4-figure-11-cpu-mem.txt" &&
-    echo 'finished figure 2/2 (Figure 11).'
+    echo 'done.'
   )
 }
 
@@ -92,8 +99,9 @@ function exp-4() {
 function exp-conflicts() {
   (
     cd graphs &&
+    echo -n 'plotting exp-conflict figure (Deprecated)... ' &&
     python3 exp-conflicts-cdfs.py $LOCAL_FLAG -g 1 > "./plots/${LOCAL_FLAG:+local-}exp-conflicts-cdfs.txt" &&
-    echo 'finished plot.'
+    echo 'done.'
   )
 }
 
