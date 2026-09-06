@@ -175,16 +175,18 @@ to clean up afterwards, so §6 does not apply.
 To check the whole pipeline works before committing to a long run:
 
 ```bash
-./eval.sh --local exp-1              # ~6 minutes: build, run, and produce Figures 1 and 7
+./eval.sh --local exp-1              # ~10 minutes: build, run, and produce Figures 1 and 7
 ./plot.sh --local exp-1
 ```
 
 and the full set, if you want every figure:
 
 ```bash
-./eval.sh --local all                # ~4 hours
+./eval.sh --local all                # ~5 hours
 ./plot.sh --local all
 ```
+
+When running locally, you can expect ~10min to run exp-1, ~1h40min to run exp-2, ~1h05min to run exp-3 and ~1h45min to run exp-4, for a total of ~4h40min.
 
 Requirements are the same as §2.2 minus the cloud tooling: the Rust toolchain, Python with `venv`,
 and GNU `time` at `/usr/bin/time` (the resource figures parse its output).
@@ -283,6 +285,8 @@ To run everything the paper depends on:
 ./plot.sh all       # every figure
 ```
 
+Running everything takes approximately ~4h30.
+
 > **Note**: The experiments take several hours and incur AWS costs — `exp-2` (faults) dominates,
 > and `exp-3` holds 31 instances across every region for its whole duration.
 >
@@ -305,6 +309,8 @@ Four 7-replica deployments: Northern Hemisphere, Europe, North America and East 
 ./plot.sh exp-1
 ```
 
+The eval of exp-1 takes approximately 20min to run.
+
 *Outputs: `graphs/plots/exp-1-figure-1-intro.pdf` and `exp-1-figure-7-latency.pdf` (+ `.txt`)*
 
 ---
@@ -317,6 +323,8 @@ The Northern-Hemisphere deployment, with every combination of up to 3 crashed re
 ./eval.sh exp-2
 ./plot.sh exp-2
 ```
+
+The eval of exp-2 takes approximately 2h20min to run.
 
 *Output: `graphs/plots/exp-2-figure-8-faults.pdf` (+ `.txt`)*
 
@@ -343,6 +351,8 @@ provisioning, which is why they are bundled.
 ./plot.sh exp-3
 ```
 
+The eval of exp-3 takes approximately 1h30min to run.
+
 *Outputs: `graphs/plots/exp-3-figure-9-scalability.pdf` and `exp-3-figure-12-propagation.pdf`
 (+ `.txt`)*
 
@@ -356,6 +366,8 @@ A single large machine, simulating link delays locally.
 ./eval.sh exp-4
 ./plot.sh exp-4
 ```
+
+The eval of exp-4 takes approximately 30min to run.
 
 *Outputs: `graphs/plots/exp-4-figure-10-network.pdf` and `exp-4-figure-11-cpu-mem.pdf`
 (+ `.txt`)*
