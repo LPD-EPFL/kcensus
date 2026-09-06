@@ -235,8 +235,8 @@ Keep these paths: the evaluation scripts expect `~/.ssh/kcensus_key` and `~/.ssh
 
 ### 6.4 Run and Plot
 
-Use the same experiment names as in §5, replacing `--local` with `--run-id reviewer-a` for
-evaluation and omitting `--local` for plotting. Replace `exp-N` below with an experiment from
+The same experiment names from §5 apply, but with `--local` omitted from both commands, and
+`--run-id reviewer-x` added for evaluation. Replace `exp-N` below with an experiment from
 the [table in §3](#3-experiments-and-outputs), which lists all experiments, their figures, and estimated runtimes.
 When several reviewers share the AWS account, each must choose a different run ID:
 
