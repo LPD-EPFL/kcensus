@@ -177,7 +177,7 @@ which leaders and quorums are chosen, and which regions have the lowest latency.
 
 ## 6. Running Experiments on AWS
 
-Complete §1 and §4 first, then configure the cloud tools below. Local runs do not need this section.
+Complete §1 and §4 first, then configure the cloud tools below.
 On AWS, `eval.sh` provisions infrastructure, deploys the binaries, runs the experiment, collects
 logs, and tears down the deployment. Experiment 3 provisions 31 instances; experiment 4 uses
 one `m5.16xlarge` with simulated link delays.
