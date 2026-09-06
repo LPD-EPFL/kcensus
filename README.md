@@ -9,8 +9,8 @@ or rerun experiments on AWS or locally.
 
 > **Without AWS:** follow §1, §2.2 (skip cloud tooling), §3.1, then
 > [§5 Running Locally, Without AWS](#5-running-locally-without-aws).
-> Local runs use simulated link delays to check the pipeline and protocols; they do not reproduce
-> the reported numbers. See §5 for how to interpret them.
+> Local runs use simulated link delays and can closely reproduce the latency results, depending
+> on your hardware. See §5 for results from our laptop runs.
 
 ## 1. Clone the Repository
 
@@ -201,16 +201,16 @@ count, and experiment 4 matches it to keep compute measurements comparable.
 
 ### How to read the results
 
-Local runs use saved latency matrices; AWS runs measure delays on newly provisioned instances.
-Small differences can change leader and quorum selection, affecting both averages and regional
-rankings. Each server log records its chosen leader as `Leader: <pid>`.
+Local runs use saved AWS latency matrices and can match the original results more closely than
+a fresh deployment, whose network delays may have changed. Differences in delays can still affect
+which leaders and quorums are chosen, and which regions have the lowest latency.
 
-- **Latency (Figures 1, 7, 8, 9):** expect similar averages with variation across regions.
-  In our local experiment 1, per-protocol averages were within 8% of AWS results (usually 5%),
-  while the fastest and slowest proposer latencies differed by up to 15%.
-- **Traffic (Figure 10):** bytes and messages per request are protocol properties and should
-  remain comparable.
-- **Memory (Figure 11):** usage should remain comparable across local and AWS runs.
+- **Latency (Figures 1, 7, 8, 9):** on our laptop, local results closely matched experiments 1 and 2;
+  agreement depends on your hardware. In Figure 7, 15 of 20 protocol/deployment averages were within 5% of the archived results,
+  with a maximum difference of 8.1%. The fastest and slowest proposer latencies differed by up
+  to 15.6%. Agreement can vary more at larger replica counts (experiment 3).
+- **Traffic (Figure 10):** bytes per request are identical across local and AWS runs.
+- **Memory (Figure 11):** usage is almost identical across local and AWS runs.
 - **CPU time and optimization time (Figures 11 and 12):** absolute values depend on hardware.
   For reference, the paper used an `m5.16xlarge` for Figure 11 and a `t3.medium` for Figure 12.
 
