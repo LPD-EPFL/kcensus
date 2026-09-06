@@ -235,17 +235,18 @@ Keep these paths: the evaluation scripts expect `~/.ssh/kcensus_key` and `~/.ssh
 
 ### 6.4 Run and Plot
 
-Use the same experiment names as in §5, replacing `--local` with `--run-id reviewer-1` for
+Use the same experiment names as in §5, replacing `--local` with `--run-id reviewer-a` for
 evaluation and omitting `--local` for plotting. Replace `exp-N` below with an experiment from
 the [table in §3](#3-experiments-and-outputs), which lists all experiments, their figures, and estimated runtimes.
 When several reviewers share the AWS account, each must choose a different run ID:
 
 ```bash
-./eval.sh --run-id reviewer-1 exp-N  # provision, run, collect the logs, tear down
+./eval.sh --run-id reviewer-a exp-N  # provision, run, collect the logs, tear down
 ./plot.sh exp-N                       # draw every figure that experiment produces
 ```
 
-The run ID should follow the shape of `reviewer-1` (e.g. `reviewer-2`, `reviewer-3`, ...).
+The run ID should follow the shape of `reviewer-x`, e.g. `reviewer-a`, `reviewer-b`, ... (lowercase)
+or `reviewer-1`, `reviewer-2`, ...
 It namespaces all AWS resources created by the command; it does not change the log paths or the subsequent `./plot.sh exp-N`
 command. Running multiple AWS experiments in parallel requires separate clones and distinct run IDs
 to keep Terraform state, logs, and cloud resources separate.
@@ -260,7 +261,7 @@ to keep Terraform state, logs, and cloud resources separate.
 To run everything the paper depends on:
 
 ```bash
-./eval.sh --run-id reviewer-1 all  # exp-1 .. exp-4
+./eval.sh --run-id reviewer-a all  # exp-1 .. exp-4
 ./plot.sh all                      # every figure
 ```
 
@@ -283,7 +284,7 @@ Running everything takes ~5h.
 After a run or interruption, check for remaining instances:
 
 ```bash
-./check-aws-cleanup.sh --run-id reviewer-1 # Check only your run
+./check-aws-cleanup.sh --run-id reviewer-a # Check only your run
 # OR
 ./check-aws-cleanup.sh                     # Check every KCensus run
 ```
@@ -298,14 +299,14 @@ A `Cleanup verified` output means all matching instances are terminated.
 
 Use `eval.sh destroy <tfvars-path> <experiment-id>`, where `<experiment-id>` comes from the instance
 names listed above, and `<tfvars-path>` depends on the experiment, as shown below. The examples use
-the run ID `reviewer-1`; replace it with your own, or, if no run ID was used, remove the
-`-reviewer-1` suffix.
+the run ID `reviewer-a`; replace it with your own, or, if no run ID was used, remove the
+`-reviewer-a` suffix.
 
 `exp-1` is the only experiment with multiple deployments, so it's also the only one where
 `<tfvars-path>` varies. For example, if it was interrupted on the Europe deployment:
 
-For the instance name `kcensus-exp-1-aws-europe-7-reviewer-1-eu-west-1`, `<experiment-id>` is
-`exp-1-aws-europe-7-reviewer-1` and `<instance-aws-region>` is `eu-west-1`.
+For the instance name `kcensus-exp-1-aws-europe-7-reviewer-a-eu-west-1`, `<experiment-id>` is
+`exp-1-aws-europe-7-reviewer-a` and `<instance-aws-region>` is `eu-west-1`.
 Choose `<tfvars-path>` from the region set in `<experiment-id>`:
 
 | Region set | Terraform variable file |
@@ -318,18 +319,18 @@ Choose `<tfvars-path>` from the region set in `<experiment-id>`:
 This single command tears down every instance in one region set:
 
 ```bash
-./eval.sh destroy deployment/terraform/regions/europe-7.tfvars exp-1-aws-europe-7-reviewer-1
+./eval.sh destroy deployment/terraform/regions/europe-7.tfvars exp-1-aws-europe-7-reviewer-a
 ```
 
 The other experiments each use a single, fixed `.tfvars` file, so you only need to replace the `<experiment-id>` with your own:
 
 ```bash
-./eval.sh destroy deployment/terraform/regions/ring-7.tfvars exp-2-reviewer-1  # exp-2 (faults)
-./eval.sh destroy deployment/terraform/regions/aws-31.tfvars exp-3-reviewer-1  # exp-3 (scalability)
-./eval.sh destroy deployment/terraform/regions/one.tfvars    exp-4-reviewer-1  # exp-4 (resources)
+./eval.sh destroy deployment/terraform/regions/ring-7.tfvars exp-2-reviewer-a  # exp-2 (faults)
+./eval.sh destroy deployment/terraform/regions/aws-31.tfvars exp-3-reviewer-a  # exp-3 (scalability)
+./eval.sh destroy deployment/terraform/regions/one.tfvars    exp-4-reviewer-a  # exp-4 (resources)
 ```
 
-Rerun `check-aws-cleanup.sh --run-id reviewer-1` after manual cleanup to verify that all instances are terminated.
+Rerun `check-aws-cleanup.sh --run-id reviewer-a` after manual cleanup to verify that all instances are terminated.
 
 ### 6.6 Optional: Rebuild the AMIs
 
