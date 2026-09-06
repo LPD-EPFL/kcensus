@@ -15,14 +15,13 @@ set -e
 source "$(dirname "$0")/lib.sh"
 
 BASE_LOG_DIR="./local-logs"
-BIN=./target/x86_64-unknown-linux-musl/release/kcensus
-GRAPH_BENCH=./target/x86_64-unknown-linux-musl/release/graph_bench
+BIN=./target/release/kcensus
+GRAPH_BENCH=./target/release/graph_bench
 TIME_FORMAT='[log=time] Memory (KB): %M, System (s): %S User (s): %U | {"memory": %M, "system": %S, "user": %U}'
 
 
 function build_binaries() {
-  rustup target add x86_64-unknown-linux-musl
-  cargo build --target x86_64-unknown-linux-musl --release
+  cargo build --release
 }
 
 # run <configName> <configFile> <algo> <writes> <duration> <ingress> <speedup> [faults] [keys] [skew] [shards] [conflicts]
