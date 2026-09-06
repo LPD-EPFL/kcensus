@@ -100,11 +100,6 @@ in milliseconds). The `EXP1_CONFIGS`, `EXP2_CONFIG`, `EXP3_TYPES`/`EXP3_SIZES`, 
 `EXP4_TYPE`/`EXP4_SIZES` variables near the top of `lib.sh` select the topologies used by each
 experiment.
 
-> **Run order.** `exp-1` and `exp-2` share logs for all zero-fault `aws-ring-7` configurations;
-> the last run overwrites them. Prefer running `exp-1` before `exp-2` (as `all` does). On AWS, this
-> keeps all Figure 8 subfigures from the same deployment (same instances, same latencies); rerun
-> `exp-2` if you ran them in reverse order.
-
 ## 4. Build Setup for New Experiments
 
 For both local and AWS runs, install the [Rust toolchain](https://www.rust-lang.org/tools/install)
@@ -256,6 +251,11 @@ command. Running multiple AWS experiments in parallel requires separate clones a
 to keep Terraform state, logs, and cloud resources separate.
 
 `plot.sh` produces all figures for an experiment from the same logs; run each experiment only once.
+
+> **Run order.** `exp-1` and `exp-2` share logs for all zero-fault `aws-ring-7` configurations; the
+> last run overwrites them. Prefer running `exp-1` before `exp-2` (as `all` does) to keep all
+> Figure 8 subfigures from the same deployment (same instances, same latencies); rerun `exp-2` if
+> you ran them in reverse order.
 
 To run everything the paper depends on:
 
