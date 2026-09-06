@@ -100,9 +100,10 @@ in milliseconds). The `EXP1_CONFIGS`, `EXP2_CONFIG`, `EXP3_TYPES`/`EXP3_SIZES`, 
 `EXP4_TYPE`/`EXP4_SIZES` variables near the top of `lib.sh` select the topologies used by each
 experiment.
 
-> **Run order.** `exp-1` and `exp-2` share logs for six zero-fault `aws-ring-7` configurations;
-> the last run overwrites them. Run `exp-1` before `exp-2` (as `all` does). On AWS, this keeps
-> all Figure 8 subfigures from the same deployment; rerun `exp-2` if you ran them in reverse order.
+> **Run order.** `exp-1` and `exp-2` share logs for all zero-fault `aws-ring-7` configurations;
+> the last run overwrites them. Prefer running `exp-1` before `exp-2` (as `all` does). On AWS, this
+> keeps all Figure 8 subfigures from the same deployment (same instances, same latencies); rerun
+> `exp-2` if you ran them in reverse order.
 
 ## 4. Build Setup for New Experiments
 
