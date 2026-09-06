@@ -6,7 +6,7 @@ use crate::delayer::Delayer;
 use crate::topology::Topology;
 use bincode::Options;
 use chrono::prelude::*;
-use clap::{arg, Parser};
+use clap::Parser;
 use cpu_time::ProcessTime;
 use env_logger::fmt::style;
 use log::debug;
