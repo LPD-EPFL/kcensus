@@ -127,13 +127,9 @@ cargo build --target x86_64-unknown-linux-musl --release
 > If that applies to you, delete `.cargo/config.toml` and rebuild. Nothing else reads that file;
 > the build simply falls back to the portable baseline. It affects speed, not results.
 
-### 3.2 Building the Custom AMI (Packer)
+### 3.2 (Optional) Building the Custom AMI (Packer)
 
-We use a custom image that contains all dependencies required by remote machines.
-This image does **not** include the binaries, which are uploaded during the evaluation; as a result, there is no need to
-rebuild the image when binaries change.
-We provide pre-built AMIs, available in all AWS regions.
-In case you need to build a new image, run the following commands:
+You only need this section if you want to build replacement AMIs; otherwise, you can skip this step as we provide pre-built AMIs in all AWS regions with every dependency required by the remote machines. The experiment binaries are uploaded separately, so changing them does not require rebuilding the AMIs.
 
 ```bash
 cd deployment/packer
