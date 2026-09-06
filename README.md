@@ -250,7 +250,7 @@ When several reviewers share the AWS account, each must choose a different run I
 ./plot.sh exp-N                       # draw every figure that experiment produces
 ```
 
-The run ID must contain 1-32 lowercase letters, digits or hyphens and start with a letter or digit.
+The run ID should follow the shape of `reviewer-1` (e.g. `reviewer-2`, `reviewer-3`, ...).
 It namespaces all AWS resources created by the command; it does not change the log paths or the subsequent `./plot.sh exp-N`
 command. Running multiple AWS experiments in parallel requires separate clones and distinct run IDs
 to keep Terraform state, logs, and cloud resources separate.
