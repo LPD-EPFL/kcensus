@@ -201,13 +201,6 @@ sudo apt install ansible
 ansible-galaxy collection install community.general
 ```
 
-Install [Packer](https://developer.hashicorp.com/packer/install) only if you need to rebuild the
-images. On Ubuntu 26.04:
-
-```bash
-sudo snap install packer # On WSL, use a non-snap installation
-```
-
 ### 6.2 AWS Credentials
 
 Artifact reviewers will receive credentials separately. To reproduce the experiments with your
@@ -337,6 +330,14 @@ Rerun `check-aws-cleanup.sh --run-id reviewer-a` after manual cleanup to verify 
 Pre-built AMIs include the remote dependencies in every region used by the experiments.
 Rebuild them only if you need replacement images. Binaries are uploaded separately, so code
 changes do not require rebuilding AMIs.
+
+Install [Packer](https://developer.hashicorp.com/packer/install). On Ubuntu 26.04:
+
+```bash
+sudo snap install packer # On WSL, use a non-snap installation
+```
+
+Then rebuild the AMIs:
 
 ```bash
 cd deployment/packer
