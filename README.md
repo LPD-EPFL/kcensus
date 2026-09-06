@@ -5,6 +5,8 @@ fast-path schemes for a given network topology, workload, and latency objective.
 the framework, a geo-replicated key-value store built with it, and experiments across AWS regions
 against competing protocols.
 
+See the [source map](src/README.md) for the implementation components and their relation to the paper.
+
 # Running Experiments & Reproducing Results
 
 Reproduce the paper's plots from [archived logs (§4)](#4-reproducing-the-paper-plots-from-archived-logs),
