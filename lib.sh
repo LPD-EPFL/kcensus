@@ -38,12 +38,16 @@ MAX_ATTEMPTS=5
 # cannot drift between them.
 function show_help() {
     cat << HELP
-Usage: ./eval.sh [--local] [COMMAND]
+Usage: ./eval.sh [--local] [--run-id ID] [COMMAND]
 
 Runs the KCensus experiments. Without --local they run on AWS, provisioning and tearing down a
 deployment per experiment; with --local every replica runs as a process on this machine and the
 wide-area link delays are simulated. The commands are the same either way, and --local may go
 before or after the command.
+
+For AWS runs, --run-id adds a unique suffix to every AWS resource name so multiple reviewers can
+run concurrently in the same account. Use 1-32 lowercase letters, digits, or hyphens, for example:
+  ./eval.sh --run-id reviewer-1 exp-2
 
 Available commands:
   exp-1             End-to-end latency              -> Figures 1 and 7

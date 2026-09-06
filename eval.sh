@@ -16,12 +16,41 @@ set -e
 HERE="$(cd "$(dirname "$0")" && pwd)"
 source "${HERE}/lib.sh"
 
-# --local may appear anywhere in the arguments; everything else is passed through untouched.
+# Global options may appear anywhere in the arguments; everything else is passed through untouched.
 LOCAL=false
+RUN_ID=""
 ARGS=()
-for arg in "$@"; do
-  if [ "$arg" = "--local" ]; then LOCAL=true; else ARGS+=("$arg"); fi
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --local)
+      LOCAL=true
+      shift
+      ;;
+    --run-id)
+      if [ $# -lt 2 ]; then
+        echo "Error: --run-id requires a value." >&2
+        exit 1
+      fi
+      RUN_ID="$2"
+      shift 2
+      ;;
+    *)
+      ARGS+=("$1")
+      shift
+      ;;
+  esac
 done
+
+if [ -n "$RUN_ID" ] && [[ ! "$RUN_ID" =~ ^[a-z0-9][a-z0-9-]{0,31}$ ]]; then
+  echo "Error: --run-id must be 1-32 lowercase letters, digits, or hyphens, and start with a letter or digit." >&2
+  exit 1
+fi
+if [ "$LOCAL" = true ] && [ -n "$RUN_ID" ]; then
+  echo "Error: --run-id applies only to AWS runs; omit it with --local." >&2
+  exit 1
+fi
+
+export KCENSUS_RUN_ID="$RUN_ID"
 
 if [ ${#ARGS[@]} -eq 0 ]; then show_help; exit 0; fi
 case "${ARGS[0]}" in

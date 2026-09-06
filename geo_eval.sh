@@ -34,6 +34,18 @@ CONFIGS["old/aws-europe-7"]="deployment/terraform/regions/europe-7.tfvars"
 CONFIGS["old/aws-europe-3"]="deployment/terraform/regions/europe-3.tfvars"
 CONFIGS["old/aws-europe-2"]="deployment/terraform/regions/europe-2.tfvars"
 
+# Namespace an AWS deployment for concurrent users of the same account. Keeping the experiment
+# name first makes resources easy to associate with the README and preserves the old IDs when no
+# --run-id was supplied.
+function experiment_id() {
+  local base="$1"
+  if [ -n "${KCENSUS_RUN_ID:-}" ]; then
+    echo "${base}-${KCENSUS_RUN_ID}"
+  else
+    echo "$base"
+  fi
+}
+
 
 function activate_env() {
   pushd graphs >/dev/null
@@ -227,7 +239,7 @@ get_regions() {
 function exp-1() {
   echo "--- Starting Experiment 1: Pure Latency ---"
   for configName in "${EXP1_CONFIGS[@]}"; do
-    local EXPERIMENT_ID="exp-1-$configName"
+    local EXPERIMENT_ID; EXPERIMENT_ID="$(experiment_id "exp-1-$configName")"
     local varFile="${CONFIGS[$configName]}"
     provision "$varFile" "$EXPERIMENT_ID"
     deploy "$EXPERIMENT_ID"
@@ -250,7 +262,7 @@ function exp-conflicts() {
   echo "--- Starting Legacy Conflicts Experiment: Latency under load ---"
 
   local configName="aws-ring-7"
-  local EXPERIMENT_ID="exp-conflicts"
+  local EXPERIMENT_ID; EXPERIMENT_ID="$(experiment_id "exp-conflicts")"
   local varFile="${CONFIGS[$configName]}"
 
   provision "$varFile" "$EXPERIMENT_ID"
@@ -279,7 +291,7 @@ function exp-2() {
   echo "--- Starting Experiment 2: Faults ---"
 
   local configName="aws-ring-7"
-  local EXPERIMENT_ID="exp-2"
+  local EXPERIMENT_ID; EXPERIMENT_ID="$(experiment_id "exp-2")"
   local varFile="${CONFIGS[$configName]}"
   local writes=1
   local duration="10s"
@@ -302,7 +314,7 @@ function exp-2() {
 function exp-3() {
   echo "--- Starting Experiment 3: Scalability and Propagation ---"
 
-  local EXPERIMENT_ID="exp-3"
+  local EXPERIMENT_ID; EXPERIMENT_ID="$(experiment_id "exp-3")"
   local varFile="deployment/terraform/regions/aws-31.tfvars"
   local tmpDir="$(pwd)/.tmp_configs_${EXPERIMENT_ID}"
   local masterConfigFile="${tmpDir}/master-config.json"
@@ -407,7 +419,7 @@ function exp-4() {
   echo "--- Starting Experiment 4: Resources ---"
 
   local configName="aws-exp-4"
-  local EXPERIMENT_ID="exp-4"
+  local EXPERIMENT_ID; EXPERIMENT_ID="$(experiment_id "exp-4")"
   local varFile="${CONFIGS[$configName]}"
   local inventoryFile="inventory-${EXPERIMENT_ID}.ini"
 

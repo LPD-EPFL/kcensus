@@ -273,6 +273,17 @@ To produce a figure, run its experiment and then plot it:
 ./plot.sh exp-N     # draw every figure that experiment produces
 ```
 
+When several reviewers share the AWS account, each must choose a different run ID:
+
+```bash
+./eval.sh --run-id reviewer-1 exp-N
+```
+
+The run ID may contain 1–32 lowercase letters, digits or hyphens. It namespaces all AWS resources
+created by the command; it does not change the log paths or the subsequent `./plot.sh exp-N`
+command. Each reviewer should run from a separate clone, because Terraform state and logs are
+local to the clone.
+
 Note where an experiment appears twice above: `exp-1` and `exp-3` each produce **two figures, in
 two different sections of the paper**, from a single set of runs. `plot.sh` draws both at once —
 there is no need to run the experiment again for the second figure, and for `exp-3` that would
@@ -382,7 +393,8 @@ interrupted, resources may remain running.
 ### Manual Cleanup
 
 To manually clean up resources, use the `destroy` command of `eval.sh`. Provide the Terraform variable file and the
-experiment ID used during provisioning.
+full experiment ID printed during provisioning. When `--run-id reviewer-1` was used, append
+`-reviewer-1` to the IDs below.
 
 `exp-1` provisions one deployment per region set, so its experiment ID carries the deployment
 name; the others use a single ID.
@@ -391,12 +403,14 @@ Example 1: if `exp-1` was interrupted on the Europe deployment:
 
 ```bash
 ./eval.sh destroy deployment/terraform/regions/europe-7.tfvars exp-1-aws-europe-7
+# With --run-id reviewer-1: exp-1-aws-europe-7-reviewer-1
 ```
 
 Example 2: if `exp-2` (faults) was interrupted:
 
 ```bash
 ./eval.sh destroy deployment/terraform/regions/ring-7.tfvars exp-2
+# With --run-id reviewer-1: exp-2-reviewer-1
 ```
 
 Example 3: if `exp-3` (scalability) or `exp-4` (resources) was interrupted:
