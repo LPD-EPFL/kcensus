@@ -59,13 +59,15 @@ resource "aws_security_group" "kcensus_sg" {
   name        = "kcensus-sg-${var.experiment_id}-${var.region}"
   description = "Allow SSH and internal traffic for nodes in ${var.region} for experiment ${var.experiment_id}"
 
-  # rule for Ansible: allow SSH from control machine
+  # rule for Ansible: allow SSH from the control machine. Open to the internet rather than pinned
+  # to that machine's IP: a deployment outlives a VPN reconnect or a DHCP lease, and a pinned rule
+  # would lock Ansible out of live instances mid-experiment. Authentication is key-only.
   ingress {
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
-    cidr_blocks = ["${var.my_ip_for_ssh}/32"]
-    description = "Allow SSH from my IP"
+    cidr_blocks = ["0.0.0.0/0"]
+    description = "Allow SSH from everywhere (key-only auth)"
   }
 
   # rule for inter-node ping (ICMP) for latency checks

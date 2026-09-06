@@ -16,11 +16,6 @@ variable "instance_type" {
   type        = string
 }
 
-variable "my_ip_for_ssh" {
-  description = "The public IP of the user for the SSH ingress rule."
-  type        = string
-}
-
 variable "experiment_id" {
   description = "A unique identifier for the experiment run."
   type        = string
