@@ -189,8 +189,8 @@ To generate every figure:
 ./plot.sh --local all
 ```
 
-Approximate local runtimes: exp-1 takes 10 minutes, exp-2 takes 1h40min, exp-3 takes 1h05min,
-and exp-4 takes 1h45min (~4h40min total).
+Approximate local runtimes: exp-1 takes 15 minutes, exp-2 takes 1h45min, exp-3 takes 1h10min,
+and exp-4 takes 1h50min (~5h total).
 
 ### What is different from the AWS runs
 
@@ -264,7 +264,7 @@ To run everything the paper depends on:
 ./plot.sh all                      # every figure
 ```
 
-Running everything takes ~4h40min.
+Running everything takes ~5h.
 
 > **Note**: The experiments take several hours and incur AWS costs — `exp-2` (faults) dominates,
 > and `exp-3` holds 31 instances across every region for its whole duration.
@@ -288,7 +288,7 @@ Four 7-replica deployments: Northern Hemisphere, Europe, North America and East 
 ./plot.sh exp-1
 ```
 
-Approximate runtime: 20min.
+Approximate runtime: 30min.
 
 *Outputs: `graphs/plots/exp-1-figure-1-intro.pdf` and `exp-1-figure-7-latency.pdf` (+ `.txt`)*
 
@@ -303,7 +303,7 @@ The Northern-Hemisphere deployment, with every combination of up to 3 crashed re
 ./plot.sh exp-2
 ```
 
-Approximate runtime: 2h20min.
+Approximate runtime: 2h30min.
 
 *Output: `graphs/plots/exp-2-figure-8-faults.pdf` (+ `.txt`)*
 
