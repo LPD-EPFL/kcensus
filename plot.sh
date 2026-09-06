@@ -39,7 +39,7 @@ function exp-1() {
     echo -n 'plotting exp-1 figure 1/2 (Figure 1)... ' &&
     python3 exp-1-figure-1-intro.py $LOCAL_FLAG   -g 1 > "./plots/${LOCAL_FLAG:+local-}exp-1-figure-1-intro.txt" &&
     echo 'done.' &&
-    echo -n 'finished exp-1 figure 2/2 (Figure 7)... ' &&
+    echo -n 'plotting exp-1 figure 2/2 (Figure 7)... ' &&
     python3 exp-1-figure-7-latency.py $LOCAL_FLAG -g 1 > "./plots/${LOCAL_FLAG:+local-}exp-1-figure-7-latency.txt" &&
     echo 'done.'
   )
