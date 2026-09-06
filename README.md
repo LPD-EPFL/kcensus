@@ -15,13 +15,13 @@ The workflow is automated using Packer, Terraform, Ansible, and shell scripts.
 > **No AWS account? Every experiment can also run on a single machine**, with the wide-area link
 > delays simulated. It needs only the Rust toolchain and Python — no cloud credentials, no cost —
 > and produces all the same figures. It is a check that the pipeline and the protocols behave,
-> not a reproduction of the reported numbers: read "How to read the results" in §4 before drawing
+> not a reproduction of the reported numbers: read "How to read the results" in §5 before drawing
 > conclusions from a local figure.
 >
 > If that is what you are after, the route is: §1 (clone), §2.2 (dependencies — you can skip the
 > Terraform/Ansible/Packer entries), §3.1 (build), then
-> [§4 Running Locally, Without AWS](#4-running-locally-without-aws), which tells you how the
-> commands in §5 map onto the local runner. §2.1, §2.3, §2.4, §3.2 and §6 are AWS-only.
+> [§5 Running Locally, Without AWS](#5-running-locally-without-aws), which tells you how the
+> commands in §6 map onto the local runner. §2.1, §2.3, §2.4, §3.2 and §7 are AWS-only.
 
 ## 1. Clone the Repository
 
@@ -37,7 +37,7 @@ cd kcensus
 The experiments run on AWS but are orchestrated from your local machine. This README assumes that
 your machine is running Linux.
 
-> Running locally instead (§4)? You still need **§2.2**, minus its Terraform, Ansible and Packer
+> Running locally instead (§5)? You still need **§2.2**, minus its Terraform, Ansible and Packer
 > entries. §2.1, §2.3 and §2.4 are AWS-only.
 
 ### 2.1 Cloud Prerequisites
@@ -154,14 +154,30 @@ locals {
 }
 ```
 
-## 4. Running Locally, Without AWS
+## 4. Reproducing the Paper Plots from Archived Logs
+
+You do not need to rerun the experiments to reproduce the exact paper plots. The complete logs are
+available in the [artifact-evaluation-v1 release](https://github.com/LPD-EPFL/kcensus/releases/tag/artifact-evaluation-v1).
+From the root of a fresh clone, download them and generate the plots with:
+
+```bash
+curl -L -o logs.zip https://github.com/LPD-EPFL/kcensus/releases/download/artifact-evaluation-v1/logs.zip
+unzip logs.zip
+./plot.sh all
+```
+
+The figures and their underlying numbers are written to `graphs/plots/`. This only requires the
+Python plotting dependencies from §2.2, not AWS credentials or a new experiment run. Install the
+Linux Libertine font as described there if you also want the typography to match the paper.
+
+## 5. Running Locally, Without AWS
 
 Every experiment can also run on a single machine, with all replicas as local processes and the
 wide-area link delays simulated from the latency matrices in `configs/`, measured earlier from the
 same AWS regions. This needs no AWS account and no credentials. It does not reproduce the paper's
 numbers — see "How to read the results" below for what does and does not carry over.
 
-**§5 is still the reference for what each experiment does**, which figures it produces and where
+**§6 is still the reference for what each experiment does**, which figures it produces and where
 they are written. Everything there applies unchanged; only the invocation differs. A local run
 does not need a run ID: remove any `--run-id reviewer-1` from the evaluation command, and add
 `--local` to both commands:
@@ -172,7 +188,7 @@ does not need a run ID: remove any `--run-id reviewer-1` from the evaluation com
 ```
 
 The experiment and plot names are identical either way. There is no provisioning step and nothing
-to clean up afterwards, so §6 does not apply.
+to clean up afterwards, so §7 does not apply.
 
 To check the whole pipeline works before committing to a long run:
 
@@ -248,7 +264,7 @@ protocols compare with each other.
 Treat a local run as a check that the pipeline and the protocols behave, not as a reproduction of
 the reported numbers.
 
-## 5. Running Experiments on AWS
+## 6. Running Experiments on AWS
 
 All commands below assume you are in the root `kcensus` directory.
 
@@ -301,7 +317,7 @@ Running everything takes ~4h40min.
 > Each experiment destroys its own resources when it finishes, and attempts to do so if it gives
 > up on a run. **Do not rely on that.** If you interrupt a script, or anything else goes wrong,
 > always check for surviving instances yourself — see
-> [§6 Cleaning Up Cloud Resources](#6-crucial-cleaning-up-cloud-resources).
+> [§7 Cleaning Up Cloud Resources](#7-crucial-cleaning-up-cloud-resources).
 
 Each figure script writes a `.pdf` (the figure) and a `.txt` (the numbers behind it) into
 `graphs/plots/`, named `exp-<experiment>-figure-<number>-<content>`:
@@ -380,7 +396,7 @@ The eval of exp-4 takes ~30min to run.
 *Outputs: `graphs/plots/exp-4-figure-10-network.pdf` and `exp-4-figure-11-cpu-mem.pdf`
 (+ `.txt`)*
 
-## 6. Crucial: Cleaning Up Cloud Resources
+## 7. Crucial: Cleaning Up Cloud Resources
 
 **Always clean up resources to avoid unexpected AWS bills.**
 
