@@ -1,5 +1,5 @@
 # This is how we build the AMI with the dependencies needed for the kcensus
-# experiments and copy it to all regions
+# experiments and copy it to the configured regions
 
 packer {
   required_plugins {
@@ -34,7 +34,6 @@ source "amazon-ebs" "kcensus-node" {
     "eu-central-2",
     "eu-central-1",
     "il-central-1",
-    "me-central-1",
     "af-south-1",
     "ap-south-2",
     "ap-south-1",

@@ -42,17 +42,17 @@ your machine is running Linux.
 
 ### 2.1 Cloud Prerequisites
 
-- **AWS Account**: Create an AWS account at [aws.amazon.com](https://aws.amazon.com/)
-  and [enable all AWS regions](https://us-east-1.console.aws.amazon.com/billing/home?region=us-east-1#/account).
-- **IAM User**: In the AWS Console (on your browser), create a dedicated IAM user with permissions for EC2 (policy
-  `AmazonEC2FullAccess`) (and AMI if you plan to rebuild the image (policy `AWSImageBuilderFullAccess`)).
+- **AWS Credentials**: Artifact reviewers will receive credentials separately. To reproduce the
+  experiments with your own account, create an [AWS account](https://aws.amazon.com/),
+  [enable the regions used by the experiments](https://us-east-1.console.aws.amazon.com/billing/home?region=us-east-1#/account),
+  and create a dedicated IAM user with `AmazonEC2FullAccess`.
 - **AWS CLI**: Install the [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) on
   your machine (`aws-cli-v2` on arch).
 
 #### Configure AWS CLI
 
-In the AWS management console, go to IAM service, navigate to the IAM user you created in the previous step, and create
-an access key for it and note the ID and secret. Then run this command in your terminal:
+Run the following command and enter the AWS access key ID and secret provided to you (or the
+credentials from your own account):
 
 ```bash
 aws configure
@@ -67,7 +67,7 @@ Install the following tools:
 * **Infrastructure & Automation**:
     * [Terraform](https://learn.hashicorp.com/tutorials/terraform/install-cli) (`terraform` on arch)
     * [Ansible](https://docs.ansible.com/ansible/latest/installation_guide/intro_installation.html) (`ansible` on arch)
-    * [Packer](https://learn.hashicorp.com/tutorials/packer/get-started-install-cli) (`packer` on arch) (if you plan to
+    * [Packer](https://developer.hashicorp.com/packer/install) (`packer` on arch) (if you plan to
       rebuild the image)
 * **Runtimes & Build Tools**:
     * [Python 3](https://www.python.org/downloads/), including `venv` and `pip` (`python3-venv` and
@@ -129,7 +129,7 @@ cargo build --target x86_64-unknown-linux-musl --release
 
 ### 3.2 (Optional) Building the Custom AMI (Packer)
 
-You only need this section if you want to build replacement AMIs; otherwise, you can skip this step as we provide pre-built AMIs in all AWS regions with every dependency required by the remote machines. The experiment binaries are uploaded separately, so changing them does not require rebuilding the AMIs.
+You only need this section if you want to build replacement AMIs; otherwise, you can skip this step as we provide pre-built AMIs in every AWS region used by the experiments, with every dependency required by the remote machines. The experiment binaries are uploaded separately, so changing them does not require rebuilding the AMIs.
 
 ```bash
 cd deployment/packer
@@ -162,11 +162,13 @@ same AWS regions. This needs no AWS account and no credentials. It does not repr
 numbers — see "How to read the results" below for what does and does not carry over.
 
 **§5 is still the reference for what each experiment does**, which figures it produces and where
-they are written. Everything there applies unchanged — just add `--local` to both commands:
+they are written. Everything there applies unchanged; only the invocation differs. A local run
+does not need a run ID: remove any `--run-id reviewer-1` from the evaluation command, and add
+`--local` to both commands:
 
 ```bash
-./eval.sh --local exp-3      # instead of ./eval.sh exp-3
-./plot.sh --local exp-3     # instead of ./plot.sh exp-3
+./eval.sh --local exp-3      # instead of ./eval.sh --run-id reviewer-1 exp-3
+./plot.sh --local exp-3      # instead of ./plot.sh exp-3
 ```
 
 The experiment and plot names are identical either way. There is no provisioning step and nothing
@@ -175,8 +177,8 @@ to clean up afterwards, so §6 does not apply.
 To check the whole pipeline works before committing to a long run:
 
 ```bash
-./eval.sh --local exp-1              # ~10 minutes: build, run, and produce Figures 1 and 7
-./plot.sh --local exp-1
+./eval.sh --local exp-1              # ~10 minutes: build, run, and collect logs
+./plot.sh --local exp-1              # produce Figures 1 and 7
 ```
 
 and the full set, if you want every figure:
@@ -266,17 +268,12 @@ figure is produced by exactly one experiment:
 |   10   | Resource Consumption (traffic)        |  `exp-4`   |
 |   11   | Resource Consumption (CPU and memory) |  `exp-4`   |
 
-To produce a figure, run its experiment and then plot it:
+To produce a figure, choose a run ID, run its experiment and then plot it. When several reviewers
+share the AWS account, each must choose a different run ID:
 
 ```bash
-./eval.sh exp-N     # provision, run, collect the logs, tear down
-./plot.sh exp-N     # draw every figure that experiment produces
-```
-
-When several reviewers share the AWS account, each must choose a different run ID:
-
-```bash
-./eval.sh --run-id reviewer-1 exp-N
+./eval.sh --run-id reviewer-1 exp-N  # provision, run, collect the logs, tear down
+./plot.sh exp-N                       # draw every figure that experiment produces
 ```
 
 The run ID may contain 1–32 lowercase letters, digits or hyphens. It namespaces all AWS resources
@@ -292,11 +289,11 @@ mean provisioning 31 instances across every region a second time.
 To run everything the paper depends on:
 
 ```bash
-./eval.sh all       # exp-1 .. exp-4
-./plot.sh all       # every figure
+./eval.sh --run-id reviewer-1 all  # exp-1 .. exp-4
+./plot.sh all                      # every figure
 ```
 
-Running everything takes approximately ~4h30.
+Running everything takes ~4h40min.
 
 > **Note**: The experiments take several hours and incur AWS costs — `exp-2` (faults) dominates,
 > and `exp-3` holds 31 instances across every region for its whole duration.
@@ -316,11 +313,11 @@ Each figure script writes a `.pdf` (the figure) and a `.txt` (the numbers behind
 Four 7-replica deployments: Northern Hemisphere, Europe, North America and East Asia.
 
 ```bash
-./eval.sh exp-1
+./eval.sh --run-id reviewer-1 exp-1
 ./plot.sh exp-1
 ```
 
-The eval of exp-1 takes approximately 20min to run.
+The eval of exp-1 takes ~20min to run.
 
 *Outputs: `graphs/plots/exp-1-figure-1-intro.pdf` and `exp-1-figure-7-latency.pdf` (+ `.txt`)*
 
@@ -331,11 +328,11 @@ The eval of exp-1 takes approximately 20min to run.
 The Northern-Hemisphere deployment, with every combination of up to 3 crashed replicas.
 
 ```bash
-./eval.sh exp-2
+./eval.sh --run-id reviewer-1 exp-2
 ./plot.sh exp-2
 ```
 
-The eval of exp-2 takes approximately 2h20min to run.
+The eval of exp-2 takes ~2h20min to run.
 
 *Output: `graphs/plots/exp-2-figure-8-faults.pdf` (+ `.txt`)*
 
@@ -358,11 +355,11 @@ Deployments from 3 to 31 replicas worldwide. Both figures come from this one 31-
 provisioning, which is why they are bundled.
 
 ```bash
-./eval.sh exp-3
+./eval.sh --run-id reviewer-1 exp-3
 ./plot.sh exp-3
 ```
 
-The eval of exp-3 takes approximately 1h30min to run.
+The eval of exp-3 takes ~1h30min to run.
 
 *Outputs: `graphs/plots/exp-3-figure-9-scalability.pdf` and `exp-3-figure-12-propagation.pdf`
 (+ `.txt`)*
@@ -374,11 +371,11 @@ The eval of exp-3 takes approximately 1h30min to run.
 A single large machine, simulating link delays locally.
 
 ```bash
-./eval.sh exp-4
+./eval.sh --run-id reviewer-1 exp-4
 ./plot.sh exp-4
 ```
 
-The eval of exp-4 takes approximately 30min to run.
+The eval of exp-4 takes ~30min to run.
 
 *Outputs: `graphs/plots/exp-4-figure-10-network.pdf` and `exp-4-figure-11-cpu-mem.pdf`
 (+ `.txt`)*
@@ -393,8 +390,8 @@ interrupted, resources may remain running.
 ### Manual Cleanup
 
 To manually clean up resources, use the `destroy` command of `eval.sh`. Provide the Terraform variable file and the
-full experiment ID printed during provisioning. When `--run-id reviewer-1` was used, append
-`-reviewer-1` to the IDs below.
+full experiment ID printed during provisioning. The examples below use the run ID `reviewer-1`;
+if no run ID was used, remove the `-reviewer-1` suffix.
 
 `exp-1` provisions one deployment per region set, so its experiment ID carries the deployment
 name; the others use a single ID.
@@ -402,25 +399,23 @@ name; the others use a single ID.
 Example 1: if `exp-1` was interrupted on the Europe deployment:
 
 ```bash
-./eval.sh destroy deployment/terraform/regions/europe-7.tfvars exp-1-aws-europe-7
-# With --run-id reviewer-1: exp-1-aws-europe-7-reviewer-1
+./eval.sh destroy deployment/terraform/regions/europe-7.tfvars exp-1-aws-europe-7-reviewer-1
 ```
 
 Example 2: if `exp-2` (faults) was interrupted:
 
 ```bash
-./eval.sh destroy deployment/terraform/regions/ring-7.tfvars exp-2
-# With --run-id reviewer-1: exp-2-reviewer-1
+./eval.sh destroy deployment/terraform/regions/ring-7.tfvars exp-2-reviewer-1
 ```
 
 Example 3: if `exp-3` (scalability) or `exp-4` (resources) was interrupted:
 
 ```bash
-./eval.sh destroy deployment/terraform/regions/aws-31.tfvars exp-3
-./eval.sh destroy deployment/terraform/regions/one.tfvars    exp-4
+./eval.sh destroy deployment/terraform/regions/aws-31.tfvars exp-3-reviewer-1
+./eval.sh destroy deployment/terraform/regions/one.tfvars    exp-4-reviewer-1
 ```
 
-After a run using `--run-id reviewer-1`, verify cleanup across the enabled regions:
+After a run, verify cleanup:
 
 ```bash
 ./check-aws-cleanup.sh --run-id reviewer-1 # Check only your run
