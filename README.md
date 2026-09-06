@@ -4,24 +4,13 @@ KCensus is a faster alternative to Paxos-like consensus protocols.
 
 # Running Experiments & Reproducing Results
 
-This guide provides instructions to reproduce the plots from the KCensus paper. It covers:
+Reproduce the paper's plots from [archived logs (§4)](#4-reproducing-the-paper-plots-from-archived-logs),
+or rerun experiments on AWS or locally.
 
-* Configuring your local environment and AWS account
-* Building required artifacts (binaries and custom machine image)
-* Launching experiments and generating plots
-
-The workflow is automated using Packer, Terraform, Ansible, and shell scripts.
-
-> **No AWS account? Every experiment can also run on a single machine**, with the wide-area link
-> delays simulated. It needs only the Rust toolchain and Python — no cloud credentials, no cost —
-> and produces all the same figures. It is a check that the pipeline and the protocols behave,
-> not a reproduction of the reported numbers: read "How to read the results" in §5 before drawing
-> conclusions from a local figure.
->
-> If that is what you are after, the route is: §1 (clone), §2.2 (dependencies — you can skip the
-> Terraform/Ansible/Packer entries), §3.1 (build), then
-> [§5 Running Locally, Without AWS](#5-running-locally-without-aws), which tells you how the
-> commands in §6 map onto the local runner. §2.1, §2.3, §2.4, §3.2 and §7 are AWS-only.
+> **Without AWS:** follow §1, §2.2 (skip cloud tooling), §3.1, then
+> [§5 Running Locally, Without AWS](#5-running-locally-without-aws).
+> Local runs use simulated link delays to check the pipeline and protocols; they do not reproduce
+> the reported numbers. See §5 for how to interpret them.
 
 ## 1. Clone the Repository
 
@@ -34,11 +23,9 @@ cd kcensus
 
 ## 2. Environment Configuration
 
-The experiments run on AWS but are orchestrated from your local machine. This README assumes that
-your machine is running Linux.
+This guide assumes a Linux machine, used either to orchestrate AWS experiments or run them locally.
 
-> Running locally instead (§5)? You still need **§2.2**, minus its Terraform, Ansible and Packer
-> entries. §2.1, §2.3 and §2.4 are AWS-only.
+> §2.1 and §2.3 are AWS-only. Local runs need §2.2 without cloud tooling.
 
 ### 2.1 Cloud Prerequisites
 
@@ -49,27 +36,27 @@ your machine is running Linux.
 - **AWS CLI**: Install the [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) on
   your machine (`aws-cli-v2` on arch).
 
-On Ubuntu 26.04, you can simply run:
+On Ubuntu 26.04:
+
 ```bash
 sudo snap install aws-cli --classic
 ```
 
 #### Configure AWS CLI
 
-Run the following command and enter the AWS access key ID and secret provided to you (or the
-credentials from your own account):
+Enter the provided AWS access key ID and secret, or your own credentials:
 
 ```bash
 aws configure
 ```
 
-This will set up your credentials in `~/.aws/credentials`.
+This saves credentials in `~/.aws/credentials`, which Terraform, Packer, and Ansible also use.
 
 ### 2.2 Local Machine Dependencies
 
 Install the following tools:
 
-* **Infrastructure & Automation**:
+* **Cloud tooling (AWS only)**:
     * [Terraform](https://learn.hashicorp.com/tutorials/terraform/install-cli) (`terraform` on arch)
     * [Ansible](https://docs.ansible.com/ansible/latest/installation_guide/intro_installation.html) (`ansible` on arch)
     * [Packer](https://developer.hashicorp.com/packer/install) (`packer` on arch) (if you plan to
@@ -79,13 +66,14 @@ Install the following tools:
       `python3-pip` on Debian/Ubuntu; included with `python` on arch). The plotting scripts run in
       a virtual environment that `graphs/env.sh` creates on first use.
     * [Rust Toolchain](https://www.rust-lang.org/tools/install) (`rustup`, `cargo`)
-* **Ansible Collection**:
-  After successfully installing Ansible, run this command:
+* **Ansible Collection (AWS only)**:
+
     ```bash
     ansible-galaxy collection install community.general
     ```
 
-On Ubuntu 26.04, you can simply run:
+On Ubuntu 26.04:
+
 ```bash
 sudo apt update
 sudo snap install terraform --classic
@@ -95,10 +83,8 @@ ansible-galaxy collection install community.general
 rustup default stable
 ```
 
-**Optional — matching the paper's typography.** The figures are drawn in Linux Libertine. If the
-font is not installed, matplotlib prints `findfont: Font family 'Linux Libertine O' not found` and
-falls back to a default face: the figures are still numerically correct, only the lettering
-differs. To silence the warnings and match the paper exactly:
+**Optional — paper typography.** Without Linux Libertine, matplotlib warns and uses a fallback
+font; the plotted values are unaffected. To install the bundled font:
 
 ```bash
 mkdir -p ~/.local/share/fonts/otf && cp -r graphs/LinLibertine ~/.local/share/fonts/otf/
@@ -113,15 +99,7 @@ Generate a new SSH key pair **without a passphrase**:
 ssh-keygen -t ed25519 -f ~/.ssh/kcensus_key -N ""
 ```
 
-- Private key: `~/.ssh/kcensus_key`
-- Public key: `~/.ssh/kcensus_key.pub`
-
-Keep these exact file paths: the evaluation scripts expect `~/.ssh/kcensus_key` and `~/.ssh/kcensus_key.pub`.
-
-### 2.4 Linking Terraform, Packer, and Ansible to AWS
-
-If you managed to do all the previous steps successfully, then Terraform, Ansible, and Packer will all work seamlessly
-with your AWS account without further configuration.
+Keep these paths: the evaluation scripts expect `~/.ssh/kcensus_key` and `~/.ssh/kcensus_key.pub`.
 
 ## 3. Building the Artifacts
 
@@ -134,17 +112,16 @@ rustup target add x86_64-unknown-linux-musl
 cargo build --target x86_64-unknown-linux-musl --release
 ```
 
-> **CPU requirement.** `.cargo/config.toml` builds with `-C target_cpu=x86-64-v3`, so the binaries
-> require an AVX2-era CPU (Haswell, 2013, or newer). This never affects the AWS runs — the
-> `t3.medium` and `m5.16xlarge` instances used by the experiments both support it — but a binary
-> *run* on older hardware dies with `SIGILL` ("Illegal instruction").
->
-> If that applies to you, delete `.cargo/config.toml` and rebuild. Nothing else reads that file;
-> the build simply falls back to the portable baseline. It affects speed, not results.
+> **CPU requirement.** `.cargo/config.toml` sets `-C target_cpu=x86-64-v3`, requiring an
+> AVX2-era CPU (Haswell, 2013, or newer). The AWS instances used here support it. On older
+> hardware, remove `.cargo/config.toml` and rebuild to avoid `SIGILL` ("Illegal instruction").
+> The effect on performances should be minor.
 
 ### 3.2 (Optional) Building the Custom AMI (Packer)
 
-You only need this section if you want to build replacement AMIs; otherwise, you can skip this step as we provide pre-built AMIs in every AWS region used by the experiments, with every dependency required by the remote machines. The experiment binaries are uploaded separately, so changing them does not require rebuilding the AMIs.
+Pre-built AMIs include the remote dependencies in every region used by the experiments.
+Rebuild them only if you need replacement images. Binaries are uploaded separately, so code
+changes do not require rebuilding AMIs.
 
 ```bash
 cd deployment/packer
@@ -157,7 +134,7 @@ This step builds the AMI in one AWS region and copies it to others. It may take 
 
 Packer prints one AMI ID per region at the end. Copy them into the `ami_ids` map in
 `deployment/terraform/modules/server/main.tf` — it is keyed by region name, with one entry per
-region the experiments can deploy to (31 today):
+region the experiments can deploy to:
 
 ```hcl
 locals {
@@ -187,94 +164,55 @@ Linux Libertine font as described there if you also want the typography to match
 
 ## 5. Running Locally, Without AWS
 
-Every experiment can also run on a single machine, with all replicas as local processes and the
-wide-area link delays simulated from the latency matrices in `configs/`, measured earlier from the
-same AWS regions. This needs no AWS account and no credentials. It does not reproduce the paper's
-numbers — see "How to read the results" below for what does and does not carry over.
+Local runs use one process per replica and simulate link delays using the AWS latency snapshots
+in `configs/`. They require Rust, Python with `venv` and `pip` (§2.2), and GNU `time` at
+`/usr/bin/time` for resource measurements.
 
-**§6 is still the reference for what each experiment does**, which figures it produces and where
-they are written. Everything there applies unchanged; only the invocation differs. A local run
-does not need a run ID: remove any `--run-id reviewer-1` from the evaluation command, and add
-`--local` to both commands:
+See §6 for experiment descriptions and figure mappings. Omit `--run-id` and add `--local` to
+both commands:
 
 ```bash
 ./eval.sh --local exp-1      # instead of ./eval.sh --run-id reviewer-1 exp-1
 ./plot.sh --local exp-1      # instead of ./plot.sh exp-1
 ```
 
-The experiment and plot names are identical either way. There is no provisioning step and nothing
-to clean up afterwards, so §7 does not apply.
+These commands build and run experiment 1 (~10 minutes), then plot Figures 1 and 7.
+No cloud cleanup is needed.
 
-The above command with exp-1 should only take ~10 minutes to run and will produce Figures 1 and 7.
-It builds, runs locally and plots the figures from the obtained logs. 
-
-
-For the full set, if you want every figure:
+To generate every figure:
 
 ```bash
-./eval.sh --local all                # ~5 hours
+./eval.sh --local all
 ./plot.sh --local all
 ```
 
-When running locally, you can expect ~10min to run exp-1, ~1h40min to run exp-2, ~1h05min to run exp-3 and ~1h45min to run exp-4, for a total of ~4h40min.
-
-Requirements are the same as §2.2 minus the cloud tooling: the Rust toolchain, Python with `venv`,
-and GNU `time` at `/usr/bin/time` (the resource figures parse its output).
+Approximate local runtimes: exp-1 takes 10 minutes, exp-2 takes 1h40min, exp-3 takes 1h05min,
+and exp-4 takes 1h45min (~4h40min total).
 
 ### What is different from the AWS runs
 
-**Results never mix with the AWS ones.** Local runs write to `./local-logs`, never `./logs`, and
-`plot.sh --local` writes figures with a `local-` prefix. Running locally cannot overwrite results
-collected on AWS.
+Local logs go to `./local-logs` instead of `./logs`, and figures have a `local-` prefix,
+so they do not overwrite AWS results.
 
-**Throughput is reduced.** One machine cannot sustain the aggregate rate of a wide-area
-deployment, so local runs divide it by `(f+1)/2` — half rate at 7 replicas, an eighth at 31. The
-log path records the reduced value it actually used (`t=500`, `t=125`), which is why `plot.sh`
-needs the `--local` flag to find it.
-
-**Measurement windows are stretched to compensate.** A lower rate over a fixed 10 s window would
-collect ever fewer requests as the deployment grows, so the window grows instead: experiments 1–3
-collect at least a quarter of the requests an AWS run does at every size, and experiment 4
-reproduces the request count *exactly*, because it measures compute and compute tracks requests
-processed.
+To fit on one machine, throughput is divided by `(f+1)/2`: half rate at 7 replicas, an eighth
+at 31. Log paths record the reduced rate, so plotting requires `--local`.
+Measurement windows are extended: experiments 1–3 collect at least a quarter of the AWS request
+count, and experiment 4 matches it to keep compute measurements comparable.
 
 ### How to read the results
 
-**The simulated link delays are not the ones the paper measured.** An AWS run pings the
-instances it just provisioned and builds its latency matrix from those measurements, so every
-deployment gets a slightly different one. A local run cannot do that; it uses the matrices checked
-into `configs/`, which are a snapshot taken from the same regions at some earlier point. Close,
-but not identical.
+Local runs use saved latency matrices; AWS runs measure delays on newly provisioned instances.
+Small differences can change leader and quorum selection, affecting both averages and regional
+rankings. Each server log records its chosen leader as `Leader: <pid>`.
 
-That matters more than the size of the difference suggests, because **the protocols pick their
-leaders and quorums from that matrix by taking a minimum**, and when two candidates are within a
-few percent a small change in the pings flips a discrete choice. Concretely, in our local run of
-experiment 1, multi-paxos on `aws-east-asia-7` elected Osaka, where the AWS run elected Taipei —
-the two are within 7% of each other on the metric that decides it. Every subsequent latency in
-that subfigure is then measured against a different leader. The chosen leader is printed as
-`Leader: <pid>` at the top of each server's log, so you can check this yourself.
-
-So for the **latency figures (1, 7, 8, 9)**, expect the deployment-wide averages to land close and
-the detail to move around. In our local run of experiment 1 the per-protocol averages were within
-8% of the AWS ones, and usually within 5% — but the fastest and slowest proposer, which is what
-the whiskers show, differed by as much as 15%, and individual regions can reorder.
-
-**Figure 10** (traffic and communication) should carry over cleanly: bytes and messages per application request are
-properties of the protocol, not of the machine or of the
-exact delays.
-
-**Figures 11 and 12 depend on your hardware**, and are the two that will not match. Figure 11
-reports CPU time and memory; Figure 12 reports the time to compute optimal requirements on a
-single core. The paper measured them on different instances — an `m5.16xlarge` for Figure 11, and
-one of experiment 3's `t3.medium` machines for Figure 12 — so expect the absolute values to differ
-by roughly the performance ratio between your machine and those. A modern laptop is typically
-faster than either, so the numbers will usually come out lower.
-
-What carries over is the shape of the curves: how cost grows with the replica count, and how the
-protocols compare with each other.
-
-Treat a local run as a check that the pipeline and the protocols behave, not as a reproduction of
-the reported numbers.
+- **Latency (Figures 1, 7, 8, 9):** expect similar averages with variation across regions.
+  In our local experiment 1, per-protocol averages were within 8% of AWS results (usually 5%),
+  while the fastest and slowest proposer latencies differed by up to 15%.
+- **Traffic (Figure 10):** bytes and messages per request are protocol properties and should
+  remain comparable.
+- **Memory (Figure 11):** usage should remain comparable across local and AWS runs.
+- **CPU time and optimization time (Figures 11 and 12):** absolute values depend on hardware.
+  For reference, the paper used an `m5.16xlarge` for Figure 11 and a `t3.medium` for Figure 12.
 
 ## 6. Running Experiments on AWS
 
@@ -309,15 +247,12 @@ share the AWS account, each must choose a different run ID:
 ./plot.sh exp-N                       # draw every figure that experiment produces
 ```
 
-The run ID may contain 1–32 lowercase letters, digits or hyphens. It namespaces all AWS resources
-created by the command; it does not change the log paths or the subsequent `./plot.sh exp-N`
-command. Each reviewer should run from a separate clone, because Terraform state and logs are
-local to the clone.
+The run ID must contain 1–32 lowercase letters, digits or hyphens and start with a letter or digit.
+It namespaces all AWS resources created by the command; it does not change the log paths or the subsequent `./plot.sh exp-N`
+command. Running multiple AWS experiments in parallel requires separate clones and distinct run IDs
+to keep Terraform state, logs, and cloud resources separate.
 
-Note where an experiment appears twice above: `exp-1` and `exp-3` each produce **two figures, in
-two different sections of the paper**, from a single set of runs. `plot.sh` draws both at once —
-there is no need to run the experiment again for the second figure, and for `exp-3` that would
-mean provisioning 31 instances across every region a second time.
+`plot.sh` produces all figures for an experiment from the same logs; run each experiment only once.
 
 To run everything the paper depends on:
 
@@ -350,7 +285,7 @@ Four 7-replica deployments: Northern Hemisphere, Europe, North America and East 
 ./plot.sh exp-1
 ```
 
-The eval of exp-1 takes ~20min to run.
+Approximate runtime: 20min.
 
 *Outputs: `graphs/plots/exp-1-figure-1-intro.pdf` and `exp-1-figure-7-latency.pdf` (+ `.txt`)*
 
@@ -365,34 +300,26 @@ The Northern-Hemisphere deployment, with every combination of up to 3 crashed re
 ./plot.sh exp-2
 ```
 
-The eval of exp-2 takes ~2h20min to run.
+Approximate runtime: 2h20min.
 
 *Output: `graphs/plots/exp-2-figure-8-faults.pdf` (+ `.txt`)*
 
-> **Run order.** `exp-2` needs a zero-fault baseline for its "0 Faults" subfigure, and re-runs the
-> same six `aws-ring-7` configurations `exp-1` already ran. Both write to the same log directory,
-> so the last one to run wins — which is why `all` runs `exp-1` first.
->
-> Running `exp-1` *after* `exp-2` is therefore not wrong, but it leaves Figure 8's 0-fault
-> subfigure measured on a different deployment from the 1-, 2- and 3-fault ones. The effect is
-> small and does not bias the comparison: every algorithm within a subfigure is still measured on
-> the same deployment, so only the overall level of the 0-fault bars can shift, never the ordering
-> between algorithms. Re-run `exp-2` afterwards if you want all four subfigures from one
-> deployment, as in the paper.
+> **Run order.** `exp-1` and `exp-2` share logs for six zero-fault `aws-ring-7` configurations;
+> the last run overwrites them. Run `exp-1` before `exp-2` (as `all` does) to keep all Figure 8
+> subfigures from the same deployment. If you run them in reverse order, rerun `exp-2`.
 
 ---
 
 ### Experiment 3 — scalability and optimization time (Figures 9 and 12)
 
-Deployments from 3 to 31 replicas worldwide. Both figures come from this one 31-instance
-provisioning, which is why they are bundled.
+Deployments from 3 to 31 replicas worldwide, using one 31-instance provisioning.
 
 ```bash
 ./eval.sh --run-id reviewer-1 exp-3
 ./plot.sh exp-3
 ```
 
-The eval of exp-3 takes ~1h30min to run.
+Approximate runtime: 1h30min.
 
 *Outputs: `graphs/plots/exp-3-figure-9-scalability.pdf` and `exp-3-figure-12-propagation.pdf`
 (+ `.txt`)*
@@ -408,7 +335,7 @@ A single large machine, simulating link delays locally.
 ./plot.sh exp-4
 ```
 
-The eval of exp-4 takes ~30min to run.
+Approximate runtime: 30min.
 
 *Outputs: `graphs/plots/exp-4-figure-10-network.pdf` and `exp-4-figure-11-cpu-mem.pdf`
 (+ `.txt`)*
@@ -417,19 +344,42 @@ The eval of exp-4 takes ~30min to run.
 
 **Always clean up resources to avoid unexpected AWS bills.**
 
-The `eval.sh` script automatically destroys resources after each experiment. But if not terminated correctly or
-interrupted, resources may remain running.
+`eval.sh` destroys resources after each experiment, but failures or interruptions can leave them running.
+
+After a run or interruption, check for remaining instances:
+
+```bash
+./check-aws-cleanup.sh --run-id reviewer-1 # Check only your run
+# OR
+./check-aws-cleanup.sh                     # Check every KCensus run
+```
+
+The command lists remaining instances by AWS region, including their state and name. Names follow
+`kcensus-<experiment-id>-<instance-aws-region>`. For `exp-1`, the experiment ID also includes
+the deployment's region set (such as `aws-europe-7`); the final suffix identifies the individual
+instance's AWS region (such as `eu-west-1`).
+A `Cleanup verified` output means all matching instances are terminated.
 
 ### Manual Cleanup
 
-To manually clean up resources, use the `destroy` command of `eval.sh`. Provide the Terraform variable file and the
-full experiment ID printed during provisioning. The examples below use the run ID `reviewer-1`;
+Use `eval.sh destroy` with the deployment's Terraform variable file and `<experiment-id>` from
+the instance name above (also printed during provisioning). The examples use the run ID `reviewer-1`;
 if no run ID was used, remove the `-reviewer-1` suffix.
 
-`exp-1` provisions one deployment per region set, so its experiment ID carries the deployment
-name; the others use a single ID.
-
 Example 1: if `exp-1` was interrupted on the Europe deployment:
+
+For `kcensus-exp-1-aws-europe-7-reviewer-1-eu-west-1`, `<experiment-id>` is
+`exp-1-aws-europe-7-reviewer-1` and `<instance-aws-region>` is `eu-west-1`.
+For `exp-1`, choose the `.tfvars` file from the region set in `<experiment-id>`:
+
+| Region set | Terraform variable file |
+|---|---|
+| `aws-ring-7` | `ring-7.tfvars` |
+| `aws-europe-7` | `europe-7.tfvars` |
+| `aws-north-america-7` | `north-america-7.tfvars` |
+| `aws-east-asia-7` | `east-asia-7.tfvars` |
+
+The cleanup command covers the whole deployment, across AWS regions:
 
 ```bash
 ./eval.sh destroy deployment/terraform/regions/europe-7.tfvars exp-1-aws-europe-7-reviewer-1
@@ -448,14 +398,4 @@ Example 3: if `exp-3` (scalability) or `exp-4` (resources) was interrupted:
 ./eval.sh destroy deployment/terraform/regions/one.tfvars    exp-4-reviewer-1
 ```
 
-After a run, verify cleanup:
-
-```bash
-./check-aws-cleanup.sh --run-id reviewer-1 # Check only your run
-# OR
-./check-aws-cleanup.sh                     # Check every KCensus run
-```
-
-The command prints any pending, running, shutting-down, stopping or stopped instances belonging
-to the selected run ID, or to any KCensus run if no ID is given. A `Cleanup verified` output means
-all of them are terminated.
+Rerun `check-aws-cleanup.sh --run-id reviewer-1` after manual cleanup to verify that all instances are terminated.
