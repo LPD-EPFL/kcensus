@@ -247,7 +247,7 @@ function exp-1() {
 # Legacy: latency under conflicts. Maps to no figure in the current paper; kept as the
 # starting point for the camera-ready conflicts experiment. Not part of `all`.
 function exp-conflicts() {
-  echo "--- Starting Experiment 2: Latency under load ---"
+  echo "--- Starting Legacy Conflicts Experiment: Latency under load ---"
 
   local configName="aws-ring-7"
   local EXPERIMENT_ID="exp-conflicts"
@@ -271,12 +271,12 @@ function exp-conflicts() {
 
   destroy "$varFile" "$EXPERIMENT_ID"
 
-  echo "--- Finished Experiment 2 ---"
+  echo "--- Finished Legacy Conflicts Experiment ---"
 }
 
 # Experiment 2: impact of failures on latency. Feeds Figure 8.
 function exp-2() {
-  echo "--- Starting Experiment 4: Faults ---"
+  echo "--- Starting Experiment 2: Faults ---"
 
   local configName="aws-ring-7"
   local EXPERIMENT_ID="exp-2"
@@ -296,11 +296,11 @@ function exp-2() {
 
   destroy "$varFile" "$EXPERIMENT_ID"
 
-  echo "--- Finished Experiment 4 ---"
+  echo "--- Finished Experiment 2 ---"
 }
 
 function exp-3() {
-  echo "--- Starting Experiments 3 & 5: Scalability and Propagation ---"
+  echo "--- Starting Experiment 3: Scalability and Propagation ---"
 
   local EXPERIMENT_ID="exp-3"
   local varFile="deployment/terraform/regions/aws-31.tfvars"
@@ -400,11 +400,11 @@ function exp-3() {
   # step 4: destroy infrastructure
   destroy "$varFile" "$EXPERIMENT_ID"
 
-  echo "--- Finished Experiments 3 & 5 ---"
+  echo "--- Finished Experiment 3 ---"
 }
 
 function exp-4() {
-  echo "--- Starting Experiment 6: Resources ---"
+  echo "--- Starting Experiment 4: Resources ---"
 
   local configName="aws-exp-4"
   local EXPERIMENT_ID="exp-4"
@@ -426,7 +426,7 @@ function exp-4() {
   tar -xzf "$archive" -C "${ABSOLUTE_BASE_LOG_DIR}" --strip-components=1
   echo "--> Results successfully merged into ${ABSOLUTE_BASE_LOG_DIR}"
 
-  echo "--- Finished Experiment 6 ---"
+  echo "--- Finished Experiment 4 ---"
 }
 
 function init_environment() {

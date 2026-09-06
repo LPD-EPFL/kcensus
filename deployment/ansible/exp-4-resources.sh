@@ -109,7 +109,7 @@ function run() {
 }
 
 # Resources
-function exp-6() {
+function run_resources() {
   local duration="10s"
   local throughput=1000
   local keys=10000
@@ -136,4 +136,4 @@ function exp-6() {
   done
 }
 
-exp-6
+run_resources
