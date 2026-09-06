@@ -271,6 +271,11 @@ All commands below assume you are in the root `kcensus` directory.
 Each experiment is run with `eval.sh`, which provisions the infrastructure, deploys the code,
 runs the experiment and collects the logs. `plot.sh` then turns those logs into the figures.
 
+> **Reproducibility note.** A fresh AWS run reproduces the experimental procedure, but is not
+> guaranteed to produce the exact values reported in the paper. Inter-region latencies vary over
+> time and between deployments, which can affect latency measurements, leader selection and quorum
+> selection. Use the archived logs in §4 to reproduce the exact paper plots.
+
 There are four experiments, numbered in the order their figures first appear in the paper. Each
 figure is produced by exactly one experiment:
 
