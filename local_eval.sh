@@ -28,7 +28,8 @@ function build_binaries() {
 # run <configName> <configFile> <algo> <writes> <duration> <ingress> <speedup> [faults] [keys] [skew] [shards] [conflicts]
 #
 # <configName> is what goes in the log path (matching geo_eval.sh exactly); <configFile> is the
-# toml under configs/. They differ for the 7-replica deployments, where the path has no suffix.
+# TOML under configs/. They differ when the log-path name omits a suffix and when an experiment
+# needs its own latency snapshot.
 function run_one() {
   local configName="$1" configFile="$2" algo="$3" writes="$4" duration="$5" ingress="$6"
   local speedup="$7" faults="${8:-}" keys="${9:-${KEYS}}" skew="${10:-${SKEW}}"
@@ -116,17 +117,21 @@ function exp-3() {
   local type n algo
   for type in "${EXP3_TYPES[@]}"; do
     for n in "${EXP3_SIZES[@]}"; do
+      # Experiment 3 replays the topology measured by the latest AWS exp-3 run.
+      # Experiment 4 keeps its older matrices under configs/exp-4/ so it can
+      # reproduce its reported results.
+      local configFile="exp-3/${type}/${n}.toml"
       for algo in "${ALGOS[@]}"; do
         # A quarter of an AWS run's requests: still >=2500 samples at every size, against ~1250
         # with a fixed window. Half would be nicer statistically but costs 1.7h instead of 1.0h,
         # and a local run is stable enough that the extra samples buy little.
-        run_one "${type}/${n}.toml" "${type}/${n}.toml" "$algo" 1 "$(local_duration "$n" 4)s" exponential "$SPEEDUP"
+        run_one "${type}/${n}.toml" "$configFile" "$algo" 1 "$(local_duration "$n" 4)s" exponential "$SPEEDUP"
       done
       # One propagation measurement per deployment (Figure 12).
       local graphDir="${BASE_LOG_DIR}/c=${type}/${n}.toml"
       mkdir -p "$graphDir"
       echo "--> RUNNING Graph Bench: c=${type}/${n}.toml"
-      "$GRAPH_BENCH" --config "configs/${type}/${n}.toml" --fault-count 0 -w 50 -s 200 \
+      "$GRAPH_BENCH" --config "configs/${configFile}" --fault-count 0 -w 50 -s 200 \
         > "${graphDir}/graph_bench.stdout" 2> "${graphDir}/graph_bench.stderr"
     done
   done
@@ -140,10 +145,11 @@ function exp-3() {
 # shortfall grows with n, bending the very curve the figure is meant to show.
 function exp-4() {
   echo "--- Experiment 4: resource consumption (local) ---"
-  local n algo
+  local n algo configFile
   for n in "${EXP4_SIZES[@]}"; do
+    configFile="exp-4/${EXP4_TYPE}/${n}.toml"
     for algo in "${ALGOS[@]}"; do
-      run_one "${EXP4_TYPE}/${n}.toml" "${EXP4_TYPE}/${n}.toml" "$algo" 1 "$(local_duration "$n" 1)s" exponential "$EXP4_SPEEDUP"
+      run_one "${EXP4_TYPE}/${n}.toml" "$configFile" "$algo" 1 "$(local_duration "$n" 1)s" exponential "$EXP4_SPEEDUP"
     done
   done
   echo "--- Finished Experiment 4 ---"
