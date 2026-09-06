@@ -117,9 +117,6 @@ function exp-3() {
   local type n algo
   for type in "${EXP3_TYPES[@]}"; do
     for n in "${EXP3_SIZES[@]}"; do
-      # Experiment 3 replays the topology measured by the latest AWS exp-3 run.
-      # Experiment 4 keeps its older matrices under configs/exp-4/ so it can
-      # reproduce its reported results.
       local configFile="exp-3/${type}/${n}.toml"
       for algo in "${ALGOS[@]}"; do
         # A quarter of an AWS run's requests: still >=2500 samples at every size, against ~1250
