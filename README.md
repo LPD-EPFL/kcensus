@@ -420,9 +420,14 @@ Example 3: if `exp-3` (scalability) or `exp-4` (resources) was interrupted:
 ./eval.sh destroy deployment/terraform/regions/one.tfvars    exp-4
 ```
 
-**Always verify in the AWS EC2 Console** that all instances with "kcensus" in their name have been terminated after you
-are finished.
+After a run using `--run-id reviewer-1`, verify cleanup across the enabled regions:
 
-> **Note**: If the account is only used for this project, you can use the following
-> link [VPC Console](https://console.aws.amazon.com/vpcconsole/home) and expand the **See all regions** list under *
-*Running instances** to find all running instances across all regions.
+```bash
+./check-aws-cleanup.sh --run-id reviewer-1 # Check only your run
+# OR
+./check-aws-cleanup.sh                     # Check every KCensus run
+```
+
+The command prints any pending, running, shutting-down, stopping or stopped instances belonging
+to the selected run ID, or to any KCensus run if no ID is given. A `Cleanup verified` output means
+all of them are terminated.
