@@ -198,21 +198,18 @@ does not need a run ID: remove any `--run-id reviewer-1` from the evaluation com
 `--local` to both commands:
 
 ```bash
-./eval.sh --local exp-3      # instead of ./eval.sh --run-id reviewer-1 exp-3
-./plot.sh --local exp-3      # instead of ./plot.sh exp-3
+./eval.sh --local exp-1      # instead of ./eval.sh --run-id reviewer-1 exp-1
+./plot.sh --local exp-1      # instead of ./plot.sh exp-1
 ```
 
 The experiment and plot names are identical either way. There is no provisioning step and nothing
 to clean up afterwards, so §7 does not apply.
 
-To check the whole pipeline works before committing to a long run:
+The above command with exp-1 should only take ~10 minutes to run and will produce Figures 1 and 7.
+It builds, runs locally and plots the figures from the obtained logs. 
 
-```bash
-./eval.sh --local exp-1              # ~10 minutes: build, run, and collect logs
-./plot.sh --local exp-1              # produce Figures 1 and 7
-```
 
-and the full set, if you want every figure:
+For the full set, if you want every figure:
 
 ```bash
 ./eval.sh --local all                # ~5 hours
