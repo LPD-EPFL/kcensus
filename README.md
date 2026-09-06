@@ -71,10 +71,8 @@ and figures. Make a copy if you want to keep both.
 
 ## 3. Experiments and Outputs
 
-The same four experiments are available locally and on AWS. `eval.sh` runs an experiment and
-collects its logs; `plot.sh` produces all its figures. Use `all` to run the full suite in order.
-
-For commands, complete the [build setup (§4)](#4-build-setup-for-new-experiments), then follow
+The same four experiments, described in the table below, are available locally and on AWS. To run
+them, complete the [build setup (§4)](#4-build-setup-for-new-experiments), then follow
 [local runs (§5)](#5-running-locally-without-aws) or [AWS runs (§6)](#6-running-experiments-on-aws).
 
 | Experiment | Description | Figures | Local runtime | AWS runtime |
