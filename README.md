@@ -49,6 +49,11 @@ your machine is running Linux.
 - **AWS CLI**: Install the [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) on
   your machine (`aws-cli-v2` on arch).
 
+On Ubuntu 26.04, you can simply run:
+```bash
+sudo snap install aws-cli --classic
+```
+
 #### Configure AWS CLI
 
 Run the following command and enter the AWS access key ID and secret provided to you (or the
@@ -79,6 +84,16 @@ Install the following tools:
     ```bash
     ansible-galaxy collection install community.general
     ```
+
+On Ubuntu 26.04, you can simply run:
+```bash
+sudo apt update
+sudo snap install terraform --classic
+sudo snap install packer
+sudo apt install unzip ansible python3 python3-venv python3-pip rustup build-essential
+ansible-galaxy collection install community.general
+rustup default stable
+```
 
 **Optional — matching the paper's typography.** The figures are drawn in Linux Libertine. If the
 font is not installed, matplotlib prints `findfont: Font family 'Linux Libertine O' not found` and
