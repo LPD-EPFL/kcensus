@@ -181,7 +181,7 @@ both commands:
 ./plot.sh --local exp-1      # instead of ./plot.sh exp-1
 ```
 
-These commands build and run experiment 1 (~10 minutes), then plot Figures 1 and 7.
+These commands build and run experiment 1 (~15 minutes), then plot Figures 1 and 7.
 No cloud cleanup is needed.
 
 To generate every figure:
