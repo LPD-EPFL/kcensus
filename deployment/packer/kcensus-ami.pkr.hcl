@@ -58,12 +58,12 @@ source "amazon-ebs" "kcensus-node" {
       virtualization-type = "hvm"
     }
     most_recent = true
-    owners = ["amazon"]
+    owners      = ["amazon"]
   }
 }
 
 build {
-  name = "kcensus-node-ami"
+  name    = "kcensus-node-ami"
   sources = ["source.amazon-ebs.kcensus-node"]
 
   provisioner "shell" {
