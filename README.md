@@ -10,6 +10,8 @@ against competing protocols.
 Reproduce the paper's plots from [archived logs (§4)](#4-reproducing-the-paper-plots-from-archived-logs),
 or rerun experiments on AWS or locally.
 
+Allow approximately 10 GB of disk space to store all experiment logs.
+
 > **Without AWS:** follow §1, §2.2 (skip cloud tooling), §3.1, then
 > [§5 Running Locally, Without AWS](#5-running-locally-without-aws).
 > Local runs use simulated link delays and can closely reproduce the latency results, depending
