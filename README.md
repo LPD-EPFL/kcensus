@@ -184,6 +184,11 @@ both commands:
 These commands build and run experiment 1 (~15 minutes), then plot Figures 1 and 7.
 No cloud cleanup is needed.
 
+The TOML files in `configs/` define each topology's regions and latency matrix (`raw_latencies`,
+in milliseconds). The `EXP1_CONFIGS`, `EXP2_CONFIG`, `EXP3_TYPES`/`EXP3_SIZES`, and
+`EXP4_TYPE`/`EXP4_SIZES` variables near the top of `lib.sh` select the topologies used by each
+experiment.
+
 To generate every figure:
 
 ```bash
