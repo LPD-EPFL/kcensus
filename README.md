@@ -89,7 +89,7 @@ On Ubuntu 26.04, you can simply run:
 ```bash
 sudo apt update
 sudo snap install terraform --classic
-sudo snap install packer
+sudo snap install packer # On WSL, packer will not work if installed via snap
 sudo apt install unzip ansible python3 python3-venv python3-pip rustup build-essential
 ansible-galaxy collection install community.general
 rustup default stable
