@@ -1,5 +1,5 @@
 use crate::consensus::kcensus::node_state::{Knowledge, NodeState};
-use crate::topology::{Topology, FAULTY_LATENCY};
+use crate::topology::{FAULTY_LATENCY, Topology};
 use bit_set::BitSet;
 use itertools::Itertools;
 use log::{debug, info, trace};
@@ -216,192 +216,347 @@ fn are_compatible(
     count_deducers >= min_quorum
 }
 
-pub fn compute_propagation_graphs(
-    topology: Topology,
-    kcensus_graph: bool,
-    swift_paxos_quorums: bool,
-    shortest_paths: bool,
-) -> PropagationGraphs {
-    let nb_processes = topology.nb_processes;
-    let max_faults = (topology.nb_replicas - 1) / 2;
-    let max_quorum = topology.nb_replicas - max_faults;
-    let maj_quorum = max_quorum; // For now, we don't play with quorum sizes
-    // What recoverable evidence needs is `f + 1`, and with the `n = 2f + 1` the paper
-    // assumes that *is* a majority. With an even replica count it is one short, and then
-    // the knowledge a leader ends up with is one process smaller than the majority
-    // `can_start_paxos_accept` requires: on a conflict the Paxos fallback can never start,
-    // which deadlocks the shard deterministically rather than as a race.
-    //
-    // TODO: put it back to `max_faults + 1` and instead make sure at least max_quorum of the
-    // frozen states always reaches the proposer — the knowledge requirement is about who *holds*
-    // the evidence, while the freeze quorum is about who *reports* it, and the second can
-    // be met by having the extra nodes send their frozen state to the proposer rather than
-    // by enlarging the first. That keeps the fast path at `f + 1` for even replica counts.
-    let min_quorum = (max_faults + 1).max(1 + topology.nb_replicas / 2);
+/// The latency tables every planner reads.
+///
+/// Built once and shared. Several are `O(n³)`, and the cost of *not* sharing them is on
+/// record: recomputing one per (quorum, leader, requester) is what made the SwiftPaxos
+/// search take 70s at 31 replicas.
+struct LatencyTables {
+    nb_processes: usize,
+    max_quorum: usize,
+    maj_quorum: usize,
+    min_quorum: usize,
+    path_latencies: Vec<Vec<Duration>>,
+    prev_dest: Vec<Vec<usize>>,
+    next_src: Vec<Vec<usize>>,
+    link_rtts: Vec<Vec<Duration>>,
+    path_rtts: Vec<Vec<Duration>>,
+    quorum_3p_path_rtts: Vec<Vec<Vec<Duration>>>,
+    quorum_3p_link_rtts: Vec<Vec<Vec<Duration>>>,
+}
 
-    let mut path_latencies = vec![vec![Duration::default(); nb_processes]; nb_processes];
-    let mut prev_dest = vec![vec![0; nb_processes]; nb_processes];
-    let mut next_src = vec![vec![0; nb_processes]; nb_processes];
+impl LatencyTables {
+    fn new(topology: &Topology, shortest_paths: bool) -> Self {
+        let nb_processes = topology.nb_processes;
+        let max_faults = (topology.nb_replicas - 1) / 2;
+        let max_quorum = topology.nb_replicas - max_faults;
+        let maj_quorum = max_quorum; // For now, we don't play with quorum sizes
+        // What recoverable evidence needs is `f + 1`, and with the `n = 2f + 1` the paper
+        // assumes that *is* a majority. With an even replica count it is one short, and then
+        // the knowledge a leader ends up with is one process smaller than the majority
+        // `can_start_paxos_accept` requires: on a conflict the Paxos fallback can never start,
+        // which deadlocks the shard deterministically rather than as a race.
+        //
+        // TODO: put it back to `max_faults + 1` and instead make sure at least max_quorum of the
+        // frozen states always reaches the proposer — the knowledge requirement is about who *holds*
+        // the evidence, while the freeze quorum is about who *reports* it, and the second can
+        // be met by having the extra nodes send their frozen state to the proposer rather than
+        // by enlarging the first. That keeps the fast path at `f + 1` for even replica counts.
+        let min_quorum = (max_faults + 1).max(1 + topology.nb_replicas / 2);
+        let mut path_latencies = vec![vec![Duration::default(); nb_processes]; nb_processes];
+        let mut prev_dest = vec![vec![0; nb_processes]; nb_processes];
+        let mut next_src = vec![vec![0; nb_processes]; nb_processes];
 
-    if shortest_paths {
-        // Generate graph nodes
-        let mut graph = NetworkGraph::with_capacity(nb_processes);
-        for _ in 0..nb_processes {
-            graph.add_node(());
-        }
-        for src in 0..nb_processes {
-            for dest in 0..nb_processes {
-                if src != dest {
-                    let nanos = topology.link_latency(src, dest).as_nanos();
-                    graph.add_edge(src.into(), dest.into(), nanos as f64);
+        if shortest_paths {
+            // Generate graph nodes
+            let mut graph = NetworkGraph::with_capacity(nb_processes);
+            for _ in 0..nb_processes {
+                graph.add_node(());
+            }
+            for src in 0..nb_processes {
+                for dest in 0..nb_processes {
+                    if src != dest {
+                        let nanos = topology.link_latency(src, dest).as_nanos();
+                        graph.add_edge(src.into(), dest.into(), nanos as f64);
+                    }
+                }
+            }
+
+            // Compute the shortest paths
+            for src in 0..nb_processes {
+                let paths =
+                    bellman_ford(&graph, src.into()).expect("Latencies can not be negative");
+                for dest in 0..nb_processes {
+                    let mut last_pred = dest;
+                    let mut pred = paths.predecessors[dest].unwrap_or(src.into()).index();
+                    prev_dest[src][dest] = pred;
+                    while pred != src {
+                        last_pred = pred;
+                        pred = paths.predecessors[last_pred].unwrap_or(src.into()).index();
+                    }
+                    next_src[src][dest] = last_pred;
+                    let nanos = paths.distances[dest];
+                    if paths.distances[dest] > (u64::MAX / 4) as f64 {
+                        path_latencies[src][dest] = FAULTY_LATENCY;
+                    } else {
+                        path_latencies[src][dest] = Duration::from_nanos(nanos.round() as u64);
+                    }
+                }
+            }
+        } else {
+            for src in 0..nb_processes {
+                for dest in 0..nb_processes {
+                    path_latencies[src][dest] = topology.link_latency(src, dest);
+                    prev_dest[src][dest] = src;
+                    next_src[src][dest] = dest;
                 }
             }
         }
+        let link_rtts: Vec<Vec<_>> = (0..nb_processes)
+            .map(|src| {
+                (0..nb_processes)
+                    .map(|dest| topology.link_latency(src, dest) + topology.link_latency(dest, src))
+                    .collect()
+            })
+            .collect();
 
-        // Compute the shortest paths
-        for src in 0..nb_processes {
-            let paths = bellman_ford(&graph, src.into()).expect("Latencies can not be negative");
-            for dest in 0..nb_processes {
-                let mut last_pred = dest;
-                let mut pred = paths.predecessors[dest].unwrap_or(src.into()).index();
-                prev_dest[src][dest] = pred;
-                while pred != src {
-                    last_pred = pred;
-                    pred = paths.predecessors[last_pred].unwrap_or(src.into()).index();
-                }
-                next_src[src][dest] = last_pred;
-                let nanos = paths.distances[dest];
-                if paths.distances[dest] > (u64::MAX / 4) as f64 {
-                    path_latencies[src][dest] = FAULTY_LATENCY;
-                } else {
-                    path_latencies[src][dest] = Duration::from_nanos(nanos.round() as u64);
-                }
-            }
-        }
-    } else {
-        for src in 0..nb_processes {
-            for dest in 0..nb_processes {
-                path_latencies[src][dest] = topology.link_latency(src, dest);
-                prev_dest[src][dest] = src;
-                next_src[src][dest] = dest;
-            }
+        let path_rtts: Vec<Vec<_>> = (0..nb_processes)
+            .map(|src| {
+                (0..nb_processes)
+                    .map(|dest| path_latencies[src][dest] + path_latencies[dest][src])
+                    .collect()
+            })
+            .collect();
+
+        let quorum_3p_path_rtts: Vec<Vec<_>> = (0..nb_processes)
+            .map(|src| {
+                (0..nb_processes)
+                    .map(|dest| {
+                        let mut replicas_3p_rtts: Vec<Duration> = topology
+                            .alive_replicas
+                            .iter()
+                            .map(|replicas| {
+                                path_latencies[src][replicas] + path_latencies[replicas][dest]
+                            })
+                            .collect();
+                        replicas_3p_rtts.sort();
+                        replicas_3p_rtts
+                    })
+                    .collect()
+            })
+            .collect();
+
+        let quorum_3p_link_rtts: Vec<Vec<_>> = (0..nb_processes)
+            .map(|src| {
+                (0..nb_processes)
+                    .map(|dest| {
+                        let mut replicas_3p_rtts: Vec<Duration> = topology
+                            .alive_replicas
+                            .iter()
+                            .map(|replicas| {
+                                topology.link_latency(src, replicas)
+                                    + topology.link_latency(replicas, dest)
+                            })
+                            .collect();
+                        replicas_3p_rtts.sort();
+                        replicas_3p_rtts
+                    })
+                    .collect()
+            })
+            .collect();
+        Self {
+            nb_processes,
+            max_quorum,
+            maj_quorum,
+            min_quorum,
+            path_latencies,
+            prev_dest,
+            next_src,
+            link_rtts,
+            path_rtts,
+            quorum_3p_path_rtts,
+            quorum_3p_link_rtts,
         }
     }
 
-    let link_rtts: Vec<Vec<_>> = (0..nb_processes)
-        .map(|src| {
-            (0..nb_processes)
-                .map(|dest| topology.link_latency(src, dest) + topology.link_latency(dest, src))
-                .collect()
-        })
-        .collect();
+    /// `quorum_path_rtts[src]` in the original: the diagonal of the 3-phase table, i.e. the
+    /// sorted quorum RTTs when the committer is the source itself. A view, never a copy.
+    fn quorum_path(&self, src: usize) -> &Vec<Duration> {
+        &self.quorum_3p_path_rtts[src][src]
+    }
 
-    let path_rtts: Vec<Vec<_>> = (0..nb_processes)
-        .map(|src| {
-            (0..nb_processes)
-                .map(|dest| path_latencies[src][dest] + path_latencies[dest][src])
-                .collect()
-        })
-        .collect();
+    fn quorum_link(&self, src: usize) -> &Vec<Duration> {
+        &self.quorum_3p_link_rtts[src][src]
+    }
+}
 
-    let quorum_3p_path_rtts: Vec<Vec<_>> = (0..nb_processes)
-        .map(|src| {
-            (0..nb_processes)
-                .map(|dest| {
-                    let mut replicas_3p_rtts: Vec<Duration> = topology
-                        .alive_replicas
-                        .iter()
-                        .map(|replicas| {
-                            path_latencies[src][replicas] + path_latencies[replicas][dest]
-                        })
-                        .collect();
-                    replicas_3p_rtts.sort();
-                    replicas_3p_rtts
-                })
-                .collect()
-        })
-        .collect();
+struct MinEffortPlan {
+    latencies: Vec<Duration>,
+    /// Never read; kept because the KCensus assert is stated in terms of the pair.
+    _committers: Vec<ProcId>,
+}
 
-    let quorum_3p_link_rtts: Vec<Vec<_>> = (0..nb_processes)
-        .map(|src| {
-            (0..nb_processes)
-                .map(|dest| {
-                    let mut replicas_3p_rtts: Vec<Duration> = topology
-                        .alive_replicas
-                        .iter()
-                        .map(|replicas| {
-                            topology.link_latency(src, replicas)
-                                + topology.link_latency(replicas, dest)
-                        })
-                        .collect();
-                    replicas_3p_rtts.sort();
-                    replicas_3p_rtts
-                })
-                .collect()
-        })
-        .collect();
+struct PaxosPlan {
+    latencies: Vec<Duration>,
+    committers: Vec<ProcId>,
+}
 
-    let quorum_path_rtts: Vec<_> = quorum_3p_path_rtts
-        .iter()
-        .enumerate()
-        .map(|(src, quorum_3p_rtts_for_dest)| &quorum_3p_rtts_for_dest[src])
-        .collect();
+struct PandoPlan {
+    latencies: Vec<Duration>,
+    committers: Vec<ProcId>,
+    delegates: Vec<ProcId>,
+}
 
-    let quorum_link_rtts: Vec<_> = quorum_3p_link_rtts
-        .iter()
-        .enumerate()
-        .map(|(src, quorum_3p_rtts_for_dest)| &quorum_3p_rtts_for_dest[src])
-        .collect();
+struct EPaxosPlan {
+    latencies: Vec<Duration>,
+    committers: Vec<ProcId>,
+}
 
-    let mut min_effort_latencies = vec![Duration::MAX; nb_processes];
-    let mut _min_effort_committers = vec![0usize; nb_processes];
-    let mut paxos_latencies = vec![Duration::MAX; nb_processes];
-    let mut paxos_committers = vec![0usize; nb_processes];
-    let mut pando_latencies = vec![Duration::MAX; nb_processes];
-    let mut pando_committers = vec![0usize; nb_processes];
-    let mut pando_delegates = vec![0usize; nb_processes];
-    let mut epaxos_latencies = vec![Duration::MAX; nb_processes];
-    let mut epaxos_committers = vec![0usize; nb_processes];
-    let mut multi_paxos_latencies = vec![vec![Duration::MAX; nb_processes]; nb_processes];
-    let mut multi_paxos_3p_latencies = vec![vec![Duration::MAX; nb_processes]; nb_processes];
-    let mut multi_paxos_3p_committers = vec![vec![0; nb_processes]; nb_processes];
+struct MultiPaxosPlan {
+    latencies: Vec<Vec<Duration>>,
+    leaders: Vec<usize>,
+}
 
-    // Compute latency of e/multi-/paxos & pando per leader
+struct MultiPaxos3PPlan {
+    latencies: Vec<Vec<Duration>>,
+    committers: Vec<Vec<ProcId>>,
+    leaders: Vec<usize>,
+}
+
+struct SwiftPaxosPlan {
+    leader: usize,
+    fixed_fast_quorum: Option<BitSet>,
+    latencies: Vec<Duration>,
+    force_mpaxos: BitSet,
+}
+
+struct KCensusPlan {
+    graphs: Vec<PropagationGraph>,
+    latencies: Vec<Duration>,
+}
+
+/// A process that casts no vote reaches the protocol through a replica, and takes the best
+/// one. Shared by the leader-based planners, which differ only in what they minimise.
+fn best_committer(topology: &Topology, nb_processes: usize, mut better: impl FnMut(usize, usize)) {
+    for proposer in 0..nb_processes {
+        if topology.alive_replicas.contains(proposer) {
+            continue;
+        }
+        for committer in topology.alive_replicas.iter() {
+            better(proposer, committer);
+        }
+    }
+}
+
+fn min_effort_plan(topology: &Topology, t: &LatencyTables) -> MinEffortPlan {
+    let mut latencies = vec![Duration::MAX; t.nb_processes];
+    let mut committers = vec![0usize; t.nb_processes];
     for leader in topology.alive_replicas.iter() {
-        min_effort_latencies[leader] = quorum_path_rtts[leader][min_quorum - 1];
-        _min_effort_committers[leader] = leader;
+        latencies[leader] = t.quorum_path(leader)[t.min_quorum - 1];
+        committers[leader] = leader;
+    }
+    best_committer(topology, t.nb_processes, |proposer, committer| {
+        let latency = t.quorum_3p_path_rtts[proposer][committer][t.min_quorum - 1]
+            + topology.link_latency(committer, proposer);
+        if latency < latencies[proposer] {
+            latencies[proposer] = latency;
+            committers[proposer] = committer;
+        }
+    });
+    MinEffortPlan {
+        latencies,
+        _committers: committers,
+    }
+}
 
-        paxos_latencies[leader] = quorum_link_rtts[leader][maj_quorum - 1] * 2;
-        paxos_committers[leader] = leader;
+fn paxos_plan(topology: &Topology, t: &LatencyTables) -> PaxosPlan {
+    let mut latencies = vec![Duration::MAX; t.nb_processes];
+    let mut committers = vec![0usize; t.nb_processes];
+    for leader in topology.alive_replicas.iter() {
+        latencies[leader] = t.quorum_link(leader)[t.maj_quorum - 1] * 2;
+        committers[leader] = leader;
+    }
+    best_committer(topology, t.nb_processes, |proposer, committer| {
+        let latency = t.link_rtts[proposer][committer] + latencies[committer];
+        if latency < latencies[proposer] {
+            latencies[proposer] = latency;
+            committers[proposer] = committer;
+        }
+    });
+    PaxosPlan {
+        latencies,
+        committers,
+    }
+}
 
-        pando_committers[leader] = leader;
+fn pando_plan(topology: &Topology, t: &LatencyTables) -> PandoPlan {
+    let mut latencies = vec![Duration::MAX; t.nb_processes];
+    let mut committers = vec![0usize; t.nb_processes];
+    let mut delegates = vec![0usize; t.nb_processes];
+    for leader in topology.alive_replicas.iter() {
+        committers[leader] = leader;
         for delegate in topology.alive_replicas.iter() {
-            let latency = quorum_3p_link_rtts[leader][delegate][maj_quorum - 1]
-                + quorum_3p_link_rtts[delegate][leader][maj_quorum - 1];
-            if latency < pando_latencies[leader] {
-                pando_latencies[leader] = latency;
-                pando_delegates[leader] = delegate;
+            let latency = t.quorum_3p_link_rtts[leader][delegate][t.maj_quorum - 1]
+                + t.quorum_3p_link_rtts[delegate][leader][t.maj_quorum - 1];
+            if latency < latencies[leader] {
+                latencies[leader] = latency;
+                delegates[leader] = delegate;
             }
         }
-
-        let e_paxos_quorum = ((topology.nb_replicas * 3 - 1) / 4).max(maj_quorum);
-        if e_paxos_quorum <= topology.alive_replicas.len() {
-            epaxos_latencies[leader] = quorum_link_rtts[leader][e_paxos_quorum - 1];
-        } else {
-            epaxos_latencies[leader] = paxos_latencies[leader];
+    }
+    best_committer(topology, t.nb_processes, |proposer, committer| {
+        let latency = t.link_rtts[proposer][committer] + latencies[committer];
+        if latency < latencies[proposer] {
+            latencies[proposer] = latency;
+            committers[proposer] = committer;
+            delegates[proposer] = delegates[committer];
         }
-        epaxos_committers[leader] = leader;
+    });
+    PandoPlan {
+        latencies,
+        committers,
+        delegates,
+    }
+}
 
-        let multi_paxos_latency = (0..nb_processes)
+/// Takes `paxos` because EPaxos falls back to the Paxos latency when there are too few live
+/// replicas for its own quorum -- the one place two algorithms were coupled.
+fn epaxos_plan(topology: &Topology, t: &LatencyTables, paxos: &PaxosPlan) -> EPaxosPlan {
+    let mut latencies = vec![Duration::MAX; t.nb_processes];
+    let mut committers = vec![0usize; t.nb_processes];
+    let e_paxos_quorum = ((topology.nb_replicas * 3 - 1) / 4).max(t.maj_quorum);
+    for leader in topology.alive_replicas.iter() {
+        if e_paxos_quorum <= topology.alive_replicas.len() {
+            latencies[leader] = t.quorum_link(leader)[e_paxos_quorum - 1];
+        } else {
+            latencies[leader] = paxos.latencies[leader];
+        }
+        committers[leader] = leader;
+    }
+    best_committer(topology, t.nb_processes, |proposer, committer| {
+        let latency = t.link_rtts[proposer][committer] + latencies[committer];
+        if latency < latencies[proposer] {
+            latencies[proposer] = latency;
+            committers[proposer] = committer;
+        }
+    });
+    EPaxosPlan {
+        latencies,
+        committers,
+    }
+}
+
+fn multi_paxos_plan(topology: &Topology, t: &LatencyTables) -> MultiPaxosPlan {
+    let mut latencies = vec![vec![Duration::MAX; t.nb_processes]; t.nb_processes];
+    for leader in topology.alive_replicas.iter() {
+        latencies[leader] = (0..t.nb_processes)
             .map(|requester| {
-                link_rtts[requester][leader] + quorum_link_rtts[leader][maj_quorum - 1]
+                t.link_rtts[requester][leader] + t.quorum_link(leader)[t.maj_quorum - 1]
             })
             .collect();
-        multi_paxos_latencies[leader] = multi_paxos_latency;
+    }
+    let mut leaders: Vec<_> = topology.alive_replicas.iter().collect();
+    leaders.sort_by_key(|leader| latencies[*leader].iter().sum::<Duration>());
+    MultiPaxosPlan { latencies, leaders }
+}
 
-        for requester in 0..nb_processes {
-            let best_latency = &mut multi_paxos_3p_latencies[leader][requester];
-            let best_commiter = &mut multi_paxos_3p_committers[leader][requester];
+fn multi_paxos_3p_plan(topology: &Topology, t: &LatencyTables) -> MultiPaxos3PPlan {
+    let mut latencies = vec![vec![Duration::MAX; t.nb_processes]; t.nb_processes];
+    let mut committers = vec![vec![0; t.nb_processes]; t.nb_processes];
+    for leader in topology.alive_replicas.iter() {
+        for requester in 0..t.nb_processes {
+            let best_latency = &mut latencies[leader][requester];
+            let best_commiter = &mut committers[leader][requester];
 
             let is_replicas = topology.alive_replicas.contains(requester);
             for commiter in topology.alive_replicas.iter() {
@@ -409,7 +564,7 @@ pub fn compute_propagation_graphs(
                     continue;
                 }
                 let latency = topology.link_latency(requester, leader)
-                    + quorum_3p_link_rtts[leader][commiter][maj_quorum - 1]
+                    + t.quorum_3p_link_rtts[leader][commiter][t.maj_quorum - 1]
                     + topology.link_latency(commiter, requester);
                 if latency < *best_latency {
                     *best_latency = latency;
@@ -418,40 +573,20 @@ pub fn compute_propagation_graphs(
             }
         }
     }
-
-    // Compute latency of paxos/epaxos for non-replica processes
-    for proposer in 0..nb_processes {
-        if topology.alive_replicas.contains(proposer) {
-            continue;
-        }
-        for committer in topology.alive_replicas.iter() {
-            let paxos_latency = link_rtts[proposer][committer] + paxos_latencies[committer];
-            if paxos_latency < paxos_latencies[proposer] {
-                paxos_latencies[proposer] = paxos_latency;
-                paxos_committers[proposer] = committer;
-            }
-
-            let pando_latency = link_rtts[proposer][committer] + pando_latencies[committer];
-            if pando_latency < pando_latencies[proposer] {
-                pando_latencies[proposer] = pando_latency;
-                pando_committers[proposer] = committer;
-                pando_delegates[proposer] = pando_delegates[committer];
-            }
-
-            let epaxos_latency = link_rtts[proposer][committer] + epaxos_latencies[committer];
-            if epaxos_latency < epaxos_latencies[proposer] {
-                epaxos_latencies[proposer] = epaxos_latency;
-                epaxos_committers[proposer] = committer;
-            }
-
-            let min_effort_latency = quorum_3p_path_rtts[proposer][committer][min_quorum - 1]
-                + topology.link_latency(committer, proposer);
-            if min_effort_latency < min_effort_latencies[proposer] {
-                min_effort_latencies[proposer] = min_effort_latency;
-                _min_effort_committers[proposer] = committer;
-            }
-        }
+    let mut leaders: Vec<_> = topology.alive_replicas.iter().collect();
+    leaders.sort_by_key(|leader| latencies[*leader].iter().sum::<Duration>());
+    MultiPaxos3PPlan {
+        latencies,
+        committers,
+        leaders,
     }
+}
+
+fn swift_paxos_plan(topology: &Topology, t: &LatencyTables) -> SwiftPaxosPlan {
+    let nb_processes = t.nb_processes;
+    let maj_quorum = t.maj_quorum;
+    let link_rtts = &t.link_rtts;
+    let quorum_link_rtts: Vec<_> = (0..nb_processes).map(|src| t.quorum_link(src)).collect();
 
     let mut swift_paxos_leader = 0usize;
     let mut swift_paxos_fixed_fast_quorum: Option<BitSet> = None;
@@ -459,131 +594,148 @@ pub fn compute_propagation_graphs(
     let mut swift_paxos_best_total = Duration::MAX;
     let mut swift_paxos_force_mpaxos = BitSet::with_capacity(nb_processes);
 
-    if swift_paxos_quorums {
-        let mut swift_leader_prio: Vec<_> = topology.alive_replicas.iter().collect();
-        swift_leader_prio.sort_by_key(|leader| quorum_link_rtts[*leader][maj_quorum - 1]);
+    let mut swift_leader_prio: Vec<_> = topology.alive_replicas.iter().collect();
+    swift_leader_prio.sort_by_key(|leader| quorum_link_rtts[*leader][maj_quorum - 1]);
 
-        // The route through the leader: a majority acknowledging its accept, three delays.
-        // Those acknowledgements are broadcast, as in the reference implementation, so they
-        // reach the proposer directly and there is no fourth-delay route relaying them back
-        // through the leader — the protocol has no decision message to relay them with.
-        //
-        // A replica acts on the leader's proposal only once it also holds the command, and the
-        // command travels straight from the proposer: the leader's accept carries no value, as
-        // in the reference implementation (`afterPropagate`, `swift.go:418`). Adopting the
-        // leader's value is therefore gated by the later of the two paths, which is the `max`.
-        //
-        // Tabulated rather than computed where it is read: the quorum search below wants one
-        // per (quorum, leader, requester), tens of millions of them over `nb_processes²`
-        // distinct pairs, and each costs an allocation and a sort.
-        let swift_mpaxos_latencies: Vec<Vec<Duration>> = (0..nb_processes)
-            .map(|requester| {
-                (0..nb_processes)
-                    .map(|leader| {
-                        let mut to_requester: Vec<Duration> = topology
-                            .alive_replicas
-                            .iter()
-                            .map(|replica| {
-                                topology.link_latency(requester, replica).max(
-                                    topology.link_latency(requester, leader)
-                                        + topology.link_latency(leader, replica),
-                                ) + topology.link_latency(replica, requester)
-                            })
-                            .collect();
-                        to_requester.sort();
-                        to_requester[maj_quorum - 1]
-                    })
-                    .collect()
-            })
-            .collect();
-
-        // Find best swift-paxos strategy, checking fast-paxos quorums first
-        let fast_paxos_quorum = (((topology.nb_replicas * 3 - 1) / 4) + 1).max(maj_quorum);
-        if topology.alive_replicas.len() > fast_paxos_quorum {
-            for leader in swift_leader_prio.iter().copied() {
-                // Try the full-size fast-paxos quorums approach
-                // (Note: if alive.len == fast_paxos_quorum, there cannot be a benefit over a fixed quorum)
-                let mut final_latencies = vec![Duration::MAX; nb_processes];
-                let mut use_mpaxos = BitSet::with_capacity(nb_processes);
-                for requester in 0..nb_processes {
-                    let mut requester_quorum_rtts: Vec<_> = topology
+    // The route through the leader: a majority acknowledging its accept, three delays.
+    // Those acknowledgements are broadcast, as in the reference implementation, so they
+    // reach the proposer directly and there is no fourth-delay route relaying them back
+    // through the leader — the protocol has no decision message to relay them with.
+    //
+    // A replica acts on the leader's proposal only once it also holds the command, and the
+    // command travels straight from the proposer: the leader's accept carries no value, as
+    // in the reference implementation (`afterPropagate`, `swift.go:418`). Adopting the
+    // leader's value is therefore gated by the later of the two paths, which is the `max`.
+    //
+    // Tabulated rather than computed where it is read: the quorum search below wants one
+    // per (quorum, leader, requester), tens of millions of them over `nb_processes²`
+    // distinct pairs, and each costs an allocation and a sort.
+    let swift_mpaxos_latencies: Vec<Vec<Duration>> = (0..nb_processes)
+        .map(|requester| {
+            (0..nb_processes)
+                .map(|leader| {
+                    let mut to_requester: Vec<Duration> = topology
                         .alive_replicas
                         .iter()
-                        .map(|replica| link_rtts[requester][replica])
+                        .map(|replica| {
+                            topology.link_latency(requester, replica).max(
+                                topology.link_latency(requester, leader)
+                                    + topology.link_latency(leader, replica),
+                            ) + topology.link_latency(replica, requester)
+                        })
                         .collect();
-                    requester_quorum_rtts.sort();
-                    let fast_paxos_latency = requester_quorum_rtts[fast_paxos_quorum - 1]
-                        .max(link_rtts[requester][leader]);
-                    let mpaxos_latency = swift_mpaxos_latencies[requester][leader];
+                    to_requester.sort();
+                    to_requester[maj_quorum - 1]
+                })
+                .collect()
+        })
+        .collect();
 
-                    final_latencies[requester] = if fast_paxos_latency < mpaxos_latency {
-                        fast_paxos_latency
-                    } else {
-                        use_mpaxos.insert(requester);
-                        mpaxos_latency
-                    }
-                }
-                let total = final_latencies.iter().sum();
-                if total <= swift_paxos_best_total {
-                    swift_paxos_leader = leader;
-                    swift_paxos_fixed_fast_quorum = None;
-                    swift_paxos_latencies = final_latencies;
-                    swift_paxos_best_total = total;
-                    swift_paxos_force_mpaxos = use_mpaxos;
-                }
-            }
-        }
-
-        fn factorial(n: usize) -> f64 {
-            (1..=n).map(|i| i as f64).product()
-        }
-        fn n_choose_k(n: usize, k: usize) -> f64 {
-            factorial(n) / (factorial(k) * factorial(n - k))
-        }
-        // Make sure the amount of combinations doesn't explode
-        // TODO: Something smarter would be nice (branch & bound?)
-        while n_choose_k(swift_leader_prio.len(), maj_quorum) > 10u64.pow(5) as f64 {
-            swift_leader_prio.remove(swift_leader_prio.len() - 1);
-        }
-
-        // Now checking fixed majority quorums
-        let quorums = swift_leader_prio.iter().copied().combinations(maj_quorum);
-        let mut quorum_latencies = vec![Duration::ZERO; nb_processes];
-        for quorum in quorums {
-            // Reaching every member of the quorum costs the same whoever leads it, so this is
-            // computed once per quorum rather than once per (quorum, leader). It is the same
-            // arithmetic either way -- the leader loop below starts from a copy -- but it was
-            // `maj_quorum` times the work of everything else in the search.
+    // Find best swift-paxos strategy, checking fast-paxos quorums first
+    let fast_paxos_quorum = (((topology.nb_replicas * 3 - 1) / 4) + 1).max(maj_quorum);
+    if topology.alive_replicas.len() > fast_paxos_quorum {
+        for leader in swift_leader_prio.iter().copied() {
+            // Try the full-size fast-paxos quorums approach
+            // (Note: if alive.len == fast_paxos_quorum, there cannot be a benefit over a fixed quorum)
+            let mut final_latencies = vec![Duration::MAX; nb_processes];
+            let mut use_mpaxos = BitSet::with_capacity(nb_processes);
             for requester in 0..nb_processes {
-                quorum_latencies[requester] = quorum
+                let mut requester_quorum_rtts: Vec<_> = topology
+                    .alive_replicas
                     .iter()
-                    .copied()
                     .map(|replica| link_rtts[requester][replica])
-                    .max()
-                    .unwrap();
-            }
-            for leader in quorum.iter().copied() {
-                let mut latencies = quorum_latencies.clone();
+                    .collect();
+                requester_quorum_rtts.sort();
+                let fast_paxos_latency =
+                    requester_quorum_rtts[fast_paxos_quorum - 1].max(link_rtts[requester][leader]);
+                let mpaxos_latency = swift_mpaxos_latencies[requester][leader];
 
-                let mut use_mpaxos = BitSet::with_capacity(nb_processes);
-                for requester in 0..nb_processes {
-                    let mpaxos_latency = swift_mpaxos_latencies[requester][leader];
-                    if mpaxos_latency < latencies[requester] {
-                        use_mpaxos.insert(requester);
-                        latencies[requester] = mpaxos_latency;
-                    }
+                final_latencies[requester] = if fast_paxos_latency < mpaxos_latency {
+                    fast_paxos_latency
+                } else {
+                    use_mpaxos.insert(requester);
+                    mpaxos_latency
                 }
-                let total: Duration = latencies.iter().sum();
-                if total < swift_paxos_best_total {
-                    swift_paxos_leader = leader;
-                    swift_paxos_fixed_fast_quorum = Some(BitSet::from_iter(quorum.clone()));
-                    swift_paxos_latencies = latencies;
-                    swift_paxos_best_total = total;
-                    swift_paxos_force_mpaxos = use_mpaxos;
-                }
+            }
+            let total = final_latencies.iter().sum();
+            if total <= swift_paxos_best_total {
+                swift_paxos_leader = leader;
+                swift_paxos_fixed_fast_quorum = None;
+                swift_paxos_latencies = final_latencies;
+                swift_paxos_best_total = total;
+                swift_paxos_force_mpaxos = use_mpaxos;
             }
         }
     }
+
+    fn factorial(n: usize) -> f64 {
+        (1..=n).map(|i| i as f64).product()
+    }
+    fn n_choose_k(n: usize, k: usize) -> f64 {
+        factorial(n) / (factorial(k) * factorial(n - k))
+    }
+    // Make sure the amount of combinations doesn't explode
+    // TODO: Something smarter would be nice (branch & bound?)
+    while n_choose_k(swift_leader_prio.len(), maj_quorum) > 10u64.pow(5) as f64 {
+        swift_leader_prio.remove(swift_leader_prio.len() - 1);
+    }
+
+    // Now checking fixed majority quorums
+    let quorums = swift_leader_prio.iter().copied().combinations(maj_quorum);
+    let mut quorum_latencies = vec![Duration::ZERO; nb_processes];
+    for quorum in quorums {
+        // Reaching every member of the quorum costs the same whoever leads it, so this is
+        // computed once per quorum rather than once per (quorum, leader). It is the same
+        // arithmetic either way -- the leader loop below starts from a copy -- but it was
+        // `maj_quorum` times the work of everything else in the search.
+        for requester in 0..nb_processes {
+            quorum_latencies[requester] = quorum
+                .iter()
+                .copied()
+                .map(|replica| link_rtts[requester][replica])
+                .max()
+                .unwrap();
+        }
+        for leader in quorum.iter().copied() {
+            let mut latencies = quorum_latencies.clone();
+
+            let mut use_mpaxos = BitSet::with_capacity(nb_processes);
+            for requester in 0..nb_processes {
+                let mpaxos_latency = swift_mpaxos_latencies[requester][leader];
+                if mpaxos_latency < latencies[requester] {
+                    use_mpaxos.insert(requester);
+                    latencies[requester] = mpaxos_latency;
+                }
+            }
+            let total: Duration = latencies.iter().sum();
+            if total < swift_paxos_best_total {
+                swift_paxos_leader = leader;
+                swift_paxos_fixed_fast_quorum = Some(BitSet::from_iter(quorum.clone()));
+                swift_paxos_latencies = latencies;
+                swift_paxos_best_total = total;
+                swift_paxos_force_mpaxos = use_mpaxos;
+            }
+        }
+    }
+
+    SwiftPaxosPlan {
+        leader: swift_paxos_leader,
+        fixed_fast_quorum: swift_paxos_fixed_fast_quorum,
+        latencies: swift_paxos_latencies,
+        force_mpaxos: swift_paxos_force_mpaxos,
+    }
+}
+
+fn kcensus_plan(topology: &Topology, t: &LatencyTables, min_effort: &MinEffortPlan) -> KCensusPlan {
+    let nb_processes = t.nb_processes;
+    let max_quorum = t.max_quorum;
+    let min_quorum = t.min_quorum;
+    let path_latencies = &t.path_latencies;
+    let prev_dest = &t.prev_dest;
+    let next_src = &t.next_src;
+    let quorum_path_rtts: Vec<_> = (0..nb_processes).map(|src| t.quorum_path(src)).collect();
+    let quorum_3p_path_rtts = &t.quorum_3p_path_rtts;
+    let min_effort_latencies = &min_effort.latencies;
 
     #[derive(Debug, Clone)]
     struct KnowledgeLevel {
@@ -594,647 +746,682 @@ pub fn compute_propagation_graphs(
 
     let mut propagation_graphs = Vec::with_capacity(nb_processes);
     let mut kcensus_latencies = Vec::with_capacity(nb_processes);
-    if kcensus_graph {
-        let mut triangular_paths: Vec<Vec<Vec<TriangularPath>>> =
-            vec![vec![Vec::new(); nb_processes]; nb_processes];
-        let mut knowledge_levels: Vec<Vec<Vec<KnowledgeLevel>>> =
-            vec![vec![Vec::new(); nb_processes]; nb_processes];
-        let mut value_only_paths: Vec<Vec<TriangularPath>> =
-            vec![Vec::with_capacity(nb_processes); nb_processes];
+    let mut triangular_paths: Vec<Vec<Vec<TriangularPath>>> =
+        vec![vec![Vec::new(); nb_processes]; nb_processes];
+    let mut knowledge_levels: Vec<Vec<Vec<KnowledgeLevel>>> =
+        vec![vec![Vec::new(); nb_processes]; nb_processes];
+    let mut value_only_paths: Vec<Vec<TriangularPath>> =
+        vec![Vec::with_capacity(nb_processes); nb_processes];
 
-        for proposer in 0..nb_processes {
-            // Compute shortest round-trip paths.
-            // Used to ensure the value is sent to everyone (not for knowledge spreading).
-            // TODO: don't actually send the values to non-replicas
-            for pid in (0..nb_processes).rev() {
-                let total_latency = path_latencies[proposer][pid];
-                value_only_paths[proposer].push(TriangularPath {
-                    first: pid,
-                    second: pid,
-                    total_latency,
-                })
+    for proposer in 0..nb_processes {
+        // Compute shortest round-trip paths.
+        // Used to ensure the value is sent to everyone (not for knowledge spreading).
+        // TODO: don't actually send the values to non-replicas
+        for pid in (0..nb_processes).rev() {
+            let total_latency = path_latencies[proposer][pid];
+            value_only_paths[proposer].push(TriangularPath {
+                first: pid,
+                second: pid,
+                total_latency,
+            })
+        }
+        value_only_paths[proposer].sort_by_key(triangle_latency);
+
+        let is_replicas = topology.alive_replicas.contains(proposer);
+        'leader_loop: for leader in topology.alive_replicas.iter() {
+            if is_replicas && leader != proposer {
+                continue 'leader_loop;
             }
-            value_only_paths[proposer].sort_by_key(triangle_latency);
 
-            let is_replicas = topology.alive_replicas.contains(proposer);
-            'leader_loop: for leader in topology.alive_replicas.iter() {
-                if is_replicas && leader != proposer {
-                    continue 'leader_loop;
-                }
-
-                // Compute triangles
-                triangular_paths[proposer][leader].reserve(topology.alive_replicas.len().pow(2));
-                for first in topology.alive_replicas.iter() {
-                    let latency_to_first = path_latencies[proposer][first];
-                    for second in topology.alive_replicas.iter() {
-                        let total_latency = latency_to_first
-                            + path_latencies[first][second]
-                            + path_latencies[second][leader];
-                        triangular_paths[proposer][leader].push(TriangularPath {
-                            first,
-                            second,
-                            total_latency,
-                        });
-                    }
-                }
-                triangular_paths[proposer][leader].sort_by_key(triangle_latency);
-
-                // TODO: maybe double-check if this max_lat is good if we start playing with quorums
-                let min_lat = quorum_3p_path_rtts[proposer][leader][min_quorum - 1];
-                let max_lat = min_lat + quorum_path_rtts[leader][max_quorum - 1];
-
-                // Simulate propagation of knowledge (from best to worst possible strategy)
-                let mut knowledges: Vec<Knowledge> =
-                    vec![BitSet::with_capacity(nb_processes); nb_processes];
-                'triangle_loop: for ti in 0..triangular_paths[proposer][leader].len() {
-                    let t = &triangular_paths[proposer][leader][ti];
-                    if t.total_latency > max_lat {
-                        break 'triangle_loop;
-                    }
-                    knowledges[t.second].insert(t.first);
-                    if t.total_latency < min_lat {
-                        continue 'triangle_loop;
-                    }
-                    let next_t = triangular_paths[proposer][leader].get(ti + 1);
-                    if next_t.is_some_and(|nt| nt.total_latency == t.total_latency) {
-                        continue 'triangle_loop;
-                    }
-                    assert!(knowledges[leader].len() >= min_quorum);
-                    assert!(is_valid_knowledge(leader, &knowledges, min_quorum));
-                    knowledge_levels[proposer][leader].push(KnowledgeLevel {
-                        time: t.total_latency,
-                        k: knowledges.clone(),
-                        triangles_count: ti + 1,
+            // Compute triangles
+            triangular_paths[proposer][leader].reserve(topology.alive_replicas.len().pow(2));
+            for first in topology.alive_replicas.iter() {
+                let latency_to_first = path_latencies[proposer][first];
+                for second in topology.alive_replicas.iter() {
+                    let total_latency = latency_to_first
+                        + path_latencies[first][second]
+                        + path_latencies[second][leader];
+                    triangular_paths[proposer][leader].push(TriangularPath {
+                        first,
+                        second,
+                        total_latency,
                     });
                 }
             }
-        }
+            triangular_paths[proposer][leader].sort_by_key(triangle_latency);
 
-        struct BestSol {
-            leaders: Vec<usize>,
-            levels: Vec<usize>,
-            sum_of_latencies: Duration,
-        }
+            // TODO: maybe double-check if this max_lat is good if we start playing with quorums
+            let min_lat = quorum_3p_path_rtts[proposer][leader][min_quorum - 1];
+            let max_lat = min_lat + quorum_path_rtts[leader][max_quorum - 1];
 
-        struct LevelSearchData<'a> {
-            nb_processes: usize,
-            leaders: &'a Vec<usize>,
-            knowledge_levels: &'a Vec<Vec<Vec<KnowledgeLevel>>>,
-            compatible_levels: Vec<Vec<Vec<usize>>>,
-            useful_levels: Vec<Vec<bool>>,
-            max_levels: Vec<usize>,
-            min_quorum: usize,
-        }
-
-        impl LevelSearchData<'_> {
-            #[inline]
-            fn knowledge_level(&self, pid: usize, level: usize) -> &KnowledgeLevel {
-                &self.knowledge_levels[pid][self.leaders[pid]][level]
-            }
-
-            #[inline]
-            fn are_compatible(&self, a: usize, level_a: usize, b: usize, level_b: usize) -> bool {
-                are_compatible(
-                    self.leaders[a],
-                    &self.knowledge_level(a, level_a).k,
-                    self.leaders[b],
-                    &self.knowledge_level(b, level_b).k,
-                    self.min_quorum,
-                )
+            // Simulate propagation of knowledge (from best to worst possible strategy)
+            let mut knowledges: Vec<Knowledge> =
+                vec![BitSet::with_capacity(nb_processes); nb_processes];
+            'triangle_loop: for ti in 0..triangular_paths[proposer][leader].len() {
+                let t = &triangular_paths[proposer][leader][ti];
+                if t.total_latency > max_lat {
+                    break 'triangle_loop;
+                }
+                knowledges[t.second].insert(t.first);
+                if t.total_latency < min_lat {
+                    continue 'triangle_loop;
+                }
+                let next_t = triangular_paths[proposer][leader].get(ti + 1);
+                if next_t.is_some_and(|nt| nt.total_latency == t.total_latency) {
+                    continue 'triangle_loop;
+                }
+                assert!(knowledges[leader].len() >= min_quorum);
+                assert!(is_valid_knowledge(leader, &knowledges, min_quorum));
+                knowledge_levels[proposer][leader].push(KnowledgeLevel {
+                    time: t.total_latency,
+                    k: knowledges.clone(),
+                    triangles_count: ti + 1,
+                });
             }
         }
-
-        // Implements recursive search of the optimal solution
-        fn best_avg_search_inner(
-            best: &mut BestSol,
-            pids_done: usize,
-            min_levels: &[usize],
-            partial_total_time: Duration,
-            data: &LevelSearchData,
-        ) {
-            let nb_processes = data.nb_processes;
-            let pid_a = pids_done;
-            let pids_done = pids_done + 1;
-            'level_loop: for level_a in min_levels[pid_a]..=data.max_levels[pid_a] {
-                if !data.useful_levels[pid_a][level_a] {
-                    continue 'level_loop;
-                }
-
-                let mut levels = min_levels.to_owned();
-                levels[pid_a] = level_a;
-                let partial_total_time =
-                    partial_total_time + data.knowledge_level(pid_a, level_a).time;
-                let mut new_curr_total_time = partial_total_time;
-                let mut new_min_total_time = partial_total_time;
-                for pid_b in pids_done..nb_processes {
-                    new_min_total_time += data.knowledge_level(pid_b, min_levels[pid_b]).time;
-                    let req_level_b = data.compatible_levels[pid_a][level_a][pid_b];
-                    if req_level_b > levels[pid_b] {
-                        levels[pid_b] = req_level_b;
-                    }
-                    new_curr_total_time += data.knowledge_level(pid_b, levels[pid_b]).time;
-                }
-
-                if best.sum_of_latencies <= new_min_total_time {
-                    // We cannot find a better solution with higher level_a
-                    break 'level_loop;
-                }
-                if best.sum_of_latencies <= new_curr_total_time {
-                    // We cannot find a better solution with current level_a
-                    continue 'level_loop;
-                }
-
-                assert!(partial_total_time < best.sum_of_latencies);
-                if pids_done == nb_processes {
-                    // Found a complete solution that is better!
-                    best.levels = levels;
-                    best.sum_of_latencies = partial_total_time;
-                    best.leaders = data.leaders.clone();
-                } else {
-                    // Promising but incomplete solution. Search this branch:
-                    best_avg_search_inner(best, pids_done, &levels, partial_total_time, data);
-                }
-            }
-        }
-
-        fn best_avg_search(
-            best: &mut BestSol,
-            leaders: &Vec<usize>,
-            knowledge_levels: &Vec<Vec<Vec<KnowledgeLevel>>>,
-            topology: &Topology,
-            min_quorum: usize,
-        ) {
-            let nb_processes = topology.nb_processes;
-            let partial_latency = leaders
-                .iter()
-                .enumerate()
-                .map(|(proposer, leader)| topology.link_latency(*leader, proposer))
-                .sum();
-
-            // Early exit if it cannot be better than previous solutions
-            let mut min_latency = partial_latency;
-            for pid in 0..nb_processes {
-                min_latency += knowledge_levels[pid][leaders[pid]][0].time;
-            }
-            if min_latency > best.sum_of_latencies {
-                return;
-            }
-
-            // Prepare search data
-            let mut data = LevelSearchData {
-                nb_processes,
-                leaders,
-                knowledge_levels,
-                compatible_levels: vec![Vec::new(); nb_processes],
-                useful_levels: vec![Vec::new(); nb_processes],
-                max_levels: vec![0usize; nb_processes],
-                min_quorum,
-            };
-
-            // Precompute max knowledge levels (Note: could be merged with precomputation of compatibilities)
-            for a in 0..nb_processes {
-                for b in 0..nb_processes {
-                    while !data.are_compatible(a, data.max_levels[a], b, 0) {
-                        data.max_levels[a] += 1;
-                    }
-                }
-            }
-
-            // Precompute compatible levels
-            for a in 0..nb_processes {
-                let mut current_levels: Vec<usize> = data.max_levels.clone();
-                for a_level in 0..knowledge_levels[a][leaders[a]].len() {
-                    let mut compatibility_changed = false;
-                    for (b, b_level) in current_levels.iter_mut().enumerate() {
-                        while *b_level > 0 && data.are_compatible(a, a_level, b, *b_level - 1) {
-                            *b_level -= 1;
-                            compatibility_changed = true;
-                        }
-                    }
-                    data.useful_levels[a]
-                        .push(data.compatible_levels[a].is_empty() || compatibility_changed);
-                    data.compatible_levels[a].push(current_levels.clone());
-                }
-            }
-
-            trace!("searching with leaders: {:?}", data.leaders);
-            trace!(
-                "useful levels: {:?}",
-                data.useful_levels
-                    .iter()
-                    .map(|list| list.iter().filter(|x| **x).count())
-                    .collect::<Vec<usize>>()
-            );
-
-            // Use recursive search to compute the best solution for the given leaders
-            best_avg_search_inner(best, 0, &vec![0usize; nb_processes], partial_latency, &data);
-        }
-
-        // Implement recursive search of the optimal leaders
-        fn best_leaders_search(
-            best: &mut BestSol,
-            prev_leaders: &Vec<usize>,
-            proposer: usize,
-            knowledge_levels: &Vec<Vec<Vec<KnowledgeLevel>>>,
-            topology: &Topology,
-            min_quorum: usize,
-        ) {
-            if proposer >= topology.nb_processes {
-                return best_avg_search(best, prev_leaders, knowledge_levels, topology, min_quorum);
-            }
-
-            let mut leaders = prev_leaders.clone();
-            let is_replicas = topology.alive_replicas.contains(proposer);
-            let mut sorted_leaders: Vec<_> = topology.alive_replicas.iter().collect();
-            sorted_leaders.sort_by_key(|leader| topology.link_latency(*leader, proposer));
-            for leader in sorted_leaders {
-                if is_replicas && leader != proposer {
-                    continue;
-                }
-
-                leaders[proposer] = leader;
-                best_leaders_search(
-                    best,
-                    &leaders,
-                    proposer + 1,
-                    knowledge_levels,
-                    topology,
-                    min_quorum,
-                );
-            }
-        }
-
-        let mut best = BestSol {
-            leaders: vec![0; nb_processes],
-            levels: vec![0; nb_processes],
-            sum_of_latencies: Duration::MAX,
-        };
-
-        best_leaders_search(
-            &mut best,
-            &vec![0usize; nb_processes],
-            0,
-            &knowledge_levels,
-            &topology,
-            min_quorum,
-        );
-
-        assert_ne!(best.sum_of_latencies, Duration::MAX);
-        let best = best;
-
-        // Build the graph from the solutions for each proposer
-        let mut sum_of_latencies = Duration::ZERO;
-        for proposer in 0..nb_processes {
-            let leader = best.leaders[proposer];
-            let triangular_paths = &mut triangular_paths[proposer][leader];
-            let value_only_paths = &value_only_paths[proposer];
-            let knowledge_levels = &knowledge_levels[proposer][leader];
-            let best_level = &knowledge_levels[best.levels[proposer]];
-
-            // Truncate triangles at commit time
-            let leader_latency = best_level.time;
-            let triangle_count = best_level.triangles_count;
-            let proposer_latency = leader_latency + topology.link_latency(leader, proposer);
-            sum_of_latencies += proposer_latency;
-            triangular_paths.truncate(triangle_count);
-            assert_eq!(
-                triangular_paths[triangle_count - 1].total_latency,
-                leader_latency
-            );
-
-            // Trace for debugging
-            if proposer == leader {
-                info!("proposer {proposer} ({}):", topology.regions[proposer]);
-            } else {
-                info!(
-                    "proposer {proposer} ({}) with leader {leader}:",
-                    topology.regions[proposer]
-                );
-            }
-            let mut min_proposer_latency = Duration::MAX;
-            let mut max_proposer_latency = Duration::MAX;
-            for leader in topology.alive_replicas.iter() {
-                let lat = quorum_3p_path_rtts[proposer][leader][min_quorum - 1]
-                    + topology.link_latency(leader, proposer);
-                if lat < min_proposer_latency {
-                    min_proposer_latency = lat;
-                }
-                let lat = lat + quorum_path_rtts[leader][max_quorum - 1];
-                if lat < max_proposer_latency {
-                    max_proposer_latency = lat;
-                }
-            }
-            assert_eq!(min_effort_latencies[proposer], min_proposer_latency);
-            info!(
-                "  levels best ({} / {}): {proposer_latency:?} ({:.4}x min, {:.1}% min-max) min: {min_proposer_latency:?}, max: {max_proposer_latency:?}",
-                best.levels[proposer],
-                knowledge_levels.len(),
-                proposer_latency.as_secs_f64() / min_proposer_latency.as_secs_f64(),
-                100.0 * (proposer_latency - min_proposer_latency).as_secs_f64()
-                    / (max_proposer_latency - min_proposer_latency).as_secs_f64()
-            );
-            debug!(
-                "  quorum size: {}, required knowledge: {:?}",
-                best_level.k[leader].len(),
-                best_level.k
-            );
-            trace!(
-                "  Left after truncate: {} real triangles, {} total, longest path: {}",
-                triangular_paths
-                    .iter()
-                    .filter(|x| proposer != x.first && x.first != x.second && x.second != leader)
-                    .count(),
-                triangular_paths.len(),
-                triangular_paths[triangle_count - 1]
-            );
-
-            // TODO: Some knowledge might still not be needed to commit. (but the cost is probably negligible)
-            //   Try to check if they are needed for are_compatible?
-
-            // Initialize graph
-            let mut message_times: Vec<Vec<BTreeSet<Duration>>> =
-                vec![vec![BTreeSet::new(); nb_processes]; nb_processes];
-            let mut should_include_value: HashSet<MessageId> = HashSet::new();
-            let mut states: Vec<BTreeMap<Duration, KnowledgeState>> =
-                vec![BTreeMap::new(); nb_processes];
-
-            // Prepare initial states
-            for (i, state) in states.iter_mut().enumerate() {
-                let mut knowledge = vec![BitSet::new(); nb_processes];
-                if i == proposer {
-                    knowledge[proposer].insert(proposer);
-                }
-                state.insert(
-                    Duration::ZERO,
-                    KnowledgeState {
-                        knowledge,
-                        remote_states: vec![Duration::ZERO; nb_processes],
-                        dependencies: HashSet::new(),
-                        needed_by: vec![],
-                    },
-                );
-            }
-
-            // Loop over triangles
-            // TODO: Actually, process value_only_paths from quorum first (in desc order)
-            let mut i = value_only_paths.len(); // first: send values (desc order, but does not matter)
-            let mut j = triangle_count; // second: triangles to commit, from longest to shortest (desc)
-            'triangle_loop: while 0 < j {
-                // Pick the next triangle
-                let value_only_path = 0 < i;
-                let t = if value_only_path {
-                    i -= 1;
-                    &value_only_paths[i]
-                } else {
-                    j -= 1;
-                    &triangular_paths[j]
-                };
-
-                // Skip triangles that would not bring new knowledge
-                if !value_only_path {
-                    let leaders_final_knowledge = &states[leader]
-                        .range(..=leader_latency)
-                        .last()
-                        .expect("leader should have a last state")
-                        .1
-                        .knowledge;
-                    if leaders_final_knowledge[t.second].contains(t.first) {
-                        continue 'triangle_loop;
-                    }
-                }
-
-                // Compute slack (how much delay can add when we reuse messages)
-                let mut max_slack = if t.total_latency <= leader_latency {
-                    leader_latency - t.total_latency
-                } else {
-                    assert!(value_only_path);
-                    Duration::ZERO
-                };
-
-                // Initialize variables to track time/position/progress along the path
-                let mut current_time = Duration::ZERO;
-                let mut current = proposer;
-                let mut shortest_path_from_proposer = true;
-                let mut _shortest_path_to_leader = false;
-
-                // Loop over the three (/one) checkpoints of the triangle (/value_only_patH)
-                let checkpoints = if value_only_path {
-                    [t.first, t.first, t.first]
-                } else {
-                    [t.first, t.second, leader]
-                };
-                for (step, target) in checkpoints.into_iter().enumerate() {
-                    if step > 0 && target == leader {
-                        shortest_path_from_proposer = false;
-                        _shortest_path_to_leader = true;
-                    }
-
-                    // For every step towards the checkpoints
-                    while current != target {
-                        // TODO: if step == 2 (return path) and there's already messages
-                        //   going back to the leader, then avoid creating new ones.
-                        //   (Chose one of the existing paths or forward knowledge recursively)
-
-                        // Move towards checkpoint
-                        let src = current;
-                        current = next_src[current][target];
-                        assert_ne!(src, current);
-
-                        // Check if shortest path from/to leader
-                        if step > 0 {
-                            shortest_path_from_proposer &= prev_dest[proposer][current] == src;
-                            let left = path_latencies[src][target] + path_latencies[target][leader];
-                            let to_leader = path_latencies[src][leader];
-                            _shortest_path_to_leader |= left == to_leader;
-                        }
-
-                        // Find existing compatible message or create new one (and add to source state)
-                        let deadline = current_time + max_slack;
-                        let next_compatible_msg_time = message_times[src][current]
-                            .range(current_time..=deadline)
-                            .next();
-                        let new_msg = next_compatible_msg_time.is_none();
-                        let msg_id = if let Some(compatible_time) = next_compatible_msg_time {
-                            assert!(!new_msg);
-                            // Reuse existing message
-                            let msg_id = MessageId {
-                                proposer,
-                                src,
-                                dest: current,
-                                time: *compatible_time,
-                            };
-                            debug_assert!(
-                                states[src]
-                                    .get_mut(compatible_time)
-                                    .expect("should have state at src")
-                                    .needed_by
-                                    .contains(&msg_id)
-                            );
-                            msg_id
-                        } else {
-                            // New message!
-                            assert!(new_msg);
-                            // TODO: explore if it can be useful to delay messages ? (for negligible gain)
-
-                            // Add to message_times...
-                            let inserted = message_times[src][current].insert(current_time);
-                            assert!(inserted);
-
-                            let msg_id = MessageId {
-                                proposer,
-                                src,
-                                dest: current,
-                                time: current_time,
-                            };
-
-                            // Add msg as derived from the source's state
-                            states[src]
-                                .get_mut(&current_time)
-                                .expect("should have state at src")
-                                .needed_by
-                                .push(msg_id);
-
-                            // Mark as including a value if needed
-                            if value_only_path {
-                                should_include_value.insert(msg_id);
-                            }
-                            assert_eq!(
-                                value_only_path, shortest_path_from_proposer,
-                                "new message should imply value_only_path == shortest_path_from_leader"
-                            );
-
-                            msg_id
-                        };
-
-                        // Update time and compute remaining slack
-                        let src_time = msg_id.time;
-                        current_time = src_time + topology.link_latency(src, current);
-                        max_slack = deadline - src_time;
-
-                        // if needed, create destination state (with all the previous knowledge)
-                        if !states[current].contains_key(&current_time) {
-                            assert!(new_msg);
-                            let prev_state = states[current]
-                                .range(..current_time)
-                                .last()
-                                .expect("should find a previous state");
-                            let mut knowledge = prev_state.1.knowledge.clone();
-                            knowledge[current].insert(current);
-                            let mut remote_states = prev_state.1.remote_states.clone();
-                            remote_states[current] = current_time;
-                            let state = KnowledgeState {
-                                knowledge,     // fully filled bellow
-                                remote_states, // same
-                                dependencies: HashSet::with_capacity(1),
-                                needed_by: vec![],
-                            };
-                            let inserted = states[current].insert(current_time, state).is_none();
-                            assert!(inserted);
-                        }
-
-                        // Update dest state's knowledge
-                        let [src_state, cur_state] = states
-                            .get_disjoint_mut([src, current])
-                            .expect("src should != current");
-                        let state = cur_state
-                            .get_mut(&current_time)
-                            .expect("should have a destination state now");
-                        let src_state = src_state.get(&src_time).expect("should have source state");
-                        state.dependencies.insert(msg_id); // Note: could be already present
-                        state.knowledge[current].union_with(&src_state.knowledge[src]);
-                        for i in 0..nb_processes {
-                            // Check source knowledge
-                            debug_assert!(
-                                src_state.knowledge[i].is_subset(&src_state.knowledge[src])
-                            );
-                            // TODO: the following would be true if we always re-propagated knowledge fully
-                            // debug_assert!(
-                            //     state.knowledge[i].is_superset(&src_state.knowledge[i])
-                            //         || state.knowledge[i].is_subset(&src_state.knowledge[i])
-                            // );
-
-                            // Merge knowledge
-                            state.knowledge[i].union_with(&src_state.knowledge[i]);
-                            state.remote_states[i] =
-                                max(state.remote_states[i], src_state.remote_states[i]);
-
-                            // Check obtained knowledge
-                            // TODO: the following would be true if we always re-propagated knowledge fully
-                            // debug_assert_eq!(
-                            //     state.knowledge[i] == src_state.knowledge[i],
-                            //     state.remote_states[i] == src_state.remote_states[i]
-                            // );
-                            debug_assert!(state.knowledge[i].is_subset(&state.knowledge[current]));
-                        }
-
-                        let ks = state.clone();
-
-                        // Update knowledge of future states at current location.
-                        for (time, state) in states[current].range_mut(current_time..).skip(1) {
-                            assert!(*time > current_time);
-                            for i in 0..nb_processes {
-                                state.knowledge[i].union_with(&ks.knowledge[i]);
-                                state.remote_states[i] =
-                                    max(state.remote_states[i], ks.remote_states[i]);
-                            }
-                            // TODO: recursively follow existing paths to propagate knowledge further
-                            //   and add checks to continue to next triangle early when possible
-                        }
-                    }
-                }
-            }
-            // Finished adding messages.
-
-            // Sanity checks:
-            assert_eq!(should_include_value.len(), nb_processes - 1);
-            let final_leader_state = states[leader].last_key_value().expect("should have state");
-            debug_assert!(final_leader_state.0 == &leader_latency);
-            for pid in 0..nb_processes {
-                debug_assert!(final_leader_state.1.knowledge[pid].is_superset(&best_level.k[pid]));
-            }
-
-            // Add to list of graphs/latencies
-            assert_eq!(kcensus_latencies.len(), proposer);
-            assert_eq!(propagation_graphs.len(), proposer);
-            kcensus_latencies.push(proposer_latency);
-            propagation_graphs.push(PropagationGraph {
-                should_include_value,
-                states,
-                leader,
-            });
-        }
-        assert_eq!(sum_of_latencies, best.sum_of_latencies);
     }
 
-    let mut multi_paxos_leaders: Vec<_> = topology.alive_replicas.iter().collect();
-    let mut multi_paxos_3p_leaders: Vec<_> = topology.alive_replicas.iter().collect();
-    multi_paxos_leaders
-        .sort_by_key(|leader| multi_paxos_latencies[*leader].iter().sum::<Duration>());
-    multi_paxos_3p_leaders
-        .sort_by_key(|leader| multi_paxos_3p_latencies[*leader].iter().sum::<Duration>());
+    struct BestSol {
+        leaders: Vec<usize>,
+        levels: Vec<usize>,
+        sum_of_latencies: Duration,
+    }
+
+    struct LevelSearchData<'a> {
+        nb_processes: usize,
+        leaders: &'a Vec<usize>,
+        knowledge_levels: &'a Vec<Vec<Vec<KnowledgeLevel>>>,
+        compatible_levels: Vec<Vec<Vec<usize>>>,
+        useful_levels: Vec<Vec<bool>>,
+        max_levels: Vec<usize>,
+        min_quorum: usize,
+    }
+
+    impl LevelSearchData<'_> {
+        #[inline]
+        fn knowledge_level(&self, pid: usize, level: usize) -> &KnowledgeLevel {
+            &self.knowledge_levels[pid][self.leaders[pid]][level]
+        }
+
+        #[inline]
+        fn are_compatible(&self, a: usize, level_a: usize, b: usize, level_b: usize) -> bool {
+            are_compatible(
+                self.leaders[a],
+                &self.knowledge_level(a, level_a).k,
+                self.leaders[b],
+                &self.knowledge_level(b, level_b).k,
+                self.min_quorum,
+            )
+        }
+    }
+
+    // Implements recursive search of the optimal solution
+    fn best_avg_search_inner(
+        best: &mut BestSol,
+        pids_done: usize,
+        min_levels: &[usize],
+        partial_total_time: Duration,
+        data: &LevelSearchData,
+    ) {
+        let nb_processes = data.nb_processes;
+        let pid_a = pids_done;
+        let pids_done = pids_done + 1;
+        'level_loop: for level_a in min_levels[pid_a]..=data.max_levels[pid_a] {
+            if !data.useful_levels[pid_a][level_a] {
+                continue 'level_loop;
+            }
+
+            let mut levels = min_levels.to_owned();
+            levels[pid_a] = level_a;
+            let partial_total_time = partial_total_time + data.knowledge_level(pid_a, level_a).time;
+            let mut new_curr_total_time = partial_total_time;
+            let mut new_min_total_time = partial_total_time;
+            for pid_b in pids_done..nb_processes {
+                new_min_total_time += data.knowledge_level(pid_b, min_levels[pid_b]).time;
+                let req_level_b = data.compatible_levels[pid_a][level_a][pid_b];
+                if req_level_b > levels[pid_b] {
+                    levels[pid_b] = req_level_b;
+                }
+                new_curr_total_time += data.knowledge_level(pid_b, levels[pid_b]).time;
+            }
+
+            if best.sum_of_latencies <= new_min_total_time {
+                // We cannot find a better solution with higher level_a
+                break 'level_loop;
+            }
+            if best.sum_of_latencies <= new_curr_total_time {
+                // We cannot find a better solution with current level_a
+                continue 'level_loop;
+            }
+
+            assert!(partial_total_time < best.sum_of_latencies);
+            if pids_done == nb_processes {
+                // Found a complete solution that is better!
+                best.levels = levels;
+                best.sum_of_latencies = partial_total_time;
+                best.leaders = data.leaders.clone();
+            } else {
+                // Promising but incomplete solution. Search this branch:
+                best_avg_search_inner(best, pids_done, &levels, partial_total_time, data);
+            }
+        }
+    }
+
+    fn best_avg_search(
+        best: &mut BestSol,
+        leaders: &Vec<usize>,
+        knowledge_levels: &Vec<Vec<Vec<KnowledgeLevel>>>,
+        topology: &Topology,
+        min_quorum: usize,
+    ) {
+        let nb_processes = topology.nb_processes;
+        let partial_latency = leaders
+            .iter()
+            .enumerate()
+            .map(|(proposer, leader)| topology.link_latency(*leader, proposer))
+            .sum();
+
+        // Early exit if it cannot be better than previous solutions
+        let mut min_latency = partial_latency;
+        for pid in 0..nb_processes {
+            min_latency += knowledge_levels[pid][leaders[pid]][0].time;
+        }
+        if min_latency > best.sum_of_latencies {
+            return;
+        }
+
+        // Prepare search data
+        let mut data = LevelSearchData {
+            nb_processes,
+            leaders,
+            knowledge_levels,
+            compatible_levels: vec![Vec::new(); nb_processes],
+            useful_levels: vec![Vec::new(); nb_processes],
+            max_levels: vec![0usize; nb_processes],
+            min_quorum,
+        };
+
+        // Precompute max knowledge levels (Note: could be merged with precomputation of compatibilities)
+        for a in 0..nb_processes {
+            for b in 0..nb_processes {
+                while !data.are_compatible(a, data.max_levels[a], b, 0) {
+                    data.max_levels[a] += 1;
+                }
+            }
+        }
+
+        // Precompute compatible levels
+        for a in 0..nb_processes {
+            let mut current_levels: Vec<usize> = data.max_levels.clone();
+            for a_level in 0..knowledge_levels[a][leaders[a]].len() {
+                let mut compatibility_changed = false;
+                for (b, b_level) in current_levels.iter_mut().enumerate() {
+                    while *b_level > 0 && data.are_compatible(a, a_level, b, *b_level - 1) {
+                        *b_level -= 1;
+                        compatibility_changed = true;
+                    }
+                }
+                data.useful_levels[a]
+                    .push(data.compatible_levels[a].is_empty() || compatibility_changed);
+                data.compatible_levels[a].push(current_levels.clone());
+            }
+        }
+
+        trace!("searching with leaders: {:?}", data.leaders);
+        trace!(
+            "useful levels: {:?}",
+            data.useful_levels
+                .iter()
+                .map(|list| list.iter().filter(|x| **x).count())
+                .collect::<Vec<usize>>()
+        );
+
+        // Use recursive search to compute the best solution for the given leaders
+        best_avg_search_inner(best, 0, &vec![0usize; nb_processes], partial_latency, &data);
+    }
+
+    // Implement recursive search of the optimal leaders
+    fn best_leaders_search(
+        best: &mut BestSol,
+        prev_leaders: &Vec<usize>,
+        proposer: usize,
+        knowledge_levels: &Vec<Vec<Vec<KnowledgeLevel>>>,
+        topology: &Topology,
+        min_quorum: usize,
+    ) {
+        if proposer >= topology.nb_processes {
+            return best_avg_search(best, prev_leaders, knowledge_levels, topology, min_quorum);
+        }
+
+        let mut leaders = prev_leaders.clone();
+        let is_replicas = topology.alive_replicas.contains(proposer);
+        let mut sorted_leaders: Vec<_> = topology.alive_replicas.iter().collect();
+        sorted_leaders.sort_by_key(|leader| topology.link_latency(*leader, proposer));
+        for leader in sorted_leaders {
+            if is_replicas && leader != proposer {
+                continue;
+            }
+
+            leaders[proposer] = leader;
+            best_leaders_search(
+                best,
+                &leaders,
+                proposer + 1,
+                knowledge_levels,
+                topology,
+                min_quorum,
+            );
+        }
+    }
+
+    let mut best = BestSol {
+        leaders: vec![0; nb_processes],
+        levels: vec![0; nb_processes],
+        sum_of_latencies: Duration::MAX,
+    };
+
+    best_leaders_search(
+        &mut best,
+        &vec![0usize; nb_processes],
+        0,
+        &knowledge_levels,
+        &topology,
+        min_quorum,
+    );
+
+    assert_ne!(best.sum_of_latencies, Duration::MAX);
+    let best = best;
+
+    // Build the graph from the solutions for each proposer
+    let mut sum_of_latencies = Duration::ZERO;
+    for proposer in 0..nb_processes {
+        let leader = best.leaders[proposer];
+        let triangular_paths = &mut triangular_paths[proposer][leader];
+        let value_only_paths = &value_only_paths[proposer];
+        let knowledge_levels = &knowledge_levels[proposer][leader];
+        let best_level = &knowledge_levels[best.levels[proposer]];
+
+        // Truncate triangles at commit time
+        let leader_latency = best_level.time;
+        let triangle_count = best_level.triangles_count;
+        let proposer_latency = leader_latency + topology.link_latency(leader, proposer);
+        sum_of_latencies += proposer_latency;
+        triangular_paths.truncate(triangle_count);
+        assert_eq!(
+            triangular_paths[triangle_count - 1].total_latency,
+            leader_latency
+        );
+
+        // Trace for debugging
+        if proposer == leader {
+            info!("proposer {proposer} ({}):", topology.regions[proposer]);
+        } else {
+            info!(
+                "proposer {proposer} ({}) with leader {leader}:",
+                topology.regions[proposer]
+            );
+        }
+        let mut min_proposer_latency = Duration::MAX;
+        let mut max_proposer_latency = Duration::MAX;
+        for leader in topology.alive_replicas.iter() {
+            let lat = quorum_3p_path_rtts[proposer][leader][min_quorum - 1]
+                + topology.link_latency(leader, proposer);
+            if lat < min_proposer_latency {
+                min_proposer_latency = lat;
+            }
+            let lat = lat + quorum_path_rtts[leader][max_quorum - 1];
+            if lat < max_proposer_latency {
+                max_proposer_latency = lat;
+            }
+        }
+        assert_eq!(min_effort_latencies[proposer], min_proposer_latency);
+        info!(
+            "  levels best ({} / {}): {proposer_latency:?} ({:.4}x min, {:.1}% min-max) min: {min_proposer_latency:?}, max: {max_proposer_latency:?}",
+            best.levels[proposer],
+            knowledge_levels.len(),
+            proposer_latency.as_secs_f64() / min_proposer_latency.as_secs_f64(),
+            100.0 * (proposer_latency - min_proposer_latency).as_secs_f64()
+                / (max_proposer_latency - min_proposer_latency).as_secs_f64()
+        );
+        debug!(
+            "  quorum size: {}, required knowledge: {:?}",
+            best_level.k[leader].len(),
+            best_level.k
+        );
+        trace!(
+            "  Left after truncate: {} real triangles, {} total, longest path: {}",
+            triangular_paths
+                .iter()
+                .filter(|x| proposer != x.first && x.first != x.second && x.second != leader)
+                .count(),
+            triangular_paths.len(),
+            triangular_paths[triangle_count - 1]
+        );
+
+        // TODO: Some knowledge might still not be needed to commit. (but the cost is probably negligible)
+        //   Try to check if they are needed for are_compatible?
+
+        // Initialize graph
+        let mut message_times: Vec<Vec<BTreeSet<Duration>>> =
+            vec![vec![BTreeSet::new(); nb_processes]; nb_processes];
+        let mut should_include_value: HashSet<MessageId> = HashSet::new();
+        let mut states: Vec<BTreeMap<Duration, KnowledgeState>> =
+            vec![BTreeMap::new(); nb_processes];
+
+        // Prepare initial states
+        for (i, state) in states.iter_mut().enumerate() {
+            let mut knowledge = vec![BitSet::new(); nb_processes];
+            if i == proposer {
+                knowledge[proposer].insert(proposer);
+            }
+            state.insert(
+                Duration::ZERO,
+                KnowledgeState {
+                    knowledge,
+                    remote_states: vec![Duration::ZERO; nb_processes],
+                    dependencies: HashSet::new(),
+                    needed_by: vec![],
+                },
+            );
+        }
+
+        // Loop over triangles
+        // TODO: Actually, process value_only_paths from quorum first (in desc order)
+        let mut i = value_only_paths.len(); // first: send values (desc order, but does not matter)
+        let mut j = triangle_count; // second: triangles to commit, from longest to shortest (desc)
+        'triangle_loop: while 0 < j {
+            // Pick the next triangle
+            let value_only_path = 0 < i;
+            let t = if value_only_path {
+                i -= 1;
+                &value_only_paths[i]
+            } else {
+                j -= 1;
+                &triangular_paths[j]
+            };
+
+            // Skip triangles that would not bring new knowledge
+            if !value_only_path {
+                let leaders_final_knowledge = &states[leader]
+                    .range(..=leader_latency)
+                    .last()
+                    .expect("leader should have a last state")
+                    .1
+                    .knowledge;
+                if leaders_final_knowledge[t.second].contains(t.first) {
+                    continue 'triangle_loop;
+                }
+            }
+
+            // Compute slack (how much delay can add when we reuse messages)
+            let mut max_slack = if t.total_latency <= leader_latency {
+                leader_latency - t.total_latency
+            } else {
+                assert!(value_only_path);
+                Duration::ZERO
+            };
+
+            // Initialize variables to track time/position/progress along the path
+            let mut current_time = Duration::ZERO;
+            let mut current = proposer;
+            let mut shortest_path_from_proposer = true;
+            let mut _shortest_path_to_leader = false;
+
+            // Loop over the three (/one) checkpoints of the triangle (/value_only_patH)
+            let checkpoints = if value_only_path {
+                [t.first, t.first, t.first]
+            } else {
+                [t.first, t.second, leader]
+            };
+            for (step, target) in checkpoints.into_iter().enumerate() {
+                if step > 0 && target == leader {
+                    shortest_path_from_proposer = false;
+                    _shortest_path_to_leader = true;
+                }
+
+                // For every step towards the checkpoints
+                while current != target {
+                    // TODO: if step == 2 (return path) and there's already messages
+                    //   going back to the leader, then avoid creating new ones.
+                    //   (Chose one of the existing paths or forward knowledge recursively)
+
+                    // Move towards checkpoint
+                    let src = current;
+                    current = next_src[current][target];
+                    assert_ne!(src, current);
+
+                    // Check if shortest path from/to leader
+                    if step > 0 {
+                        shortest_path_from_proposer &= prev_dest[proposer][current] == src;
+                        let left = path_latencies[src][target] + path_latencies[target][leader];
+                        let to_leader = path_latencies[src][leader];
+                        _shortest_path_to_leader |= left == to_leader;
+                    }
+
+                    // Find existing compatible message or create new one (and add to source state)
+                    let deadline = current_time + max_slack;
+                    let next_compatible_msg_time = message_times[src][current]
+                        .range(current_time..=deadline)
+                        .next();
+                    let new_msg = next_compatible_msg_time.is_none();
+                    let msg_id = if let Some(compatible_time) = next_compatible_msg_time {
+                        assert!(!new_msg);
+                        // Reuse existing message
+                        let msg_id = MessageId {
+                            proposer,
+                            src,
+                            dest: current,
+                            time: *compatible_time,
+                        };
+                        debug_assert!(
+                            states[src]
+                                .get_mut(compatible_time)
+                                .expect("should have state at src")
+                                .needed_by
+                                .contains(&msg_id)
+                        );
+                        msg_id
+                    } else {
+                        // New message!
+                        assert!(new_msg);
+                        // TODO: explore if it can be useful to delay messages ? (for negligible gain)
+
+                        // Add to message_times...
+                        let inserted = message_times[src][current].insert(current_time);
+                        assert!(inserted);
+
+                        let msg_id = MessageId {
+                            proposer,
+                            src,
+                            dest: current,
+                            time: current_time,
+                        };
+
+                        // Add msg as derived from the source's state
+                        states[src]
+                            .get_mut(&current_time)
+                            .expect("should have state at src")
+                            .needed_by
+                            .push(msg_id);
+
+                        // Mark as including a value if needed
+                        if value_only_path {
+                            should_include_value.insert(msg_id);
+                        }
+                        assert_eq!(
+                            value_only_path, shortest_path_from_proposer,
+                            "new message should imply value_only_path == shortest_path_from_leader"
+                        );
+
+                        msg_id
+                    };
+
+                    // Update time and compute remaining slack
+                    let src_time = msg_id.time;
+                    current_time = src_time + topology.link_latency(src, current);
+                    max_slack = deadline - src_time;
+
+                    // if needed, create destination state (with all the previous knowledge)
+                    if !states[current].contains_key(&current_time) {
+                        assert!(new_msg);
+                        let prev_state = states[current]
+                            .range(..current_time)
+                            .last()
+                            .expect("should find a previous state");
+                        let mut knowledge = prev_state.1.knowledge.clone();
+                        knowledge[current].insert(current);
+                        let mut remote_states = prev_state.1.remote_states.clone();
+                        remote_states[current] = current_time;
+                        let state = KnowledgeState {
+                            knowledge,     // fully filled bellow
+                            remote_states, // same
+                            dependencies: HashSet::with_capacity(1),
+                            needed_by: vec![],
+                        };
+                        let inserted = states[current].insert(current_time, state).is_none();
+                        assert!(inserted);
+                    }
+
+                    // Update dest state's knowledge
+                    let [src_state, cur_state] = states
+                        .get_disjoint_mut([src, current])
+                        .expect("src should != current");
+                    let state = cur_state
+                        .get_mut(&current_time)
+                        .expect("should have a destination state now");
+                    let src_state = src_state.get(&src_time).expect("should have source state");
+                    state.dependencies.insert(msg_id); // Note: could be already present
+                    state.knowledge[current].union_with(&src_state.knowledge[src]);
+                    for i in 0..nb_processes {
+                        // Check source knowledge
+                        debug_assert!(src_state.knowledge[i].is_subset(&src_state.knowledge[src]));
+                        // TODO: the following would be true if we always re-propagated knowledge fully
+                        // debug_assert!(
+                        //     state.knowledge[i].is_superset(&src_state.knowledge[i])
+                        //         || state.knowledge[i].is_subset(&src_state.knowledge[i])
+                        // );
+
+                        // Merge knowledge
+                        state.knowledge[i].union_with(&src_state.knowledge[i]);
+                        state.remote_states[i] =
+                            max(state.remote_states[i], src_state.remote_states[i]);
+
+                        // Check obtained knowledge
+                        // TODO: the following would be true if we always re-propagated knowledge fully
+                        // debug_assert_eq!(
+                        //     state.knowledge[i] == src_state.knowledge[i],
+                        //     state.remote_states[i] == src_state.remote_states[i]
+                        // );
+                        debug_assert!(state.knowledge[i].is_subset(&state.knowledge[current]));
+                    }
+
+                    let ks = state.clone();
+
+                    // Update knowledge of future states at current location.
+                    for (time, state) in states[current].range_mut(current_time..).skip(1) {
+                        assert!(*time > current_time);
+                        for i in 0..nb_processes {
+                            state.knowledge[i].union_with(&ks.knowledge[i]);
+                            state.remote_states[i] =
+                                max(state.remote_states[i], ks.remote_states[i]);
+                        }
+                        // TODO: recursively follow existing paths to propagate knowledge further
+                        //   and add checks to continue to next triangle early when possible
+                    }
+                }
+            }
+        }
+        // Finished adding messages.
+
+        // Sanity checks:
+        assert_eq!(should_include_value.len(), nb_processes - 1);
+        let final_leader_state = states[leader].last_key_value().expect("should have state");
+        debug_assert!(final_leader_state.0 == &leader_latency);
+        for pid in 0..nb_processes {
+            debug_assert!(final_leader_state.1.knowledge[pid].is_superset(&best_level.k[pid]));
+        }
+
+        // Add to list of graphs/latencies
+        assert_eq!(kcensus_latencies.len(), proposer);
+        assert_eq!(propagation_graphs.len(), proposer);
+        kcensus_latencies.push(proposer_latency);
+        propagation_graphs.push(PropagationGraph {
+            should_include_value,
+            states,
+            leader,
+        });
+    }
+    assert_eq!(sum_of_latencies, best.sum_of_latencies);
+
+    KCensusPlan {
+        graphs: propagation_graphs,
+        latencies: kcensus_latencies,
+    }
+}
+
+pub fn compute_propagation_graphs(
+    topology: Topology,
+    kcensus_graph: bool,
+    swift_paxos_quorums: bool,
+    shortest_paths: bool,
+) -> PropagationGraphs {
+    let tables = LatencyTables::new(&topology, shortest_paths);
+
+    let min_effort = min_effort_plan(&topology, &tables);
+    let paxos = paxos_plan(&topology, &tables);
+    let pando = pando_plan(&topology, &tables);
+    let epaxos = epaxos_plan(&topology, &tables, &paxos);
+    let multi_paxos = multi_paxos_plan(&topology, &tables);
+    let multi_paxos_3p = multi_paxos_3p_plan(&topology, &tables);
+
+    // Gated: each is the expensive half of one algorithm, and one algorithm runs per process.
+    let swift_paxos = if swift_paxos_quorums {
+        swift_paxos_plan(&topology, &tables)
+    } else {
+        SwiftPaxosPlan {
+            leader: 0,
+            fixed_fast_quorum: None,
+            latencies: vec![Duration::MAX; tables.nb_processes],
+            force_mpaxos: BitSet::with_capacity(tables.nb_processes),
+        }
+    };
+    let kcensus = if kcensus_graph {
+        kcensus_plan(&topology, &tables, &min_effort)
+    } else {
+        KCensusPlan {
+            graphs: Vec::with_capacity(tables.nb_processes),
+            latencies: Vec::with_capacity(tables.nb_processes),
+        }
+    };
+
+    let LatencyTables {
+        link_rtts,
+        path_rtts,
+        ..
+    } = tables;
 
     PropagationGraphs {
-        graphs: propagation_graphs,
+        graphs: kcensus.graphs,
         topology,
         link_rtts,
         path_rtts,
-        min_effort_latencies,
-        kcensus_latencies,
-        paxos_latencies,
-        paxos_committers,
-        pando_latencies,
-        pando_committers,
-        pando_delegates,
-        epaxos_latencies,
-        epaxos_committers,
-        multi_paxos_latencies,
-        multi_paxos_leaders,
-        multi_paxos_3p_latencies,
-        multi_paxos_3p_committers,
-        multi_paxos_3p_leaders,
-        swift_paxos_leader,
-        swift_paxos_fixed_fast_quorum,
-        swift_paxos_latencies,
-        swift_paxos_force_mpaxos,
+        min_effort_latencies: min_effort.latencies,
+        kcensus_latencies: kcensus.latencies,
+        paxos_latencies: paxos.latencies,
+        paxos_committers: paxos.committers,
+        pando_latencies: pando.latencies,
+        pando_committers: pando.committers,
+        pando_delegates: pando.delegates,
+        epaxos_latencies: epaxos.latencies,
+        epaxos_committers: epaxos.committers,
+        multi_paxos_latencies: multi_paxos.latencies,
+        multi_paxos_leaders: multi_paxos.leaders,
+        multi_paxos_3p_latencies: multi_paxos_3p.latencies,
+        multi_paxos_3p_committers: multi_paxos_3p.committers,
+        multi_paxos_3p_leaders: multi_paxos_3p.leaders,
+        swift_paxos_leader: swift_paxos.leader,
+        swift_paxos_fixed_fast_quorum: swift_paxos.fixed_fast_quorum,
+        swift_paxos_latencies: swift_paxos.latencies,
+        swift_paxos_force_mpaxos: swift_paxos.force_mpaxos,
     }
 }
