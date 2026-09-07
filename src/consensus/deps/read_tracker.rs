@@ -1,4 +1,4 @@
-use crate::consensus::command::Command;
+use crate::consensus::command::{Command, CommitReport};
 use crate::consensus::deps::dep_set::DepSet;
 use crate::consensus::message::ReadId;
 use std::collections::BTreeMap;
@@ -15,6 +15,10 @@ struct PendingRead {
     answers: usize,
     /// SwiftPaxos: the leader's own answer, which bounds the union. `None` until it comes.
     leader_seen: Option<DepSet>,
+    /// Filled in the first time the read's requirement is known, i.e. when the quorum (and,
+    /// in SwiftPaxos, the leader) has answered. A read is fast when that requirement is
+    /// already executed then: the answers alone were enough, with nothing to wait for.
+    report: Option<CommitReport>,
 }
 
 /// The reads this node has issued for one shard and has not served yet.
@@ -91,6 +95,7 @@ impl ReadTracker {
                 union: DepSet::new(process_count),
                 answers: 0,
                 leader_seen: None,
+                report: None,
             },
         );
         debug_assert!(old.is_none());
@@ -129,7 +134,7 @@ impl ReadTracker {
         let leader = self.leader;
         let ready: Vec<ReadId> = self
             .reads
-            .iter()
+            .iter_mut()
             .filter(|(_, read)| read.answers >= quorum)
             .filter_map(|(id, read)| {
                 let mut required = read.union.clone();
@@ -140,12 +145,22 @@ impl ReadTracker {
                     (Some(_), None) => return None,
                     (None, _) => {}
                 }
-                required.is_covered_by(executed).then_some(*id)
+                let covered = required.is_covered_by(executed);
+                read.report.get_or_insert_with(|| CommitReport {
+                    fast: covered,
+                    waited_for: required.pending_over(executed).count(),
+                });
+                covered.then_some(*id)
             })
             .collect();
         ready
             .iter()
-            .map(|id| self.reads.remove(id).expect("listed above").command)
+            .map(|id| {
+                let read = self.reads.remove(id).expect("listed above");
+                let mut command = read.command;
+                command.report = read.report;
+                command
+            })
             .collect()
     }
 }
@@ -175,6 +190,8 @@ mod tests {
             shard: 0,
             command: Vec::new(),
             read_only: true,
+            arrival_slot: 0,
+            report: None,
         }
     }
 
@@ -188,12 +205,7 @@ mod tests {
         tracker.receive(id, 1, &deps(&[uid(1, 1)]));
         // Now a quorum, but the union is not executed here yet.
         assert!(tracker.take_ready(&deps(&[uid(0, 0)])).is_empty());
-        assert_eq!(
-            tracker
-                .take_ready(&deps(&[uid(0, 0), uid(1, 1)]))
-                .len(),
-            1
-        );
+        assert_eq!(tracker.take_ready(&deps(&[uid(0, 0), uid(1, 1)])).len(), 1);
         assert!(tracker.is_empty());
     }
 
@@ -221,10 +233,7 @@ mod tests {
         // A third replica has seen more, but the quorum is already settled: the read is
         // free to miss it, and waiting for it would be waiting for nothing.
         tracker.receive(id, 2, &deps(&[uid(2, 7)]));
-        assert_eq!(
-            tracker.take_ready(&deps(&[uid(0, 0), uid(1, 0)])).len(),
-            1
-        );
+        assert_eq!(tracker.take_ready(&deps(&[uid(0, 0), uid(1, 0)])).len(), 1);
     }
 
     #[test]

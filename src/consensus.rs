@@ -2,13 +2,13 @@ use crate::consensus::message::ConsensusMsg::{Commit, PaxosM, ReadRequest, ReadR
 use crate::consensus::message::{CommandBatch, ConsensusMessage};
 use crate::consensus::paxos_family::message::PaxosMsg::{Accept, Prepare};
 use crate::consensus::read_tracker::ReadTracker;
+use crate::consensus::shard_pool::{PooledShard, ShardPool};
 use crate::eval;
 use crate::message::Message::{ConsensusM, Done};
 use crate::message::MsgWithSource;
-use crate::consensus::shard_pool::{PooledShard, ShardPool};
 use crate::multi_sink::{MultiSink, ShardMultiSink};
 use bit_set::BitSet;
-use command::Command;
+use command::{Command, CommitReport};
 use log::{info, trace, warn};
 use std::collections::{HashMap, VecDeque};
 use std::fmt::Debug;
@@ -46,6 +46,10 @@ pub(crate) struct ConsensusShard<AlgoSettings, AlgoRoundState> {
     slot: usize,
     queued_commands: HashMap<usize, CommandBatch>,
     last_v: Option<usize>,
+
+    /// Whether the current slot has been seen to leave the fast route. Cleared when the slot
+    /// advances, read into `CommitReport::fast`.
+    slot_left_fast_path: bool,
 
     // Messages that can not be processed yet, and local commands that can not be proposed yet.
     queued_messages: VecDeque<ConsensusMessage>,
@@ -100,6 +104,11 @@ pub(crate) trait ConsensusShardTrait {
     async fn repropose_start(&mut self, v: usize) -> io::Result<()>;
 
     fn commit_slot(&mut self, v: usize, from_commit_msg: bool) -> CommandBatch;
+
+    /// Whether this algorithm has a fast route at all. Leader-based modes report
+    /// `CommitReport::fast` false outright: Pando does not put an `Accept` in front of every
+    /// replica, so not seeing one proves nothing there.
+    fn has_fast_path(&self) -> bool;
 
     /// True if the algorithm state holds nothing about an unfinished round, i.e. it is
     /// back to what it was at the start of the slot. Asserted, in debug builds only,
@@ -234,9 +243,10 @@ where
                 },
                 command = new_client_commands_rx.recv(), if !done => {
                     match command {
-                        Some(command) =>  {
+                        Some(mut command) =>  {
                             let shard_id = command.shard;
                             let shard = self.wake_shard(shard_id);
+                            command.arrival_slot = shard.slot;
                             if command.read_only {
                                 shard.start_read(command).await?;
                             } else {
@@ -286,7 +296,7 @@ where
                                 break 'shard_msg Some((shard_id, false));
                             }
 
-                            let res_command = shard.full_process_message(msg).await?;
+                            let res_command = shard.full_process_message(msg, false).await?;
                             let commited = shard
                                 .commit_commands(&committed_commands_tx, res_command)
                                 .await;
@@ -302,7 +312,7 @@ where
                                 // TODO: (Optim.) check Commit messages first ?
                                 if shard.ready_to_process(&shard.queued_messages[i]) {
                                     let msg = shard.queued_messages.remove(i).unwrap();
-                                    let batch = shard.full_process_message(msg).await?;
+                                    let batch = shard.full_process_message(msg, true).await?;
                                     if shard
                                         .commit_commands(&committed_commands_tx, batch)
                                         .await
@@ -401,6 +411,7 @@ where
         self.next_uid = state.next_uid;
         self.slot = state.slot;
         self.last_v = state.last_v;
+        self.slot_left_fast_path = false;
         self.read_tracker.set_next_id(state.next_read_id);
     }
 
@@ -484,9 +495,12 @@ where
         }
     }
 
+    /// `from_queue` says whether this message was held in `queued_messages` rather than acted
+    /// on when it arrived. Only `ReadResponse` cares; see there.
     async fn full_process_message(
         &mut self,
         msg: ConsensusMessage,
+        from_queue: bool,
     ) -> io::Result<Option<CommandBatch>> {
         debug_assert!(self.ready_to_process(&msg));
         if let Commit { slot, v } = msg.msg {
@@ -518,9 +532,19 @@ where
             return Ok(None);
         }
         if let ReadResponse { id, .. } = msg.msg {
+            // A read costs one round trip to a majority. It is fast exactly when the answer
+            // completing that majority cost nothing beyond its own flight: it was not itself
+            // held back waiting for a slot, and no other answer was queued behind it, which
+            // would mean a majority had already arrived and we were the ones lagging. Answers
+            // that waited *earlier* do not count -- they were released before the majority
+            // formed, so they cost the read nothing.
+            let fast = !from_queue
+                && !self.queued_messages.iter().any(
+                    |queued| matches!(queued.msg, ReadResponse { id: other, .. } if other == id),
+                );
             return Ok(self
                 .read_tracker
-                .receive_ready(id)
+                .receive_ready(id, self.slot, fast)
                 .map(CommandBatch::Single));
         }
         self.process_message(msg).await
@@ -532,8 +556,39 @@ where
         committed_commands_tx: &Sender<Command>,
         batch: Option<CommandBatch>,
     ) -> bool {
-        if let Some(batch) = batch {
-            let commit = async |command: Command| {
+        let Some(batch) = batch else {
+            return false;
+        };
+
+        // A read served by its own quorum arrives here as its own batch, but nothing committed
+        // a slot for it. None of the bookkeeping below applies: it would clear the conflict
+        // flag of a round still in progress, hand the read tracker a slot commit that did not
+        // happen, and underflow `self.slot - 1` on the very first slot.
+        if matches!(&batch, CommandBatch::Single(command) if command.read_only) {
+            if let CommandBatch::Single(command) = batch {
+                committed_commands_tx
+                    .send(command)
+                    .await
+                    .expect("Sending commited value");
+            }
+            return true;
+        }
+
+        {
+            // `commit_slot` has already advanced past the slot that just committed.
+            let committed_slot = self.slot - 1;
+            let fast = self.has_fast_path() && !self.slot_left_fast_path;
+            let my_pid = self.my_pid;
+            self.slot_left_fast_path = false;
+            // Writes only: a read is never proposed into a slot, so it never reaches here.
+            let commit = async |mut command: Command| {
+                assert!(!command.read_only);
+                if command.requester == my_pid {
+                    command.report = Some(CommitReport {
+                        fast,
+                        waited_for: committed_slot.saturating_sub(command.arrival_slot),
+                    });
+                }
                 committed_commands_tx
                     .send(command)
                     .await
@@ -556,19 +611,20 @@ where
                 }
             }
 
-            let result = self.read_tracker.commit_slot();
-            for read_only_command in result.into_iter() {
+            // These have already be stamped. The
+            // slot's own fast/slow says nothing about it.
+            for read_only_command in self.read_tracker.commit_slot(self.slot) {
                 info!(
                     "Commit read: shard={} slot={}",
                     self.sinks.shard_id, self.slot
                 );
-                commit(read_only_command).await;
+                committed_commands_tx
+                    .send(read_only_command)
+                    .await
+                    .expect("Sending commited value");
             }
-
-            true
-        } else {
-            false
         }
+        true
     }
 
     #[inline]

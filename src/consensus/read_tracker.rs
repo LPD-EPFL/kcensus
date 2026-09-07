@@ -1,4 +1,4 @@
-use crate::consensus::command::Command;
+use crate::consensus::command::{Command, CommitReport};
 use crate::consensus::message::ReadId;
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
@@ -7,6 +7,16 @@ pub struct ReadOnlyCommand {
     pub command: Command,
     pub ready_count: usize,
     pub local_ready: bool,
+}
+
+/// Stamps the report a read is served with. `waited_for` is the slots that committed between
+/// the read reaching consensus and being served; a read can be fast and still have waited.
+fn serve(mut roc: ReadOnlyCommand, slot: usize, fast: bool) -> Command {
+    roc.command.report = Some(CommitReport {
+        fast,
+        waited_for: slot.saturating_sub(roc.command.arrival_slot),
+    });
+    roc.command
 }
 
 pub struct ReadTracker {
@@ -79,7 +89,9 @@ impl ReadTracker {
         id
     }
 
-    pub fn commit_slot(&mut self) -> Vec<Command> {
+    /// Reads the newly committed slot has made ready. Reaching the quorum this way means the
+    /// local vote was what completed it, so none of these is fast.
+    pub fn commit_slot(&mut self, slot: usize) -> Vec<Command> {
         let mut commited_reads = Vec::new();
         for (id, roc) in self.read_commands.iter_mut() {
             if !roc.local_ready {
@@ -92,15 +104,19 @@ impl ReadTracker {
         }
         commited_reads
             .iter()
-            .map(|id| self.read_commands.remove(id).unwrap().command)
+            .map(|id| serve(self.read_commands.remove(id).unwrap(), slot, false))
             .collect()
     }
 
-    pub fn receive_ready(&mut self, id: ReadId) -> Option<Command> {
+    /// One answer. `fast` says whether this one completed the quorum the moment it arrived --
+    /// see the call site, which is the only place that can tell.
+    pub fn receive_ready(&mut self, id: ReadId, slot: usize, fast: bool) -> Option<Command> {
         let roc = self.read_commands.get_mut(&id)?;
         roc.ready_count += 1;
         if roc.ready_count >= self.read_quorum {
-            self.read_commands.remove(&id).map(|roc| roc.command)
+            self.read_commands
+                .remove(&id)
+                .map(|roc| serve(roc, slot, fast))
         } else {
             None
         }

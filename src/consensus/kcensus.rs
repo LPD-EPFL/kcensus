@@ -68,6 +68,7 @@ impl KCensusShard {
             slot: 0,
             queued_commands: HashMap::with_capacity(process_count),
             last_v: None,
+            slot_left_fast_path: false,
 
             queued_messages: VecDeque::with_capacity(process_count),
             my_queued_commands: VecDeque::new(),
@@ -166,6 +167,7 @@ impl ConsensusShardTrait for KCensusShard {
                 // reaching the end of our schedule, inside `update_k_state` below.
                 let conflict = self.round_state.has_conflict();
                 if conflict {
+                    self.slot_left_fast_path = true;
                     self.round_state.freeze_and_prepare_for_leaders();
                 } else {
                     assert!(!explicit_remote_states && !self.round_state.am_i_frozen());
@@ -267,6 +269,7 @@ impl ConsensusShardTrait for KCensusShard {
                 // Phase 2 of the fallback. Freezing here is the promise: after it, our
                 // answer is bound to `leader` unless we have already promised a higher one,
                 // in which case we stay silent and let that one drive.
+                self.slot_left_fast_path = true;
                 self.round_state.freeze_and_prepare_for(leader);
                 if self.round_state.prepared_for() != Some(leader) {
                     return Ok(None);
@@ -342,6 +345,11 @@ impl ConsensusShardTrait for KCensusShard {
         self.slot += 1;
         self.round_state.clear();
         value
+    }
+
+    #[inline]
+    fn has_fast_path(&self) -> bool {
+        true
     }
 
     #[inline]

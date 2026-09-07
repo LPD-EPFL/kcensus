@@ -157,6 +157,8 @@ mod tests {
             shard: 0,
             command: vec![],
             read_only: false,
+            arrival_slot: 0,
+            report: None,
         }
     }
 

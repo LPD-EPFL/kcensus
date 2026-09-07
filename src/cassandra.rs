@@ -1,4 +1,4 @@
-use crate::consensus::command::{Command, CommittedCommand};
+use crate::consensus::command::{Command, CommitReport, CommittedCommand};
 use crate::eval;
 use futures::future::join_all;
 use log::trace;
@@ -59,6 +59,17 @@ pub struct Handler {
     session: Session,
 }
 
+/// The application's answer to a request, and what consensus did with it.
+type ClientResponse = (Response, Option<CommitReport>);
+
+/// One unit of work for a shard executor: the request, the report to hand back with its
+/// response, and where to send that response if we are the requester.
+type ShardWork = (
+    Request,
+    Option<CommitReport>,
+    Option<Sender<ClientResponse>>,
+);
+
 pub struct PreparedHandler {
     session: Session,
     put_ps: PreparedStatement,
@@ -68,7 +79,7 @@ pub struct PreparedHandler {
 // Structure for managing parallel execution with per-shard ordering
 pub struct ParallelCassandraExecutor {
     // Per-shard channels to maintain ordering within each shard
-    shard_senders: Vec<Sender<(Request, Option<Sender<Response>>)>>,
+    shard_senders: Vec<Sender<ShardWork>>,
     shard_join_handles: Vec<tokio::task::JoinHandle<()>>,
     global_semaphore: Arc<Semaphore>,
     total_completed: Arc<AtomicUsize>,
@@ -87,7 +98,7 @@ impl ParallelCassandraExecutor {
         let first_request_time = Arc::new(std::sync::Mutex::new(None));
         // Create per-shard channels and spawn workers
         for _shard_id in 0..shards {
-            let (tx, mut rx) = mpsc::channel::<(Request, Option<Sender<Response>>)>(32);
+            let (tx, mut rx) = mpsc::channel::<ShardWork>(32);
             shard_senders.push(tx);
 
             // Clone necessary resources for the worker
@@ -98,7 +109,7 @@ impl ParallelCassandraExecutor {
             let first_request_time = first_request_time.clone();
             // Spawn per-shard worker to maintain ordering
             let handle = tokio::spawn(async move {
-                while let Some((request, response_tx)) = rx.recv().await {
+                while let Some((request, report, response_tx)) = rx.recv().await {
                     {
                         // record first request time
                         let mut first_time = first_request_time.lock().unwrap();
@@ -116,7 +127,7 @@ impl ParallelCassandraExecutor {
                     if let Some(response_tx) = response_tx {
                         // If a response channel was provided, send the response
                         response_tx
-                            .send(response)
+                            .send((response, report))
                             .await
                             .expect("Server failed to enqueue client Response");
                     };
@@ -136,10 +147,15 @@ impl ParallelCassandraExecutor {
         }
     }
 
-    pub async fn execute(&self, request: Request, response_tx: Option<Sender<Response>>) {
+    pub async fn execute(
+        &self,
+        request: Request,
+        report: Option<CommitReport>,
+        response_tx: Option<Sender<ClientResponse>>,
+    ) {
         // Send request to the appropriate shard
         self.shard_senders[request.shard() as usize]
-            .send((request, response_tx))
+            .send((request, report, response_tx))
             .await
             .expect("Failed to send request to shard worker");
     }
@@ -297,11 +313,11 @@ pub struct Client {
     my_pid: usize,
     speedup: u32,
     client_request_tx: Sender<Command>,
-    client_response_rx: Receiver<Response>,
+    client_response_rx: Receiver<ClientResponse>,
 }
 
 impl Client {
-    pub fn new(my_pid: usize, speedup: u32) -> (Self, Receiver<Command>, Sender<Response>) {
+    pub fn new(my_pid: usize, speedup: u32) -> (Self, Receiver<Command>, Sender<ClientResponse>) {
         let (client_request_tx, client_request_rx) = mpsc::channel(100);
         let (client_response_tx, client_response_rx) = mpsc::channel(100);
         let client = Self {
@@ -342,6 +358,7 @@ impl Client {
     fn log_executed_response(
         &self,
         response: Response,
+        report: Option<CommitReport>,
         scheduled_time: Instant,
         issued_time: Instant,
     ) {
@@ -360,6 +377,7 @@ impl Client {
             latency: responded.duration_since(scheduled_time) * self.speedup,
             queueing: issued_time.duration_since(scheduled_time) * self.speedup,
             processing: responded.duration_since(issued_time) * self.speedup,
+            commit: report,
         };
         eval::log("executed", &readable, &event);
     }
@@ -431,7 +449,7 @@ impl Client {
 
                 // Handle receiving responses
                 response = self.client_response_rx.recv() => {
-                    if let Some(response) = response {
+                    if let Some((response, report)) = response {
                         // Extract request_id from response and look up timing info
                         let request_id = match &response {
                             Response::Put { request_id, .. } => *request_id,
@@ -442,7 +460,7 @@ impl Client {
                             .remove(&request_id)
                             .expect("Response received for an unknown request_id");
                         if (warmup_end..sustain_start).contains(&scheduled_time) {
-                            self.log_executed_response(response, scheduled_time, issued_time);
+                            self.log_executed_response(response, report, scheduled_time, issued_time);
                         }
                         responses_received += 1;
                         total_latency += Instant::now().duration_since(scheduled_time) * self.speedup;
@@ -480,6 +498,8 @@ struct ExecutedEvent {
     latency: Duration,
     queueing: Duration,
     processing: Duration,
+    /// `null` for reads: they are answered from a read quorum, not ordered into a slot.
+    commit: Option<CommitReport>,
 }
 
 #[derive(Serialize)]
@@ -493,7 +513,7 @@ pub struct App {
     my_pid: usize,
     parallel_executor: Option<ParallelCassandraExecutor>,
     committed_request_rx: Receiver<Command>,
-    client_response_tx: Sender<Response>,
+    client_response_tx: Sender<ClientResponse>,
 }
 
 impl App {
@@ -537,6 +557,7 @@ impl App {
                 parallel_executor
                     .execute(
                         command.app_request,
+                        command.report,
                         if command.requester == self.my_pid {
                             Some(self.client_response_tx.clone())
                         } else {
@@ -566,7 +587,7 @@ impl App {
                 };
                 if command.requester == self.my_pid {
                     self.client_response_tx
-                        .send(response)
+                        .send((response, command.report))
                         .await
                         .expect("Server failed to enqueue client Response");
                 }

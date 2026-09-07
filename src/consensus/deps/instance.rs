@@ -60,6 +60,9 @@ pub struct Instance {
     union: DepSet,
     /// The processes known to have accepted: they acknowledged an `Accept`, or sent one.
     pub accept_acked: BitSet,
+    /// Whether this instance has left the fast route. Read into `CommitReport::fast`.
+    /// SwiftPaxos sets it outright, EPaxos infers it from the `Accept`.
+    left_fast_path: bool,
 }
 
 impl Instance {
@@ -80,6 +83,7 @@ impl Instance {
             endorsers: BitSet::with_capacity(process_count),
             union: DepSet::new(process_count),
             accept_acked: BitSet::with_capacity(process_count),
+            left_fast_path: false,
         }
     }
 
@@ -182,6 +186,24 @@ impl Instance {
         self.phase = Phase::Accepted;
     }
 
+    /// Deliberately not folded into `accept`: SwiftPaxos' leader sends an `Accept` for *every*
+    /// instance -- it doubles as its own `FastAck` -- so accepting says nothing about the route
+    /// there. EPaxos only accepts on the slow path, and there it does.
+    #[inline]
+    pub fn mark_left_fast_path(&mut self) {
+        self.left_fast_path = true;
+    }
+
+    #[inline]
+    pub fn set_fast_path(&mut self, fast: bool) {
+        self.left_fast_path = !fast;
+    }
+
+    #[inline]
+    pub fn on_fast_path(&self) -> bool {
+        !self.left_fast_path
+    }
+
     /// Moves to `Committed` with the agreed dependencies. Agreement (EPaxos\* Invariant 1)
     /// means this can only ever be called with the same set at every process, which the
     /// debug assertion checks locally.
@@ -221,6 +243,8 @@ mod tests {
             shard: 0,
             command: vec![],
             read_only: false,
+            arrival_slot: 0,
+            report: None,
         };
         Instance::new(0, LEADER, command, DepSet::new(N), N)
     }

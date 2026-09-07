@@ -5,7 +5,7 @@
 //! replacing it: the two share the shard pool, the sinks, the command types and the eval
 //! logging, but nothing of their instance state or their commit-to-execution path.
 
-use crate::consensus::command::Command;
+use crate::consensus::command::{Command, CommitReport};
 use crate::consensus::deps::dep_set::{requester_of, DepSet};
 use crate::consensus::deps::execution::{cycle_possible, executable_order, next_executable};
 use crate::consensus::deps::instance::{Instance, Phase};
@@ -695,6 +695,7 @@ impl DepShard {
             // Slow path: accept the union of what the quorum reported. There is no
             // arbitration to do — the union is the answer.
             let deps = instance.union().clone();
+            instance.mark_left_fast_path();
             instance.accept(deps.clone());
             instance.accept_acked.insert(my_pid);
             debug!("Slow path for id={id} (shard={})", self.sinks.shard_id);
@@ -721,6 +722,10 @@ impl DepShard {
             "SwiftPaxos Fig. 4 line 23: the leader's dependencies must already be accepted"
         );
         let instance = self.instance_mut(id);
+        if !swift {
+            // EPaxos only accepts on the slow path.
+            instance.mark_left_fast_path();
+        }
         if instance.is_settled() {
             return self.try_commit(id).await;
         }
@@ -786,6 +791,7 @@ impl DepShard {
             return Ok(());
         }
         let deps = instance.deps.clone();
+        instance.mark_left_fast_path();
         self.commit_and_broadcast(id, deps).await
     }
 
@@ -795,11 +801,30 @@ impl DepShard {
     }
 
     fn on_commit(&mut self, id: usize, deps: DepSet) {
+        // Computed before the mutable borrow, off `deps` and `self.executed`, so the hot path
+        // does not have to copy a `DepSet`.
+        let mut report = None;
+        if let Some(instance) = self.instances.get(&id)
+            && !instance.is_committed()
+            && instance.command.requester == self.my_pid
+            && !instance.command.read_only
+        {
+            report = Some(CommitReport {
+                fast: instance.on_fast_path(),
+                waited_for: deps
+                    .pending_over(&self.executed)
+                    .filter(|dep| *dep != id)
+                    .count(),
+            });
+        }
         let instance = self.instance_mut(id);
         if instance.is_committed() {
             return;
         }
         instance.commit(deps);
+        if report.is_some() {
+            instance.command.report = report;
+        }
         self.execute_ready();
     }
 
@@ -919,6 +944,7 @@ impl DepShard {
         if !fast && !via_majority {
             return Ok(());
         }
+        self.instance_mut(id).set_fast_path(fast);
         self.on_commit(id, leader_deps.clone());
         // Nothing to announce: every replica sees the same acknowledgements and decides for
         // itself. The one exception is a process that casts no vote — the replica-only

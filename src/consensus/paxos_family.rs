@@ -74,6 +74,7 @@ impl PaxosFamilyShard {
             slot: 0,
             queued_commands: HashMap::with_capacity(process_count),
             last_v: None,
+            slot_left_fast_path: false,
 
             queued_messages: VecDeque::with_capacity(process_count),
             my_queued_commands: VecDeque::new(),
@@ -248,6 +249,12 @@ impl ConsensusShardTrait for PaxosFamilyShard {
                 }
             }
             Accept { round, v, .. } => {
+                // The accept phase is not the fast route -- except in SwiftPaxos, whose leader
+                // accepts every slot immediately, so an `Accept` says nothing about the route
+                // there. It is marked at the commit below instead.
+                if !matches!(self.settings.mode_setting, SwiftPaxos { .. }) {
+                    self.slot_left_fast_path = true;
+                }
                 self.round_state.receive_accept(src, round, v);
 
                 if self.my_pid != round.leader {
@@ -272,6 +279,9 @@ impl ConsensusShardTrait for PaxosFamilyShard {
                 }
 
                 if self.round_state.paxos_can_commit() {
+                    // SwiftPaxos reaching a commit here took the majority route, not the fast
+                    // one. Redundant for the modes marked on `Accept` above.
+                    self.slot_left_fast_path = true;
                     if round.leader == self.my_pid {
                         self.broadcast_commit().await?;
                     } else if self.get_committer(v) == Some(self.my_pid) {
@@ -345,6 +355,11 @@ impl ConsensusShardTrait for PaxosFamilyShard {
         self.goto_round(self.settings.starting_round);
         self.round_state.full_clear();
         value
+    }
+
+    #[inline]
+    fn has_fast_path(&self) -> bool {
+        matches!(self.settings.mode_setting, EPaxos | SwiftPaxos { .. })
     }
 
     #[inline]
@@ -547,7 +562,11 @@ impl PaxosFamilyShard {
     }
 
     #[inline]
-    async fn broadcast_accept(&self) -> io::Result<()> {
+    async fn broadcast_accept(&mut self) -> io::Result<()> {
+        // The leader does not receive its own Accept. See the receive side for SwiftPaxos.
+        if !matches!(self.settings.mode_setting, SwiftPaxos { .. }) {
+            self.slot_left_fast_path = true;
+        }
         // TODO: Only send to fastest majority/quorum ?
         let msg = Accept {
             slot: self.slot,
