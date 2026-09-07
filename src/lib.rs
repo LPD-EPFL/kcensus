@@ -1,10 +1,10 @@
 use crate::consensus::command::Command;
 use crate::consensus::deps::{DepConsensus, DepMode};
-use crate::consensus::kcensus::KCensus;
 use crate::consensus::kcensus::propagation::{
-    LatencyTables, epaxos_plan, kcensus_plan, min_effort_plan, multi_paxos_3p_plan,
-    multi_paxos_plan, pando_plan, paxos_plan, swift_paxos_plan,
+    epaxos_plan, kcensus_plan, min_effort_plan, multi_paxos_3p_plan, multi_paxos_plan,
+    pando_plan, paxos_plan, swift_paxos_plan, LatencyTables,
 };
+use crate::consensus::kcensus::KCensus;
 use crate::consensus::paxos_family::{PFModeSetting, PaxosFamily};
 use crate::delayer::Delayer;
 use crate::topology::Topology;
@@ -15,8 +15,10 @@ use cpu_time::ProcessTime;
 use env_logger::fmt::style;
 use log::debug;
 use std::collections::VecDeque;
+use std::future::Future;
 use std::io;
 use std::io::Write;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -270,7 +272,10 @@ pub async fn run() -> io::Result<()> {
     let start = Instant::now();
     let process_start = ProcessTime::try_now().expect("Getting process time failed");
 
-    let expected_latency = match algo {
+    let (consensus, expected_latency): (
+        Pin<Box<dyn Future<Output = io::Result<()>> + Send>>,
+        Duration,
+    ) = match algo {
         Algo::KCensus => {
             let mut leader_prio: Vec<_> = (0..process_count).collect();
             let graphs = kcensus_graphs.expect("planned before the barrier");
@@ -285,14 +290,19 @@ pub async fn run() -> io::Result<()> {
                 shards,
                 shard_pool,
             );
-            let consensus = consensus_obj.run(
-                delayed_msg_rx,
-                new_client_request_rx,
-                committed_request_tx,
-                deadlock_deadline,
-            );
-            let _ = tokio::join!(app.run(), client.run(workload), consensus);
-            expected_latency
+            (
+                Box::pin(async move {
+                    consensus_obj
+                        .run(
+                            delayed_msg_rx,
+                            new_client_request_rx,
+                            committed_request_tx,
+                            deadlock_deadline,
+                        )
+                        .await
+                }),
+                expected_latency,
+            )
         }
         Algo::Paxos => {
             let mut leader_prio: Vec<_> = topology.alive_replicas.iter().collect();
@@ -309,14 +319,19 @@ pub async fn run() -> io::Result<()> {
                 shards,
                 shard_pool,
             );
-            let consensus = consensus_obj.run(
-                delayed_msg_rx,
-                new_client_request_rx,
-                committed_request_tx,
-                deadlock_deadline,
-            );
-            let _ = tokio::join!(app.run(), client.run(workload), consensus);
-            paxos.latencies[my_pid]
+            (
+                Box::pin(async move {
+                    consensus_obj
+                        .run(
+                            delayed_msg_rx,
+                            new_client_request_rx,
+                            committed_request_tx,
+                            deadlock_deadline,
+                        )
+                        .await
+                }),
+                paxos.latencies[my_pid],
+            )
         }
         Algo::Pando => {
             let mut leader_prio: Vec<_> = topology.alive_replicas.iter().collect();
@@ -335,14 +350,19 @@ pub async fn run() -> io::Result<()> {
                 shards,
                 shard_pool,
             );
-            let consensus = consensus_obj.run(
-                delayed_msg_rx,
-                new_client_request_rx,
-                committed_request_tx,
-                deadlock_deadline,
-            );
-            let _ = tokio::join!(app.run(), client.run(workload), consensus);
-            pando.latencies[my_pid]
+            (
+                Box::pin(async move {
+                    consensus_obj
+                        .run(
+                            delayed_msg_rx,
+                            new_client_request_rx,
+                            committed_request_tx,
+                            deadlock_deadline,
+                        )
+                        .await
+                }),
+                pando.latencies[my_pid],
+            )
         }
         Algo::EPaxos | Algo::SwiftPaxos => {
             let (mode, expected_latency) = if algo == Algo::EPaxos {
@@ -371,14 +391,19 @@ pub async fn run() -> io::Result<()> {
                 shards,
                 shard_pool,
             );
-            let consensus = consensus_obj.run(
-                delayed_msg_rx,
-                new_client_request_rx,
-                committed_request_tx,
-                deadlock_deadline,
-            );
-            let _ = tokio::join!(app.run(), client.run(workload), consensus);
-            expected_latency
+            (
+                Box::pin(async move {
+                    consensus_obj
+                        .run(
+                            delayed_msg_rx,
+                            new_client_request_rx,
+                            committed_request_tx,
+                            deadlock_deadline,
+                        )
+                        .await
+                }),
+                expected_latency,
+            )
         }
         Algo::EPaxosSlots => {
             let mut leader_prio: Vec<_> = topology.alive_replicas.iter().collect();
@@ -395,14 +420,19 @@ pub async fn run() -> io::Result<()> {
                 shards,
                 shard_pool,
             );
-            let consensus = consensus_obj.run(
-                delayed_msg_rx,
-                new_client_request_rx,
-                committed_request_tx,
-                deadlock_deadline,
-            );
-            let _ = tokio::join!(app.run(), client.run(workload), consensus);
-            epaxos.latencies[my_pid]
+            (
+                Box::pin(async move {
+                    consensus_obj
+                        .run(
+                            delayed_msg_rx,
+                            new_client_request_rx,
+                            committed_request_tx,
+                            deadlock_deadline,
+                        )
+                        .await
+                }),
+                epaxos.latencies[my_pid],
+            )
         }
         Algo::SwiftPaxosSlots => {
             let swift = swift.expect("planned before the barrier");
@@ -418,20 +448,25 @@ pub async fn run() -> io::Result<()> {
                 shards,
                 shard_pool,
             );
-            let consensus = consensus_obj.run(
-                delayed_msg_rx,
-                new_client_request_rx,
-                committed_request_tx,
-                deadlock_deadline,
-            );
-            let _ = tokio::join!(app.run(), client.run(workload), consensus);
             println!("SwiftPaxos fixed quorum: {:?}", swift.fixed_fast_quorum);
             println!("SwiftPaxos leader: {:?}", swift.leader);
             println!(
                 "Expects to commit on SlowAcks at this replica: {:?}",
                 swift.expects_slow_acks.contains(my_pid)
             );
-            swift.latencies[my_pid]
+            (
+                Box::pin(async move {
+                    consensus_obj
+                        .run(
+                            delayed_msg_rx,
+                            new_client_request_rx,
+                            committed_request_tx,
+                            deadlock_deadline,
+                        )
+                        .await
+                }),
+                swift.latencies[my_pid],
+            )
         }
         Algo::MultiPaxos | Algo::MultiPaxos3P => {
             let is_3p = algo == Algo::MultiPaxos3P;
@@ -460,15 +495,20 @@ pub async fn run() -> io::Result<()> {
                 shards,
                 shard_pool,
             );
-            let consensus = consensus_obj.run(
-                delayed_msg_rx,
-                new_client_request_rx,
-                committed_request_tx,
-                deadlock_deadline,
-            );
-            let _ = tokio::join!(app.run(), client.run(workload), consensus);
             println!("Leader: {leader}");
-            multi_paxos_latencies[leader][my_pid]
+            (
+                Box::pin(async move {
+                    consensus_obj
+                        .run(
+                            delayed_msg_rx,
+                            new_client_request_rx,
+                            committed_request_tx,
+                            deadlock_deadline,
+                        )
+                        .await
+                }),
+                multi_paxos_latencies[leader][my_pid],
+            )
         }
         Algo::NoReplication | Algo::WeakReplication => {
             let (rtt, messages_to_send, leader) = match algo {
@@ -499,7 +539,7 @@ pub async fn run() -> io::Result<()> {
                 _ => unreachable!("Algo::(No|Weak)Replication"),
             };
 
-            let latency_mock = async {
+            let latency_mock = async move {
                 // For simplicity, requests will be executed locally after a ping delay.
                 // This is a lower bound as this consumes no network + compute is sharded.
                 let mut network_stats = multi_sink::Stats::default();
@@ -609,13 +649,26 @@ pub async fn run() -> io::Result<()> {
                 drop(committed_request_tx); // So the app stops
                 drop(delayed_msg_rx); // So the delayer stops
             };
-            let _ = tokio::join!(app.run(), client.run(workload), latency_mock);
             if let Some(leader) = leader {
                 println!("Leader: {leader}");
             }
-            rtt
+            (
+                Box::pin(async move {
+                    latency_mock.await;
+                    Ok(())
+                }),
+                rtt,
+            )
         }
     };
+
+    let client_task = tokio::spawn(client.run(workload));
+    let app_task = tokio::spawn(app.run());
+
+    consensus.await?;
+    client_task.await?;
+    app_task.await?;
+
     let process_runtime = process_start
         .try_elapsed()
         .expect("Getting process time failed");
