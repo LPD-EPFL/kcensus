@@ -428,8 +428,8 @@ pub async fn run() -> io::Result<()> {
             println!("SwiftPaxos fixed quorum: {:?}", swift.fixed_fast_quorum);
             println!("SwiftPaxos leader: {:?}", swift.leader);
             println!(
-                "Force MPaxos3P at this replica: {:?}",
-                swift.force_mpaxos.contains(my_pid)
+                "Expects to commit on SlowAcks at this replica: {:?}",
+                swift.expects_slow_acks.contains(my_pid)
             );
             swift.latencies[my_pid]
         }

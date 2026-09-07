@@ -1,7 +1,6 @@
 use crate::consensus::kcensus::node_state::{Knowledge, NodeState};
 use crate::topology::{FAULTY_LATENCY, Topology};
 use bit_set::BitSet;
-use itertools::Itertools;
 use log::{debug, info, trace};
 use petgraph::algo::bellman_ford;
 use petgraph::matrix_graph::DiMatrix;
@@ -200,11 +199,8 @@ fn are_compatible(
     count_deducers >= min_quorum
 }
 
-/// The latency tables every planner reads.
-///
-/// Built once and shared. Several are `O(n³)`, and the cost of *not* sharing them is on
-/// record: recomputing one per (quorum, leader, requester) is what made the SwiftPaxos
-/// search take 70s at 31 replicas.
+/// The latency tables every planner reads. Several are `O(n³)`, so they are built once and
+/// shared.
 pub struct LatencyTables {
     pub nb_processes: usize,
     pub max_quorum: usize,
@@ -401,11 +397,14 @@ pub struct SwiftPaxosPlan {
     pub leader: usize,
     pub fixed_fast_quorum: Option<BitSet>,
     pub latencies: Vec<Duration>,
-    pub force_mpaxos: BitSet,
+    /// The processes the leader route is expected to serve faster than the fast quorum, so
+    /// they should commit on `SlowAck`s. A prediction, not an instruction: nothing reads it to
+    /// decide a route -- both are open to everyone, and whichever completes first wins.
+    pub expects_slow_acks: BitSet,
 }
 
-/// A process that casts no vote reaches the protocol through a replica, and takes the best
-/// one. Shared by the leader-based planners, which differ only in what they minimise.
+/// A process that casts no vote goes through a replica, and takes the best one. The
+/// leader-based planners differ only in what they minimise.
 fn best_committer(topology: &Topology, nb_processes: usize, mut better: impl FnMut(usize, usize)) {
     for proposer in 0..nb_processes {
         if topology.alive_replicas.contains(proposer) {
@@ -489,7 +488,7 @@ pub fn pando_plan(topology: &Topology, t: &LatencyTables) -> PandoPlan {
 }
 
 /// Takes `paxos` because EPaxos falls back to the Paxos latency when there are too few live
-/// replicas for its own quorum -- the one place two algorithms were coupled.
+/// replicas for its own quorum.
 pub fn epaxos_plan(topology: &Topology, t: &LatencyTables, paxos: &PaxosPlan) -> EPaxosPlan {
     let mut latencies = vec![Duration::MAX; t.nb_processes];
     let mut committers = vec![0usize; t.nb_processes];
@@ -571,7 +570,7 @@ pub fn swift_paxos_plan(topology: &Topology, t: &LatencyTables) -> SwiftPaxosPla
     let mut swift_paxos_fixed_fast_quorum: Option<BitSet> = None;
     let mut swift_paxos_latencies = vec![Duration::MAX; nb_processes];
     let mut swift_paxos_best_total = Duration::MAX;
-    let mut swift_paxos_force_mpaxos = BitSet::with_capacity(nb_processes);
+    let mut swift_paxos_slow_acks = BitSet::with_capacity(nb_processes);
 
     let mut swift_leader_prio: Vec<_> = topology.alive_replicas.iter().collect();
     swift_leader_prio.sort_by_key(|leader| quorum_link_rtts[*leader][maj_quorum - 1]);
@@ -586,13 +585,12 @@ pub fn swift_paxos_plan(topology: &Topology, t: &LatencyTables) -> SwiftPaxosPla
     // in the reference implementation (`afterPropagate`, `swift.go:418`). Adopting the
     // leader's value is therefore gated by the later of the two paths, which is the `max`.
     //
-    // Tabulated rather than computed where it is read: the quorum search below wants one
-    // per (quorum, leader, requester), tens of millions of them over `nb_processes²`
-    // distinct pairs, and each costs an allocation and a sort.
+    // Tabulated: the search below wants one per (quorum, leader, requester), tens of millions
+    // over `nb_processes²` distinct pairs, and each costs an allocation and a sort.
     let swift_mpaxos_latencies: Vec<Vec<Duration>> = (0..nb_processes)
-        .map(|requester| {
+        .map(|leader| {
             (0..nb_processes)
-                .map(|leader| {
+                .map(|requester| {
                     let mut to_requester: Vec<Duration> = topology
                         .alive_replicas
                         .iter()
@@ -617,7 +615,7 @@ pub fn swift_paxos_plan(topology: &Topology, t: &LatencyTables) -> SwiftPaxosPla
             // Try the full-size fast-paxos quorums approach
             // (Note: if alive.len == fast_paxos_quorum, there cannot be a benefit over a fixed quorum)
             let mut final_latencies = vec![Duration::MAX; nb_processes];
-            let mut use_mpaxos = BitSet::with_capacity(nb_processes);
+            let mut expects_slow_acks = BitSet::with_capacity(nb_processes);
             for requester in 0..nb_processes {
                 let mut requester_quorum_rtts: Vec<_> = topology
                     .alive_replicas
@@ -627,12 +625,12 @@ pub fn swift_paxos_plan(topology: &Topology, t: &LatencyTables) -> SwiftPaxosPla
                 requester_quorum_rtts.sort();
                 let fast_paxos_latency =
                     requester_quorum_rtts[fast_paxos_quorum - 1].max(link_rtts[requester][leader]);
-                let mpaxos_latency = swift_mpaxos_latencies[requester][leader];
+                let mpaxos_latency = swift_mpaxos_latencies[leader][requester];
 
                 final_latencies[requester] = if fast_paxos_latency < mpaxos_latency {
                     fast_paxos_latency
                 } else {
-                    use_mpaxos.insert(requester);
+                    expects_slow_acks.insert(requester);
                     mpaxos_latency
                 }
             }
@@ -642,66 +640,156 @@ pub fn swift_paxos_plan(topology: &Topology, t: &LatencyTables) -> SwiftPaxosPla
                 swift_paxos_fixed_fast_quorum = None;
                 swift_paxos_latencies = final_latencies;
                 swift_paxos_best_total = total;
-                swift_paxos_force_mpaxos = use_mpaxos;
+                swift_paxos_slow_acks = expects_slow_acks;
             }
         }
     }
 
-    fn factorial(n: usize) -> f64 {
-        (1..=n).map(|i| i as f64).product()
-    }
-    fn n_choose_k(n: usize, k: usize) -> f64 {
-        factorial(n) / (factorial(k) * factorial(n - k))
-    }
-    // Make sure the amount of combinations doesn't explode
-    // TODO: Something smarter would be nice (branch & bound?)
-    while n_choose_k(swift_leader_prio.len(), maj_quorum) > 10u64.pow(5) as f64 {
-        swift_leader_prio.remove(swift_leader_prio.len() - 1);
-    }
-
-    // Now checking fixed majority quorums
-    let quorums = swift_leader_prio.iter().copied().combinations(maj_quorum);
-    let mut quorum_latencies = vec![Duration::ZERO; nb_processes];
-    for quorum in quorums {
-        // Reaching every member of the quorum costs the same whoever leads it, so this is
-        // computed once per quorum rather than once per (quorum, leader). It is the same
-        // arithmetic either way -- the leader loop below starts from a copy -- but it was
-        // `maj_quorum` times the work of everything else in the search.
-        for requester in 0..nb_processes {
-            quorum_latencies[requester] = quorum
-                .iter()
-                .copied()
-                .map(|replica| link_rtts[requester][replica])
-                .max()
-                .unwrap();
-        }
-        for leader in quorum.iter().copied() {
-            let mut latencies = quorum_latencies.clone();
-
-            let mut use_mpaxos = BitSet::with_capacity(nb_processes);
-            for requester in 0..nb_processes {
-                let mpaxos_latency = swift_mpaxos_latencies[requester][leader];
-                if mpaxos_latency < latencies[requester] {
-                    use_mpaxos.insert(requester);
-                    latencies[requester] = mpaxos_latency;
-                }
-            }
-            let total: Duration = latencies.iter().sum();
-            if total < swift_paxos_best_total {
-                swift_paxos_leader = leader;
-                swift_paxos_fixed_fast_quorum = Some(BitSet::from_iter(quorum.clone()));
-                swift_paxos_latencies = latencies;
-                swift_paxos_best_total = total;
-                swift_paxos_force_mpaxos = use_mpaxos;
-            }
-        }
+    // Exhaustive search over every (leader, fixed fast quorum), by branch and bound.
+    //
+    // `fast(r, Q) = max_{q in Q} link_rtts[r][q]` only grows as `Q` gains members, so a partial
+    // quorum bounds the final one from below. That alone prunes almost nothing while the tree is
+    // widest, so it is sharpened by what is still to come: the `k` remaining seats are filled
+    // from the candidates left, and the cheapest choice for `r` is its `k` nearest, so the final
+    // max is at least the `k`-th smallest of those.
+    let alive: Vec<usize> = topology.alive_replicas.iter().collect();
+    let mut best = SwiftBest {
+        total: swift_paxos_best_total,
+        leader: swift_paxos_leader,
+        quorum: swift_paxos_fixed_fast_quorum,
+        latencies: swift_paxos_latencies,
+        expects_slow_acks: swift_paxos_slow_acks,
+    };
+    for leader in alive.iter().copied() {
+        // Farthest-from-everyone first. Choosing a far candidate makes `fast` jump, so the
+        // bound goes tight at once: trying them first rejects the branches containing one at
+        // shallow depth instead of leaf by leaf. Measured at 33 replicas: 1988 nodes, against
+        // 5750 unsorted and 67136 for the opposite order.
+        //
+        // Distance to the leader is a weaker key (10.7k nodes) -- `fast` is a max over every
+        // requester, so what counts is distance from all of them. Weighting this against the
+        // distance to the replica furthest from the leader does slightly better (1609 at
+        // weight 4), but the best weight differs between topologies, and 400 nodes is under a
+        // millisecond of a 35ms computation.
+        let mut candidates: Vec<usize> = alive.iter().copied().filter(|c| *c != leader).collect();
+        candidates.sort_by_key(|c| {
+            std::cmp::Reverse(
+                (0..nb_processes)
+                    .map(|r| link_rtts[r][*c])
+                    .sum::<Duration>(),
+            )
+        });
+        let Some(slots) = maj_quorum.checked_sub(1).filter(|s| *s <= candidates.len()) else {
+            continue;
+        };
+        let search = SwiftSearch {
+            nb_processes,
+            leader,
+            // `suffix_sorted[start][r]`: the RTTs from `r` to every candidate from `start` on,
+            // sorted, so the `k`-th smallest is a lookup rather than a selection per node.
+            suffix_sorted: (0..=candidates.len())
+                .map(|start| {
+                    (0..nb_processes)
+                        .map(|r| {
+                            let mut rtts: Vec<Duration> = candidates[start..]
+                                .iter()
+                                .map(|c| link_rtts[r][*c])
+                                .collect();
+                            rtts.sort();
+                            rtts
+                        })
+                        .collect()
+                })
+                .collect(),
+            mpaxos: swift_mpaxos_latencies[leader].clone(),
+            candidates,
+            link_rtts,
+        };
+        let fast: Vec<Duration> = (0..nb_processes).map(|r| link_rtts[r][leader]).collect();
+        search.explore(0, slots, fast, &mut vec![leader], &mut best);
     }
 
     SwiftPaxosPlan {
-        leader: swift_paxos_leader,
-        fixed_fast_quorum: swift_paxos_fixed_fast_quorum,
-        latencies: swift_paxos_latencies,
-        force_mpaxos: swift_paxos_force_mpaxos,
+        leader: best.leader,
+        fixed_fast_quorum: best.quorum,
+        latencies: best.latencies,
+        expects_slow_acks: best.expects_slow_acks,
+    }
+}
+
+/// The best (leader, quorum) seen so far, and what it costs every process.
+struct SwiftBest {
+    total: Duration,
+    leader: usize,
+    quorum: Option<BitSet>,
+    latencies: Vec<Duration>,
+    expects_slow_acks: BitSet,
+}
+
+/// Everything that does not change while one leader's quorums are enumerated.
+struct SwiftSearch<'a> {
+    nb_processes: usize,
+    leader: usize,
+    candidates: Vec<usize>,
+    suffix_sorted: Vec<Vec<Vec<Duration>>>,
+    /// `mpaxos[r]`: what `r` pays to go through this leader instead of the fast route.
+    mpaxos: Vec<Duration>,
+    link_rtts: &'a [Vec<Duration>],
+}
+
+impl SwiftSearch<'_> {
+    /// Chooses `slots` more members from `candidates[start..]`, keeping `best` up to date.
+    /// `fast[r]` is `r`'s cost to reach everyone chosen so far.
+    fn explore(
+        &self,
+        start: usize,
+        slots: usize,
+        fast: Vec<Duration>,
+        chosen: &mut Vec<usize>,
+        best: &mut SwiftBest,
+    ) {
+        if slots == 0 {
+            let total = (0..self.nb_processes)
+                .map(|r| fast[r].min(self.mpaxos[r]))
+                .sum();
+            if total < best.total {
+                *best = SwiftBest {
+                    total,
+                    leader: self.leader,
+                    quorum: Some(BitSet::from_iter(chosen.iter().copied())),
+                    latencies: (0..self.nb_processes)
+                        .map(|r| fast[r].min(self.mpaxos[r]))
+                        .collect(),
+                    // Ties go to the fast route.
+                    expects_slow_acks: (0..self.nb_processes)
+                        .filter(|&r| self.mpaxos[r] < fast[r])
+                        .collect(),
+                };
+            }
+            return;
+        }
+
+        // Every completion of this partial quorum costs at least this much.
+        let bound: Duration = (0..self.nb_processes)
+            .map(|r| {
+                let still_to_come = self.suffix_sorted[start][r][slots - 1];
+                fast[r].max(still_to_come).min(self.mpaxos[r])
+            })
+            .sum();
+        if bound >= best.total {
+            return;
+        }
+
+        // Leave enough candidates behind to fill the remaining seats.
+        for next in start..=self.candidates.len() - slots {
+            let member = self.candidates[next];
+            let extended = (0..self.nb_processes)
+                .map(|r| fast[r].max(self.link_rtts[r][member]))
+                .collect();
+            chosen.push(member);
+            self.explore(next + 1, slots - 1, extended, chosen, best);
+            chosen.pop();
+        }
     }
 }
 
@@ -1340,5 +1428,73 @@ pub fn kcensus_plan(
         graphs: propagation_graphs,
         topology,
         latencies: kcensus_latencies,
+    }
+}
+
+#[cfg(test)]
+mod swift_search_tests {
+    use super::*;
+    use itertools::Itertools;
+
+    /// What a (leader, quorum) pair costs everyone, recomputed from the topology rather than
+    /// from anything the search builds, so the two are independent.
+    fn cost(topology: &Topology, quorum: &[usize], leader: usize) -> Duration {
+        let n = topology.nb_processes;
+        let maj = topology.nb_replicas - (topology.nb_replicas - 1) / 2;
+        (0..n)
+            .map(|r| {
+                let fast = quorum
+                    .iter()
+                    .map(|&q| topology.link_latency(r, q) + topology.link_latency(q, r))
+                    .max()
+                    .unwrap();
+                let mut through_leader: Vec<Duration> = topology
+                    .alive_replicas
+                    .iter()
+                    .map(|replica| {
+                        topology.link_latency(r, replica).max(
+                            topology.link_latency(r, leader)
+                                + topology.link_latency(leader, replica),
+                        ) + topology.link_latency(replica, r)
+                    })
+                    .collect();
+                through_leader.sort();
+                fast.min(through_leader[maj - 1])
+            })
+            .sum()
+    }
+
+    /// The plan must be at least as good as every (leader, quorum) pair there is -- which is
+    /// what "exhaustive" means, and what the pruning has to preserve.
+    fn assert_optimal(config: &str) {
+        let topology = Topology::from_path(&config.to_string(), Vec::new(), None);
+        let tables = LatencyTables::new(&topology, false);
+        let plan = swift_paxos_plan(&topology, &tables);
+        let found: Duration = plan.latencies.iter().sum();
+
+        let maj = topology.nb_replicas - (topology.nb_replicas - 1) / 2;
+        let alive: Vec<usize> = topology.alive_replicas.iter().collect();
+        let mut brute = Duration::MAX;
+        for quorum in alive.iter().copied().combinations(maj) {
+            for leader in quorum.iter().copied() {
+                brute = brute.min(cost(&topology, &quorum, leader));
+            }
+        }
+        assert!(
+            found <= brute,
+            "{config}: search found {found:?}, brute force found {brute:?}"
+        );
+    }
+
+    #[test]
+    fn search_matches_brute_force() {
+        for config in [
+            "configs/aws-ring-7.toml",
+            "configs/aws-east-asia-7.toml",
+            "configs/aws-europe-7.toml",
+            "configs/aws-north-america-7.toml",
+        ] {
+            assert_optimal(config);
+        }
     }
 }
