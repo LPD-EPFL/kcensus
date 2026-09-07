@@ -1,17 +1,28 @@
 #!/usr/bin/env bash
 
-# Verify that KCensus instances have all been terminated.
+# Verify that KCensus instances have all been terminated, and optionally terminate them.
 
 set -u
 
 RUN_ID=""
+TERMINATE=0
+TERMINATE_ID=""
 
 function usage() {
   cat <<'EOF'
-Usage: ./check-aws-cleanup.sh [--run-id ID]
+Usage: ./check-aws-cleanup.sh [--run-id ID] [--terminate [INSTANCE_ID]]
 
 Checks enabled AWS regions for non-terminated KCensus instances. With --run-id, checks only
 instances belonging to that ID; otherwise, checks every KCensus instance in the account.
+
+  --terminate [INSTANCE_ID]
+               Terminate what is found, instead of only reporting it. Use after an interrupted
+               `terraform apply`, whose instances Terraform may not have recorded in its state:
+               those keep their security group alive, so a later `destroy` hangs on it until it
+               times out. Terminating them lets the destroy through.
+
+               Given an instance id, terminates only that one -- every region is still scanned,
+               to find where it lives, and everything found is still listed.
 EOF
 }
 
@@ -21,6 +32,16 @@ while [ $# -gt 0 ]; do
       [ $# -ge 2 ] || { echo "Error: --run-id requires a value." >&2; exit 2; }
       RUN_ID="$2"
       shift 2
+      ;;
+    --terminate)
+      TERMINATE=1
+      # An instance id may follow, to terminate only that one. Another flag, or nothing, leaves
+      # every instance found targeted.
+      if [ $# -ge 2 ] && [[ "$2" =~ ^i-[0-9a-f]+$ ]]; then
+        TERMINATE_ID="$2"
+        shift
+      fi
+      shift
       ;;
     -h|--help)
       usage
@@ -55,6 +76,7 @@ fi
 
 found=0
 errors=0
+terminated=0
 
 filters=(
   'Name=tag:Name,Values=kcensus-*'
@@ -79,7 +101,8 @@ if [ -n "$RUN_ID" ]; then
 fi
 
 for region in $regions; do
-  # KCensus has no AMI or Terraform deployment in these regions.
+  # Unreachable at the time of writing, so every call to them hangs until it times out. No
+  # deployment targets them either, so there is nothing to find.
   case "$region" in
     me-south-1|me-central-1) continue ;;
   esac
@@ -102,6 +125,29 @@ for region in $regions; do
     while IFS= read -r instance; do
       echo "  $instance"
     done <<< "$instances"
+
+    if [ "$TERMINATE" -eq 1 ]; then
+      ids=$(echo "$instances" | awk '{print $1}')
+      if [ -n "$TERMINATE_ID" ]; then
+        ids=$(echo "$ids" | grep -Fx "$TERMINATE_ID" || true)
+      fi
+    fi
+    if [ "$TERMINATE" -eq 1 ] && [ -n "$ids" ]; then
+      # shellcheck disable=SC2086 -- the ids are a deliberate argument list.
+      if aws ec2 terminate-instances \
+          --region "$region" \
+          --instance-ids $ids \
+          --query 'TerminatingInstances[].InstanceId' \
+          --output text \
+          --cli-connect-timeout 5 \
+          --cli-read-timeout 20 >/dev/null; then
+        terminated=1
+        echo "  -> termination requested"
+      else
+        echo "WARNING: Could not terminate instances in $region." >&2
+        errors=1
+      fi
+    fi
   fi
 done
 
@@ -109,12 +155,31 @@ if [ "$errors" -ne 0 ]; then
   echo "Cleanup could not be verified because at least one region could not be inspected." >&2
   exit 2
 fi
+if [ -n "$TERMINATE_ID" ] && [ "$terminated" -eq 0 ]; then
+  echo "Error: $TERMINATE_ID was not found in any region." >&2
+  exit 1
+fi
 if [ "$found" -ne 0 ]; then
+  if [ "$terminated" -ne 0 ]; then
+    echo "Re-run until nothing is listed before destroying: a security group is only released"
+    echo "once its instances reach 'terminated', not 'shutting-down'."
+    exit 0
+  fi
   if [ -n "$RUN_ID" ]; then
     echo "Non-terminated instances remain for run ID '$RUN_ID'." >&2
   else
     echo "Non-terminated KCensus instances remain." >&2
   fi
+  cat >&2 <<'HINT'
+
+Tear them down with:
+  ./eval.sh destroy <terraform-var-file> <experiment-id>
+
+If that hangs on a security group, some of these are not in Terraform's state -- an interrupted
+apply leaves instances it never recorded, and they hold the group open. Terminate them directly,
+then let the destroy finish:
+  ./check-aws-cleanup.sh --terminate <instance-id>   # the i-xxx above; omit it to take all
+HINT
   exit 1
 fi
 
