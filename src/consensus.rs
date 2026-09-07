@@ -34,6 +34,10 @@ pub use shard_pool::DEFAULT_SHARD_POOL_SIZE;
 /// Throughput saturation can cause thousands of false reports.
 pub(crate) const DEADLOCK_REPORT_LIMIT: usize = 10;
 
+/// Capacity a pooled shard's tables are shrunk back to when it falls asleep, so a shard
+/// that served a hot key does not carry its tables into the cold keys that reuse it.
+const IDLE_CAPACITY: usize = 3;
+
 pub(crate) struct ConsensusShard<AlgoSettings, AlgoRoundState> {
     // Settings
     process_count: usize,
@@ -430,6 +434,9 @@ where
     #[inline]
     fn fall_asleep(&mut self) -> SleepingShard {
         debug_assert!(self.can_sleep());
+        self.queued_commands.shrink_to(IDLE_CAPACITY);
+        self.queued_messages.shrink_to(IDLE_CAPACITY);
+        self.my_queued_commands.shrink_to(IDLE_CAPACITY);
         SleepingShard {
             next_uid: self.next_uid,
             slot: self.slot,

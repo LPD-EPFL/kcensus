@@ -17,7 +17,7 @@ use crate::consensus::kcensus::round_state::KCensusRoundState;
 use crate::consensus::message::ConsensusMsg::{Commit, KCensusM};
 use crate::consensus::message::{CommandBatch, ConsensusMessage};
 use crate::consensus::read_tracker::ReadTracker;
-use crate::consensus::{Consensus, ConsensusShard, ConsensusShardTrait};
+use crate::consensus::{Consensus, ConsensusShard, ConsensusShardTrait, IDLE_CAPACITY};
 use crate::multi_sink::{MultiSink, ShardMultiSink};
 use crate::topology::Topology;
 use log::{debug, info, trace};
@@ -66,11 +66,11 @@ impl KCensusShard {
 
             next_uid: 2 * my_pid,
             slot: 0,
-            queued_commands: HashMap::with_capacity(process_count),
+            queued_commands: HashMap::with_capacity(IDLE_CAPACITY),
             last_v: None,
             slot_left_fast_path: false,
 
-            queued_messages: VecDeque::with_capacity(process_count),
+            queued_messages: VecDeque::with_capacity(IDLE_CAPACITY),
             my_queued_commands: VecDeque::new(),
 
             read_tracker: ReadTracker::new(majority),

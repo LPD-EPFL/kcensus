@@ -1,13 +1,13 @@
 use crate::consensus::message::ConsensusMsg::{Commit, PaxosM};
 use crate::consensus::message::{CommandBatch, ConsensusMessage};
-use crate::consensus::paxos_family::PFModeSetting::{
-    EPaxos, MultiPaxos, MultiPaxos3P, Pando, SwiftPaxos,
-};
 use crate::consensus::paxos_family::message::PaxosMsg::{Accept, ForwardRequest, Prepare};
 use crate::consensus::paxos_family::message::{PaxosMsg, PaxosRound};
 use crate::consensus::paxos_family::round_state::PaxosFamilyRoundState;
+use crate::consensus::paxos_family::PFModeSetting::{
+    EPaxos, MultiPaxos, MultiPaxos3P, Pando, SwiftPaxos,
+};
 use crate::consensus::read_tracker::ReadTracker;
-use crate::consensus::{Consensus, ConsensusShard, ConsensusShardTrait};
+use crate::consensus::{Consensus, ConsensusShard, ConsensusShardTrait, IDLE_CAPACITY};
 use crate::multi_sink::{MultiSink, ShardMultiSink};
 use crate::topology::Topology;
 use bit_set::BitSet;
@@ -72,11 +72,11 @@ impl PaxosFamilyShard {
 
             next_uid: 2 * my_pid,
             slot: 0,
-            queued_commands: HashMap::with_capacity(process_count),
+            queued_commands: HashMap::with_capacity(IDLE_CAPACITY),
             last_v: None,
             slot_left_fast_path: false,
 
-            queued_messages: VecDeque::with_capacity(process_count),
+            queued_messages: VecDeque::with_capacity(IDLE_CAPACITY),
             my_queued_commands: VecDeque::new(),
 
             read_tracker: ReadTracker::new(majority),

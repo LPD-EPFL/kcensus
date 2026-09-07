@@ -80,6 +80,10 @@ impl SleepingDepShard {
     }
 }
 
+/// Capacity a pooled shard's tables are shrunk back to when it falls asleep, so a shard
+/// that served a hot key does not carry its tables into the cold keys that reuse it.
+const IDLE_CAPACITY: usize = 2;
+
 pub(crate) struct DepShard {
     // Settings
     process_count: usize,
@@ -1030,6 +1034,9 @@ impl PooledShard for DepShard {
         );
         let watermark = std::mem::replace(&mut self.executed, DepSet::new(self.process_count));
         self.seen = DepSet::new(self.process_count);
+        self.instances.shrink_to(IDLE_CAPACITY);
+        self.deferred.shrink_to(IDLE_CAPACITY);
+        self.parked_accepts.shrink_to(IDLE_CAPACITY);
         SleepingDepShard {
             next_uid: self.next_uid,
             next_read_id: self.reads.next_id(),
