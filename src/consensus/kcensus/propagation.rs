@@ -48,30 +48,14 @@ struct PropagationGraph {
     leader: ProcId,
 }
 
+/// KCensus' plan: the propagation graph per proposer, and the latency each process should
+/// expect. Produced by [`kcensus_plan`]; the other algorithms have their own plan structs and
+/// never build these graphs.
 #[derive(Debug)]
 pub struct PropagationGraphs {
     graphs: Vec<PropagationGraph>,
     topology: Topology,
-    pub link_rtts: Vec<Vec<Duration>>,
-    pub path_rtts: Vec<Vec<Duration>>,
-    pub min_effort_latencies: Vec<Duration>,
-    pub kcensus_latencies: Vec<Duration>,
-    pub paxos_latencies: Vec<Duration>,
-    pub paxos_committers: Vec<ProcId>,
-    pub pando_latencies: Vec<Duration>,
-    pub pando_committers: Vec<ProcId>,
-    pub pando_delegates: Vec<ProcId>,
-    pub epaxos_latencies: Vec<Duration>,
-    pub epaxos_committers: Vec<ProcId>,
-    pub multi_paxos_latencies: Vec<Vec<Duration>>,
-    pub multi_paxos_leaders: Vec<usize>,
-    pub multi_paxos_3p_latencies: Vec<Vec<Duration>>,
-    pub multi_paxos_3p_committers: Vec<Vec<ProcId>>,
-    pub multi_paxos_3p_leaders: Vec<usize>,
-    pub swift_paxos_leader: usize,
-    pub swift_paxos_fixed_fast_quorum: Option<BitSet>,
-    pub swift_paxos_latencies: Vec<Duration>,
-    pub swift_paxos_force_mpaxos: BitSet,
+    pub latencies: Vec<Duration>,
 }
 
 impl PropagationGraphs {
@@ -221,22 +205,22 @@ fn are_compatible(
 /// Built once and shared. Several are `O(n³)`, and the cost of *not* sharing them is on
 /// record: recomputing one per (quorum, leader, requester) is what made the SwiftPaxos
 /// search take 70s at 31 replicas.
-struct LatencyTables {
-    nb_processes: usize,
-    max_quorum: usize,
-    maj_quorum: usize,
-    min_quorum: usize,
-    path_latencies: Vec<Vec<Duration>>,
-    prev_dest: Vec<Vec<usize>>,
-    next_src: Vec<Vec<usize>>,
-    link_rtts: Vec<Vec<Duration>>,
-    path_rtts: Vec<Vec<Duration>>,
-    quorum_3p_path_rtts: Vec<Vec<Vec<Duration>>>,
-    quorum_3p_link_rtts: Vec<Vec<Vec<Duration>>>,
+pub struct LatencyTables {
+    pub nb_processes: usize,
+    pub max_quorum: usize,
+    pub maj_quorum: usize,
+    pub min_quorum: usize,
+    pub path_latencies: Vec<Vec<Duration>>,
+    pub prev_dest: Vec<Vec<usize>>,
+    pub next_src: Vec<Vec<usize>>,
+    pub link_rtts: Vec<Vec<Duration>>,
+    pub path_rtts: Vec<Vec<Duration>>,
+    pub quorum_3p_path_rtts: Vec<Vec<Vec<Duration>>>,
+    pub quorum_3p_link_rtts: Vec<Vec<Vec<Duration>>>,
 }
 
 impl LatencyTables {
-    fn new(topology: &Topology, shortest_paths: bool) -> Self {
+    pub fn new(topology: &Topology, shortest_paths: bool) -> Self {
         let nb_processes = topology.nb_processes;
         let max_faults = (topology.nb_replicas - 1) / 2;
         let max_quorum = topology.nb_replicas - max_faults;
@@ -380,49 +364,44 @@ impl LatencyTables {
     }
 }
 
-struct MinEffortPlan {
-    latencies: Vec<Duration>,
+pub struct MinEffortPlan {
+    pub latencies: Vec<Duration>,
     /// Never read; kept because the KCensus assert is stated in terms of the pair.
     _committers: Vec<ProcId>,
 }
 
-struct PaxosPlan {
-    latencies: Vec<Duration>,
-    committers: Vec<ProcId>,
+pub struct PaxosPlan {
+    pub latencies: Vec<Duration>,
+    pub committers: Vec<ProcId>,
 }
 
-struct PandoPlan {
-    latencies: Vec<Duration>,
-    committers: Vec<ProcId>,
-    delegates: Vec<ProcId>,
+pub struct PandoPlan {
+    pub latencies: Vec<Duration>,
+    pub committers: Vec<ProcId>,
+    pub delegates: Vec<ProcId>,
 }
 
-struct EPaxosPlan {
-    latencies: Vec<Duration>,
-    committers: Vec<ProcId>,
+pub struct EPaxosPlan {
+    pub latencies: Vec<Duration>,
+    pub committers: Vec<ProcId>,
 }
 
-struct MultiPaxosPlan {
-    latencies: Vec<Vec<Duration>>,
-    leaders: Vec<usize>,
+pub struct MultiPaxosPlan {
+    pub latencies: Vec<Vec<Duration>>,
+    pub leaders: Vec<usize>,
 }
 
-struct MultiPaxos3PPlan {
-    latencies: Vec<Vec<Duration>>,
-    committers: Vec<Vec<ProcId>>,
-    leaders: Vec<usize>,
+pub struct MultiPaxos3PPlan {
+    pub latencies: Vec<Vec<Duration>>,
+    pub committers: Vec<Vec<ProcId>>,
+    pub leaders: Vec<usize>,
 }
 
-struct SwiftPaxosPlan {
-    leader: usize,
-    fixed_fast_quorum: Option<BitSet>,
-    latencies: Vec<Duration>,
-    force_mpaxos: BitSet,
-}
-
-struct KCensusPlan {
-    graphs: Vec<PropagationGraph>,
-    latencies: Vec<Duration>,
+pub struct SwiftPaxosPlan {
+    pub leader: usize,
+    pub fixed_fast_quorum: Option<BitSet>,
+    pub latencies: Vec<Duration>,
+    pub force_mpaxos: BitSet,
 }
 
 /// A process that casts no vote reaches the protocol through a replica, and takes the best
@@ -438,7 +417,7 @@ fn best_committer(topology: &Topology, nb_processes: usize, mut better: impl FnM
     }
 }
 
-fn min_effort_plan(topology: &Topology, t: &LatencyTables) -> MinEffortPlan {
+pub fn min_effort_plan(topology: &Topology, t: &LatencyTables) -> MinEffortPlan {
     let mut latencies = vec![Duration::MAX; t.nb_processes];
     let mut committers = vec![0usize; t.nb_processes];
     for leader in topology.alive_replicas.iter() {
@@ -459,7 +438,7 @@ fn min_effort_plan(topology: &Topology, t: &LatencyTables) -> MinEffortPlan {
     }
 }
 
-fn paxos_plan(topology: &Topology, t: &LatencyTables) -> PaxosPlan {
+pub fn paxos_plan(topology: &Topology, t: &LatencyTables) -> PaxosPlan {
     let mut latencies = vec![Duration::MAX; t.nb_processes];
     let mut committers = vec![0usize; t.nb_processes];
     for leader in topology.alive_replicas.iter() {
@@ -479,7 +458,7 @@ fn paxos_plan(topology: &Topology, t: &LatencyTables) -> PaxosPlan {
     }
 }
 
-fn pando_plan(topology: &Topology, t: &LatencyTables) -> PandoPlan {
+pub fn pando_plan(topology: &Topology, t: &LatencyTables) -> PandoPlan {
     let mut latencies = vec![Duration::MAX; t.nb_processes];
     let mut committers = vec![0usize; t.nb_processes];
     let mut delegates = vec![0usize; t.nb_processes];
@@ -511,7 +490,7 @@ fn pando_plan(topology: &Topology, t: &LatencyTables) -> PandoPlan {
 
 /// Takes `paxos` because EPaxos falls back to the Paxos latency when there are too few live
 /// replicas for its own quorum -- the one place two algorithms were coupled.
-fn epaxos_plan(topology: &Topology, t: &LatencyTables, paxos: &PaxosPlan) -> EPaxosPlan {
+pub fn epaxos_plan(topology: &Topology, t: &LatencyTables, paxos: &PaxosPlan) -> EPaxosPlan {
     let mut latencies = vec![Duration::MAX; t.nb_processes];
     let mut committers = vec![0usize; t.nb_processes];
     let e_paxos_quorum = ((topology.nb_replicas * 3 - 1) / 4).max(t.maj_quorum);
@@ -536,7 +515,7 @@ fn epaxos_plan(topology: &Topology, t: &LatencyTables, paxos: &PaxosPlan) -> EPa
     }
 }
 
-fn multi_paxos_plan(topology: &Topology, t: &LatencyTables) -> MultiPaxosPlan {
+pub fn multi_paxos_plan(topology: &Topology, t: &LatencyTables) -> MultiPaxosPlan {
     let mut latencies = vec![vec![Duration::MAX; t.nb_processes]; t.nb_processes];
     for leader in topology.alive_replicas.iter() {
         latencies[leader] = (0..t.nb_processes)
@@ -550,7 +529,7 @@ fn multi_paxos_plan(topology: &Topology, t: &LatencyTables) -> MultiPaxosPlan {
     MultiPaxosPlan { latencies, leaders }
 }
 
-fn multi_paxos_3p_plan(topology: &Topology, t: &LatencyTables) -> MultiPaxos3PPlan {
+pub fn multi_paxos_3p_plan(topology: &Topology, t: &LatencyTables) -> MultiPaxos3PPlan {
     let mut latencies = vec![vec![Duration::MAX; t.nb_processes]; t.nb_processes];
     let mut committers = vec![vec![0; t.nb_processes]; t.nb_processes];
     for leader in topology.alive_replicas.iter() {
@@ -582,7 +561,7 @@ fn multi_paxos_3p_plan(topology: &Topology, t: &LatencyTables) -> MultiPaxos3PPl
     }
 }
 
-fn swift_paxos_plan(topology: &Topology, t: &LatencyTables) -> SwiftPaxosPlan {
+pub fn swift_paxos_plan(topology: &Topology, t: &LatencyTables) -> SwiftPaxosPlan {
     let nb_processes = t.nb_processes;
     let maj_quorum = t.maj_quorum;
     let link_rtts = &t.link_rtts;
@@ -726,7 +705,11 @@ fn swift_paxos_plan(topology: &Topology, t: &LatencyTables) -> SwiftPaxosPlan {
     }
 }
 
-fn kcensus_plan(topology: &Topology, t: &LatencyTables, min_effort: &MinEffortPlan) -> KCensusPlan {
+pub fn kcensus_plan(
+    topology: Topology,
+    t: &LatencyTables,
+    min_effort: &MinEffortPlan,
+) -> PropagationGraphs {
     let nb_processes = t.nb_processes;
     let max_quorum = t.max_quorum;
     let min_quorum = t.min_quorum;
@@ -1353,75 +1336,9 @@ fn kcensus_plan(topology: &Topology, t: &LatencyTables, min_effort: &MinEffortPl
     }
     assert_eq!(sum_of_latencies, best.sum_of_latencies);
 
-    KCensusPlan {
-        graphs: propagation_graphs,
-        latencies: kcensus_latencies,
-    }
-}
-
-pub fn compute_propagation_graphs(
-    topology: Topology,
-    kcensus_graph: bool,
-    swift_paxos_quorums: bool,
-    shortest_paths: bool,
-) -> PropagationGraphs {
-    let tables = LatencyTables::new(&topology, shortest_paths);
-
-    let min_effort = min_effort_plan(&topology, &tables);
-    let paxos = paxos_plan(&topology, &tables);
-    let pando = pando_plan(&topology, &tables);
-    let epaxos = epaxos_plan(&topology, &tables, &paxos);
-    let multi_paxos = multi_paxos_plan(&topology, &tables);
-    let multi_paxos_3p = multi_paxos_3p_plan(&topology, &tables);
-
-    // Gated: each is the expensive half of one algorithm, and one algorithm runs per process.
-    let swift_paxos = if swift_paxos_quorums {
-        swift_paxos_plan(&topology, &tables)
-    } else {
-        SwiftPaxosPlan {
-            leader: 0,
-            fixed_fast_quorum: None,
-            latencies: vec![Duration::MAX; tables.nb_processes],
-            force_mpaxos: BitSet::with_capacity(tables.nb_processes),
-        }
-    };
-    let kcensus = if kcensus_graph {
-        kcensus_plan(&topology, &tables, &min_effort)
-    } else {
-        KCensusPlan {
-            graphs: Vec::with_capacity(tables.nb_processes),
-            latencies: Vec::with_capacity(tables.nb_processes),
-        }
-    };
-
-    let LatencyTables {
-        link_rtts,
-        path_rtts,
-        ..
-    } = tables;
-
     PropagationGraphs {
-        graphs: kcensus.graphs,
+        graphs: propagation_graphs,
         topology,
-        link_rtts,
-        path_rtts,
-        min_effort_latencies: min_effort.latencies,
-        kcensus_latencies: kcensus.latencies,
-        paxos_latencies: paxos.latencies,
-        paxos_committers: paxos.committers,
-        pando_latencies: pando.latencies,
-        pando_committers: pando.committers,
-        pando_delegates: pando.delegates,
-        epaxos_latencies: epaxos.latencies,
-        epaxos_committers: epaxos.committers,
-        multi_paxos_latencies: multi_paxos.latencies,
-        multi_paxos_leaders: multi_paxos.leaders,
-        multi_paxos_3p_latencies: multi_paxos_3p.latencies,
-        multi_paxos_3p_committers: multi_paxos_3p.committers,
-        multi_paxos_3p_leaders: multi_paxos_3p.leaders,
-        swift_paxos_leader: swift_paxos.leader,
-        swift_paxos_fixed_fast_quorum: swift_paxos.fixed_fast_quorum,
-        swift_paxos_latencies: swift_paxos.latencies,
-        swift_paxos_force_mpaxos: swift_paxos.force_mpaxos,
+        latencies: kcensus_latencies,
     }
 }

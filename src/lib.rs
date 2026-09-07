@@ -1,7 +1,10 @@
 use crate::consensus::command::Command;
 use crate::consensus::deps::{DepConsensus, DepMode};
-use crate::consensus::kcensus::propagation::compute_propagation_graphs;
 use crate::consensus::kcensus::KCensus;
+use crate::consensus::kcensus::propagation::{
+    LatencyTables, epaxos_plan, kcensus_plan, min_effort_plan, multi_paxos_3p_plan,
+    multi_paxos_plan, pando_plan, paxos_plan, swift_paxos_plan,
+};
 use crate::consensus::paxos_family::{PFModeSetting, PaxosFamily};
 use crate::delayer::Delayer;
 use crate::topology::Topology;
@@ -179,12 +182,22 @@ pub async fn run() -> io::Result<()> {
     }
     println!("Region: {}", topology.regions[my_pid]);
     let start = Instant::now();
-    let propagation_graphs = compute_propagation_graphs(
-        topology.clone(),
-        algo == Algo::KCensus,
-        algo == Algo::SwiftPaxos,
+    let tables = LatencyTables::new(
+        &topology,
         matches!(algo, Algo::KCensus | Algo::WeakReplication),
     );
+    // The only two expensive plans (35ms and 150ms at 31 replicas, against ~1ms for the rest,
+    // which are planned in their own arm). They go before `connect_all`, the barrier where
+    // processes wait for each other's "Ready", or the run starts desynchronised.
+    let kcensus_graphs = (algo == Algo::KCensus).then(|| {
+        kcensus_plan(
+            topology.clone(),
+            &tables,
+            &min_effort_plan(&topology, &tables),
+        )
+    });
+    let swift = matches!(algo, Algo::SwiftPaxos | Algo::SwiftPaxosSlots)
+        .then(|| swift_paxos_plan(&topology, &tables));
     println!("Computed propagation graphs in {:?}", start.elapsed());
     let process_count = topology.regions.len();
 
@@ -260,14 +273,15 @@ pub async fn run() -> io::Result<()> {
     let expected_latency = match algo {
         Algo::KCensus => {
             let mut leader_prio: Vec<_> = (0..process_count).collect();
-            leader_prio.sort_by_key(|pid| propagation_graphs.kcensus_latencies[*pid]);
-            let expected_latency = propagation_graphs.kcensus_latencies[my_pid];
+            let graphs = kcensus_graphs.expect("planned before the barrier");
+            leader_prio.sort_by_key(|pid| graphs.latencies[*pid]);
+            let expected_latency = graphs.latencies[my_pid];
             let mut consensus_obj = KCensus::new(
                 &topology,
                 my_pid,
                 consensus_msg_sinks,
                 leader_prio,
-                propagation_graphs,
+                graphs,
                 shards,
                 shard_pool,
             );
@@ -282,8 +296,9 @@ pub async fn run() -> io::Result<()> {
         }
         Algo::Paxos => {
             let mut leader_prio: Vec<_> = topology.alive_replicas.iter().collect();
-            leader_prio.sort_by_key(|pid| propagation_graphs.paxos_latencies[*pid]);
-            let committers = propagation_graphs.paxos_committers;
+            let paxos = paxos_plan(&topology, &tables);
+            leader_prio.sort_by_key(|pid| paxos.latencies[*pid]);
+            let committers = paxos.committers;
             let mut consensus_obj = PaxosFamily::new(
                 &topology,
                 my_pid,
@@ -301,12 +316,13 @@ pub async fn run() -> io::Result<()> {
                 deadlock_deadline,
             );
             let _ = tokio::join!(app.run(), client.run(workload), consensus);
-            propagation_graphs.paxos_latencies[my_pid]
+            paxos.latencies[my_pid]
         }
         Algo::Pando => {
             let mut leader_prio: Vec<_> = topology.alive_replicas.iter().collect();
-            leader_prio.sort_by_key(|pid| propagation_graphs.pando_latencies[*pid]);
-            let committers = propagation_graphs.pando_committers;
+            let pando = pando_plan(&topology, &tables);
+            leader_prio.sort_by_key(|pid| pando.latencies[*pid]);
+            let committers = pando.committers;
             let mut consensus_obj = PaxosFamily::new(
                 &topology,
                 my_pid,
@@ -314,7 +330,7 @@ pub async fn run() -> io::Result<()> {
                 leader_prio,
                 Some(committers),
                 PFModeSetting::Pando {
-                    delegates: Arc::new(propagation_graphs.pando_delegates.clone()),
+                    delegates: Arc::new(pando.delegates.clone()),
                 },
                 shards,
                 shard_pool,
@@ -326,23 +342,25 @@ pub async fn run() -> io::Result<()> {
                 deadlock_deadline,
             );
             let _ = tokio::join!(app.run(), client.run(workload), consensus);
-            propagation_graphs.pando_latencies[my_pid]
+            pando.latencies[my_pid]
         }
         Algo::EPaxos | Algo::SwiftPaxos => {
             let (mode, expected_latency) = if algo == Algo::EPaxos {
+                let epaxos = epaxos_plan(&topology, &tables, &paxos_plan(&topology, &tables));
                 (
                     DepMode::EPaxos {
-                        coordinator: propagation_graphs.epaxos_committers[my_pid],
+                        coordinator: epaxos.committers[my_pid],
                     },
-                    propagation_graphs.epaxos_latencies[my_pid],
+                    epaxos.latencies[my_pid],
                 )
             } else {
+                let swift = swift.as_ref().expect("planned before the barrier");
                 (
                     DepMode::SwiftPaxos {
-                        leader: propagation_graphs.swift_paxos_leader,
-                        quorum: Arc::new(propagation_graphs.swift_paxos_fixed_fast_quorum.clone()),
+                        leader: swift.leader,
+                        quorum: Arc::new(swift.fixed_fast_quorum.clone()),
                     },
-                    propagation_graphs.swift_paxos_latencies[my_pid],
+                    swift.latencies[my_pid],
                 )
             };
             let mut consensus_obj = DepConsensus::new(
@@ -364,8 +382,9 @@ pub async fn run() -> io::Result<()> {
         }
         Algo::EPaxosSlots => {
             let mut leader_prio: Vec<_> = topology.alive_replicas.iter().collect();
-            leader_prio.sort_by_key(|pid| propagation_graphs.epaxos_latencies[*pid]);
-            let committers = propagation_graphs.epaxos_committers;
+            let epaxos = epaxos_plan(&topology, &tables, &paxos_plan(&topology, &tables));
+            leader_prio.sort_by_key(|pid| epaxos.latencies[*pid]);
+            let committers = epaxos.committers;
             let mut consensus_obj = PaxosFamily::new(
                 &topology,
                 my_pid,
@@ -383,17 +402,18 @@ pub async fn run() -> io::Result<()> {
                 deadlock_deadline,
             );
             let _ = tokio::join!(app.run(), client.run(workload), consensus);
-            propagation_graphs.epaxos_latencies[my_pid]
+            epaxos.latencies[my_pid]
         }
         Algo::SwiftPaxosSlots => {
+            let swift = swift.expect("planned before the barrier");
             let mut consensus_obj = PaxosFamily::new(
                 &topology,
                 my_pid,
                 consensus_msg_sinks,
-                vec![propagation_graphs.swift_paxos_leader],
+                vec![swift.leader],
                 None,
                 PFModeSetting::SwiftPaxos {
-                    quorum: Arc::new(propagation_graphs.swift_paxos_fixed_fast_quorum.clone()),
+                    quorum: Arc::new(swift.fixed_fast_quorum.clone()),
                 },
                 shards,
                 shard_pool,
@@ -405,36 +425,27 @@ pub async fn run() -> io::Result<()> {
                 deadlock_deadline,
             );
             let _ = tokio::join!(app.run(), client.run(workload), consensus);
-            println!(
-                "SwiftPaxos fixed quorum: {:?}",
-                propagation_graphs.swift_paxos_fixed_fast_quorum
-            );
-            println!(
-                "SwiftPaxos leader: {:?}",
-                propagation_graphs.swift_paxos_leader
-            );
+            println!("SwiftPaxos fixed quorum: {:?}", swift.fixed_fast_quorum);
+            println!("SwiftPaxos leader: {:?}", swift.leader);
             println!(
                 "Force MPaxos3P at this replica: {:?}",
-                propagation_graphs.swift_paxos_force_mpaxos.contains(my_pid)
+                swift.force_mpaxos.contains(my_pid)
             );
-            propagation_graphs.swift_paxos_latencies[my_pid]
+            swift.latencies[my_pid]
         }
         Algo::MultiPaxos | Algo::MultiPaxos3P => {
             let is_3p = algo == Algo::MultiPaxos3P;
-            let (multi_paxos_latencies, leader_prio) = if is_3p {
-                (
-                    &propagation_graphs.multi_paxos_3p_latencies,
-                    propagation_graphs.multi_paxos_3p_leaders.clone(),
-                )
-            } else {
-                (
-                    &propagation_graphs.multi_paxos_latencies,
-                    propagation_graphs.multi_paxos_leaders.clone(),
-                )
+            let three_phase = is_3p.then(|| multi_paxos_3p_plan(&topology, &tables));
+            let two_phase = (!is_3p).then(|| multi_paxos_plan(&topology, &tables));
+            let (multi_paxos_latencies, leader_prio) = match (&three_phase, &two_phase) {
+                (Some(plan), _) => (&plan.latencies, plan.leaders.clone()),
+                (_, Some(plan)) => (&plan.latencies, plan.leaders.clone()),
+                _ => unreachable!("exactly one of the two is planned"),
             };
             let leader = leader_prio[0];
-            let committers = Some(propagation_graphs.multi_paxos_3p_committers[leader].clone())
-                .take_if(|_| is_3p);
+            let committers = three_phase
+                .as_ref()
+                .map(|plan| plan.committers[leader].clone());
             let mut consensus_obj = PaxosFamily::new(
                 &topology,
                 my_pid,
@@ -467,13 +478,11 @@ pub async fn run() -> io::Result<()> {
                         .alive_replicas
                         .iter()
                         .min_by_key(|&potential_leader| {
-                            propagation_graphs.link_rtts[potential_leader]
-                                .iter()
-                                .sum::<Duration>()
+                            tables.link_rtts[potential_leader].iter().sum::<Duration>()
                         })
                         .expect("There should be a leader");
                     (
-                        propagation_graphs.link_rtts[leader][my_pid] / args.speedup,
+                        tables.link_rtts[leader][my_pid] / args.speedup,
                         (leader != my_pid) as usize,
                         Some(leader),
                     )
@@ -482,7 +491,7 @@ pub async fn run() -> io::Result<()> {
                     let majority = 1 + (topology.nb_replicas / 2);
                     let to_send = majority - topology.alive_replicas.contains(my_pid) as usize;
                     (
-                        propagation_graphs.min_effort_latencies[my_pid],
+                        min_effort_plan(&topology, &tables).latencies[my_pid],
                         to_send,
                         None,
                     )
