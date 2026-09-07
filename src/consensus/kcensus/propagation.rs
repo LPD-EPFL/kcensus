@@ -463,31 +463,39 @@ pub fn compute_propagation_graphs(
         let mut swift_leader_prio: Vec<_> = topology.alive_replicas.iter().collect();
         swift_leader_prio.sort_by_key(|leader| quorum_link_rtts[*leader][maj_quorum - 1]);
 
-        // A replica acts on the leader's proposal only once it also holds the command, and the
-        // command travels straight from the proposer: the leader's accept carries no value, as
-        // in the reference implementation (`afterPropagate`, `swift.go:418`). Adopting the
-        // leader's value is therefore gated by the later of the two paths.
-        let adopt_leader_at = |requester: usize, leader: usize, replica: usize| {
-            topology.link_latency(requester, replica).max(
-                topology.link_latency(requester, leader) + topology.link_latency(leader, replica),
-            )
-        };
         // The route through the leader: a majority acknowledging its accept, three delays.
         // Those acknowledgements are broadcast, as in the reference implementation, so they
         // reach the proposer directly and there is no fourth-delay route relaying them back
         // through the leader — the protocol has no decision message to relay them with.
-        let swift_mpaxos_latency = |requester: usize, leader: usize| {
-            let mut to_requester: Vec<Duration> = topology
-                .alive_replicas
-                .iter()
-                .map(|replica| {
-                    adopt_leader_at(requester, leader, replica)
-                        + topology.link_latency(replica, requester)
-                })
-                .collect();
-            to_requester.sort();
-            to_requester[maj_quorum - 1]
-        };
+        //
+        // A replica acts on the leader's proposal only once it also holds the command, and the
+        // command travels straight from the proposer: the leader's accept carries no value, as
+        // in the reference implementation (`afterPropagate`, `swift.go:418`). Adopting the
+        // leader's value is therefore gated by the later of the two paths, which is the `max`.
+        //
+        // Tabulated rather than computed where it is read: the quorum search below wants one
+        // per (quorum, leader, requester), tens of millions of them over `nb_processes²`
+        // distinct pairs, and each costs an allocation and a sort.
+        let swift_mpaxos_latencies: Vec<Vec<Duration>> = (0..nb_processes)
+            .map(|requester| {
+                (0..nb_processes)
+                    .map(|leader| {
+                        let mut to_requester: Vec<Duration> = topology
+                            .alive_replicas
+                            .iter()
+                            .map(|replica| {
+                                topology.link_latency(requester, replica).max(
+                                    topology.link_latency(requester, leader)
+                                        + topology.link_latency(leader, replica),
+                                ) + topology.link_latency(replica, requester)
+                            })
+                            .collect();
+                        to_requester.sort();
+                        to_requester[maj_quorum - 1]
+                    })
+                    .collect()
+            })
+            .collect();
 
         // Find best swift-paxos strategy, checking fast-paxos quorums first
         let fast_paxos_quorum = (((topology.nb_replicas * 3 - 1) / 4) + 1).max(maj_quorum);
@@ -506,7 +514,7 @@ pub fn compute_propagation_graphs(
                     requester_quorum_rtts.sort();
                     let fast_paxos_latency = requester_quorum_rtts[fast_paxos_quorum - 1]
                         .max(link_rtts[requester][leader]);
-                    let mpaxos_latency = swift_mpaxos_latency(requester, leader);
+                    let mpaxos_latency = swift_mpaxos_latencies[requester][leader];
 
                     final_latencies[requester] = if fast_paxos_latency < mpaxos_latency {
                         fast_paxos_latency
@@ -540,21 +548,26 @@ pub fn compute_propagation_graphs(
 
         // Now checking fixed majority quorums
         let quorums = swift_leader_prio.iter().copied().combinations(maj_quorum);
+        let mut quorum_latencies = vec![Duration::ZERO; nb_processes];
         for quorum in quorums {
+            // Reaching every member of the quorum costs the same whoever leads it, so this is
+            // computed once per quorum rather than once per (quorum, leader). It is the same
+            // arithmetic either way -- the leader loop below starts from a copy -- but it was
+            // `maj_quorum` times the work of everything else in the search.
+            for requester in 0..nb_processes {
+                quorum_latencies[requester] = quorum
+                    .iter()
+                    .copied()
+                    .map(|replica| link_rtts[requester][replica])
+                    .max()
+                    .unwrap();
+            }
             for leader in quorum.iter().copied() {
-                let mut latencies = vec![Duration::ZERO; nb_processes];
-                for requester in 0..nb_processes {
-                    latencies[requester] = quorum
-                        .iter()
-                        .copied()
-                        .map(|replica| link_rtts[requester][replica])
-                        .max()
-                        .unwrap();
-                }
+                let mut latencies = quorum_latencies.clone();
 
                 let mut use_mpaxos = BitSet::with_capacity(nb_processes);
                 for requester in 0..nb_processes {
-                    let mpaxos_latency = swift_mpaxos_latency(requester, leader);
+                    let mpaxos_latency = swift_mpaxos_latencies[requester][leader];
                     if mpaxos_latency < latencies[requester] {
                         use_mpaxos.insert(requester);
                         latencies[requester] = mpaxos_latency;
