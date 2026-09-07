@@ -111,11 +111,32 @@ resource "aws_security_group" "kcensus_sg" {
   }
 }
 
+# Which datacentre a region's instance lands in. Left to AWS it can differ between runs, and
+# inter-zone latency differs by a millisecond or two -- enough to flip a leader or a quorum,
+# both of which are minima over the measured matrix.
+#
+# Pinned by zone *id* rather than name: `us-west-2a` is a different building in every account,
+# `usw2-az1` is the same one everywhere. Only zones offering the instance type are considered,
+# since not all of them do.
+data "aws_ec2_instance_type_offerings" "zones" {
+  filter {
+    name   = "instance-type"
+    values = [var.instance_type]
+  }
+  location_type = "availability-zone-id"
+}
+
+data "aws_subnet" "pinned" {
+  availability_zone_id = sort(data.aws_ec2_instance_type_offerings.zones.locations)[0]
+  default_for_az       = true
+}
+
 resource "aws_instance" "server" {
   ami = local.ami_ids[var.region]
 
   instance_type          = var.instance_type
   key_name               = aws_key_pair.kcensus_key.key_name
+  subnet_id              = data.aws_subnet.pinned.id
   vpc_security_group_ids = [aws_security_group.kcensus_sg.id]
 
   tags = {
