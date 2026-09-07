@@ -62,6 +62,21 @@
           STDERR:
           {{ job_result.stderr | default('NO STDERR CAPTURED') }}
 
+    # `copy` does not create its destination directory. `result_path` is made by the runner
+    # before the play; `failed_path` is not, because it only applies to runs that fail -- so
+    # without this the save below fails on exactly the runs it exists to capture.
+    - name: Create the failed-run directory
+      delegate_to: localhost
+      run_once: true
+      when:
+        - failed_path | length > 0
+        - ansible_play_hosts | map('extract', hostvars, 'job_result')
+          | map(attribute='rc') | reject('equalto', 0) | list | length > 0
+      ansible.builtin.file:
+        path: "{{ failed_path }}"
+        state: directory
+        mode: "0755"
+
     # A deadlock is a distributed symptom, so when any server fails keep *every* server's output,
     # not just the one that panicked.
     - name: Keep every server's output when any server failed
