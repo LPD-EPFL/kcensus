@@ -56,6 +56,9 @@ function run() {
   local ALGO="$2"
   local WRITES="$3"
   local DURATION="$4"
+  # See `local_eval.sh` for the formula: covers the 1.4375x run and the 2.16x deadlock
+  # deadline, and still lets the detector fire before the timeout does.
+  local timeout_s=$(( 30 + 3 * ${DURATION%s} ))
   local INGRESS="$5"
   local THROUGHPUT="$6"
   local FAULTS="$7"
@@ -85,7 +88,7 @@ function run() {
     local time_format='[log=time] Memory (KB): %M, System (s): %S User (s): %U | {"memory": %M, "system": %S, "user": %U}'
     # Figure 11 divides process memory by SHARDS, so every logical shard must have a
     # preallocated physical shard for that normalization to remain meaningful.
-    (timeout 60s /usr/bin/time -f "$time_format" ./kcensus --simulate-delays true -p "$pid" --config "configs/$CONFIG" $CASSANDRA_ARG -a "$ALGO" -w "$WRITES" --duration "$DURATION" -i "$INGRESS" -t "$PER_PROPOSER_THROUGHPUT" -s "$SPEEDUP" $FAULTS_ARG -k "$KEYS" --skew "$SKEW" --shards "$SHARDS" --shard-pool "$SHARDS")>"$LOG_DIR/$pid.stdout" 2>"$LOG_DIR/$pid.stderr" &
+    (timeout "${timeout_s}s" /usr/bin/time -f "$time_format" ./kcensus --simulate-delays true -p "$pid" --config "configs/$CONFIG" $CASSANDRA_ARG -a "$ALGO" -w "$WRITES" --duration "$DURATION" -i "$INGRESS" -t "$PER_PROPOSER_THROUGHPUT" -s "$SPEEDUP" $FAULTS_ARG -k "$KEYS" --skew "$SKEW" --shards "$SHARDS" --shard-pool "$SHARDS")>"$LOG_DIR/$pid.stdout" 2>"$LOG_DIR/$pid.stderr" &
     pids+=($!)
   done
 

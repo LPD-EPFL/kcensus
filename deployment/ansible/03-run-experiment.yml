@@ -30,10 +30,16 @@
 
     # `failed_when: false` keeps every host in the play whatever kcensus returns, so the save
     # tasks below always run. The play is failed explicitly at the end instead.
+    # Same formula as `local_eval.sh`: the binary needs warmup+duration+sustain = 1.4375x
+    # duration and its deadlock detector fires at 2.16x, plus a fixed startup cost. 30s + 3x
+    # duration covers both and leaves the detector to fire first, so a stuck run reports which
+    # shard hung instead of being killed silently.
     - name: Run kcensus
       ansible.builtin.shell:
         cmd: >
-          RUST_BACKTRACE=1 timeout 60s /usr/bin/time -f "[time] Memory(KB): %M"
+          RUST_BACKTRACE=1
+          timeout {{ 30 + 3 * (duration | regex_replace('s$', '') | int) }}s
+          /usr/bin/time -f "[time] Memory(KB): %M"
           ./kcensus --config config.toml -p {{ sub_exp_id }}
           -a "{{ algo }}"
           -w "{{ writes }}"
