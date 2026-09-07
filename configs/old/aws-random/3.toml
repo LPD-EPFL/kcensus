@@ -1,6 +1,0 @@
-regions = ['Jakarta (ap-southeast-3)', 'Thailand (ap-southeast-7)', 'Hong Kong (ap-east-1)']
-raw_latencies = [
-    [0, 40.71, 51],
-    [41.51, 0, 63.73],
-    [51.87, 63.55, 0]
-]

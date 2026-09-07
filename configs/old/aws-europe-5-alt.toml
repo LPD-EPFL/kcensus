@@ -1,8 +1,0 @@
-regions = ['Ireland (eu-west-1)', 'Spain (eu-south-2)', 'Stockholm (eu-north-1)', 'Zurich (eu-central-2)', 'Frankfurt (eu-central-1)']
-raw_latencies = [
-    [0, 29.49, 38.56, 26.88, 26.67],
-    [29.42, 0, 51.88, 29.23, 32.1],
-    [38.68, 52.85, 0, 34.28, 21.08],
-    [26.96, 30.29, 34.11, 0, 14.74],
-    [26.19, 32.95, 21.34, 14.61, 0]
-]
