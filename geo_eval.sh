@@ -267,32 +267,67 @@ function exp-1() {
 
 # Legacy: latency under conflicts. Maps to no figure in the current paper; kept as the
 # starting point for the camera-ready conflicts experiment. Not part of `all`.
-function exp-conflicts() {
-  echo "--- Starting Legacy Conflicts Experiment: Latency under load ---"
+# Experiment 5: contention and load. Feeds no figure yet -- this is the exploratory sweep the
+# conflicts figure will be chosen from. See lib.sh for the parameter lists and why they are wide.
+function exp-5() {
+  echo "--- Starting Experiment 5: Conflicts and load ---"
 
-  local configName="aws-ring-7"
-  local EXPERIMENT_ID; EXPERIMENT_ID="$(experiment_id "exp-conflicts")"
+  local configName="${EXP5_CONFIG}"
+  local EXPERIMENT_ID; EXPERIMENT_ID="$(experiment_id "exp-5")"
   local varFile="${CONFIGS[$configName]}"
 
+  # `local` is dynamically scoped in bash, so `run` sees both of these.
+  #
+  # Own log root: the conflict-free runs at w=1, t=1000, skew=0 would otherwise land on the
+  # exact paths exp-1 owns and overwrite the data behind Figures 1 and 7.
+  local ABSOLUTE_BASE_LOG_DIR="${ABSOLUTE_BASE_LOG_DIR}/exp-5"
+  # Fewer attempts: the top of the throughput ladder is meant to be past what the deployment can
+  # sustain, so failures there are the answer rather than a fault. Five attempts with backoff
+  # would spend eight minutes per failing run.
+  local MAX_ATTEMPTS=2
+
+  mkdir -p "${ABSOLUTE_BASE_LOG_DIR}"
   provision "$varFile" "$EXPERIMENT_ID"
   deploy "$EXPERIMENT_ID"
 
-  for writes in 1; do
-    for skew in 0.5 1 2; do # 0 will have run before
+  local writes throughput algo skew
+  for writes in "${EXP5_WRITES[@]}"; do
+    for throughput in "${EXP5_THROUGHPUTS[@]}"; do
       for algo in "${ALGOS[@]}"; do
-        if [[ "$algo" == "kcensus" ]]; then
-          # Run with conflicts
-          run "$EXPERIMENT_ID" "$configName" "$algo" "$writes" "$DURATION" "exponential" "$THROUGHPUT" "" "$KEYS" "$skew" "$KEYS" "true"
-        fi
-        # Run without conflicts
-        run "$EXPERIMENT_ID" "$configName" "$algo" "$writes" "$DURATION" "exponential" "$THROUGHPUT" "" "$KEYS" "$skew" "$KEYS" "false"
+        # The partitioned baseline. `conflicts=false` gives every proposer a private slice of
+        # the key space and round-robins over it, so the Zipf distribution is never sampled --
+        # which is why this runs once and not once per skew.
+        exp-5-run "$EXPERIMENT_ID" "$configName" "$algo" "$writes" "$throughput" 0 "false"
+        # Every algorithm runs at every skew, Multi-Paxos included. It orders everything at one
+        # leader, so contention should cost it nothing and its line should stay flat -- and the
+        # gap between it and the partitioned baseline is what pipelining, which we did not
+        # implement, would have to close. Worth measuring before deciding to drop it.
+        for skew in "${EXP5_SKEWS[@]}"; do
+          exp-5-run "$EXPERIMENT_ID" "$configName" "$algo" "$writes" "$throughput" "$skew" "true"
+        done
       done
     done
   done
 
   destroy "$varFile" "$EXPERIMENT_ID"
 
-  echo "--- Finished Legacy Conflicts Experiment ---"
+  echo "--- Finished Experiment 5 ---"
+}
+
+# One exp-5 run, skipped rather than fatal when it exhausts its attempts.
+#
+# `run` ends an exhausted run with `exit 1`, which aborts the whole sweep and tears the
+# deployment down. That is right for the paper's experiments, where every run feeds a figure,
+# and wrong here: a run that cannot sustain 8000 req/s is a data point, and losing 500 runs to
+# the last one would be absurd. The subshell keeps that `exit` local, and the ansible playbook
+# has already saved the failed run's output under `failed/`.
+function exp-5-run() {
+  local expId="$1" configName="$2" algo="$3" writes="$4" throughput="$5" skew="$6" conflicts="$7"
+  if ! ( run "$expId" "$configName" "$algo" "$writes" "$DURATION" "exponential" "$throughput" \
+           "" "$KEYS" "$skew" "$KEYS" "$conflicts" ); then
+    echo "--> SKIPPED (not sustainable?): ${algo} w=${writes} t=${throughput}" \
+         "skew=${skew} conflicts=${conflicts}" >&2
+  fi
 }
 
 # Experiment 2: impact of failures on latency. Feeds Figure 8.
@@ -464,7 +499,7 @@ function run_all_experiments() {
   exp-2
   exp-3
   exp-4
-  # exp-conflicts is deliberately excluded: it maps to no figure in the current paper.
+  # exp-5 is deliberately excluded: it is exploratory and maps to no figure yet.
 }
 
 function main() {
@@ -492,8 +527,8 @@ function main() {
     "exp-4")
       exp-4
       ;;
-    "exp-conflicts")
-      exp-conflicts
+    "exp-5")
+      exp-5
       ;;
     "all")
       run_all_experiments

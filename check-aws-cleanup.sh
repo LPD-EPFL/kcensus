@@ -94,7 +94,7 @@ if [ -n "$RUN_ID" ]; then
     "exp-2-${RUN_ID}"
     "exp-3-${RUN_ID}"
     "exp-4-${RUN_ID}"
-    "exp-conflicts-${RUN_ID}"
+    "exp-5-${RUN_ID}"
   )
   experiment_id_filter=$(IFS=,; echo "${experiment_ids[*]}")
   filters+=("Name=tag:ExperimentID,Values=${experiment_id_filter}")

@@ -31,6 +31,19 @@ EXP4_TYPE=aws-random
 EXP4_SIZES=(3 5 7 9 11 13 15 17 19 21 23 25 27 29 31)
 EXP4_SPEEDUP=2
 
+# Experiment 5 (no figure yet): contention and load, on the Northern-Hemisphere deployment.
+#
+# Exploratory. It sweeps wide and short so we can see which corners of the space are worth
+# measuring properly; trim the lists, then lengthen the runs. Its logs go under `logs/exp-5/`
+# rather than into the tree the paper's figures read, because at w=1, t=1000, skew=0 and
+# conflicts=false it would otherwise land on exactly the paths exp-1 already owns.
+EXP5_CONFIG="aws-ring-7"
+# Zipf exponent over `KEYS` keys. 0.99 is YCSB's default constant and the usual "skewed" point
+# in the literature; 0 is uniform, and with 10000 keys it still conflicts occasionally.
+EXP5_SKEWS=(0 0.5 0.75 0.99)
+EXP5_WRITES=(1 0.5)
+EXP5_THROUGHPUTS=(250 500 750 1000 1500 2000 2500 3000 4000 8000)
+
 # A failed run is rare, so exhausting the attempts means something is genuinely wrong.
 MAX_ATTEMPTS=5
 

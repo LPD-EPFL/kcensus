@@ -94,16 +94,8 @@ function exp-4() {
   )
 }
 
-# Legacy: the conflicts/CDF plot maps to no figure in the current paper and needs exp-conflicts
-# data, which is not produced by default. Kept as the basis for the camera-ready experiment.
-function exp-conflicts() {
-  (
-    cd graphs &&
-    echo -n 'plotting exp-conflict figure (Deprecated)... ' &&
-    python3 exp-conflicts-cdfs.py $LOCAL_FLAG -g 1 > "./plots/${LOCAL_FLAG:+local-}exp-conflicts-cdfs.txt" &&
-    echo 'done.'
-  )
-}
+# exp-5 has no plot command yet: which figures it produces is exactly what the sweep is meant to
+# settle. Its logs live under `logs/exp-5/`.
 
 function show_help() {
     cat << EOF
@@ -132,8 +124,7 @@ function run_all_plots() {
   exp-2
   exp-3
   exp-4
-  # exp-conflicts is not included: it maps to no figure in the current paper and needs
-  # exp-conflicts data, which `geo_eval.sh all` does not produce.
+  # exp-5 is not included: it maps to no figure yet, and `geo_eval.sh all` does not run it.
 }
 
 function main() {
@@ -164,9 +155,6 @@ function main() {
       ;;
     "exp-4")
       exp-4
-      ;;
-    "exp-conflicts")
-      exp-conflicts
       ;;
     "all")
       run_all_plots
