@@ -57,14 +57,17 @@ function provision() {
   local varFile="$1"
   local expId="$2"
   echo "--> Provisioning infrastructure defined in ${varFile} for experiment ID: ${expId}..."
+  # Recorded *before* the apply, not after: an interrupt part-way through leaves instances
+  # running, and the teardown has to know about them. Terraform's state covers whatever it
+  # got to create, so destroying against it is enough.
+  CURRENT_VAR_FILE="${varFile}"
+  CURRENT_EXP_ID="${expId}"
   (
     cd deployment/terraform
     terraform init -upgrade
     # terraform plan -var-file="../../${varFile}" -var="experiment_id=${expId}"
     terraform apply -parallelism=50 -var-file="../../${varFile}" -var="experiment_id=${expId}" -auto-approve
   )
-  CURRENT_VAR_FILE="${varFile}"
-  CURRENT_EXP_ID="${expId}"
   echo "--> Infrastructure is UP for Exp ID ${expId}; VMs might still be booting."
 }
 
