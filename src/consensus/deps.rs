@@ -5,6 +5,7 @@
 //! replacing it: the two share the shard pool, the sinks, the command types and the eval
 //! logging, but nothing of their instance state or their commit-to-execution path.
 
+use crate::consensus::DEADLOCK_REPORT_LIMIT;
 use crate::consensus::command::{Command, CommitReport};
 use crate::consensus::deps::dep_set::{DepSet, requester_of};
 use crate::consensus::deps::execution::{cycle_possible, executable_order, next_executable};
@@ -1114,14 +1115,26 @@ impl DepConsensus {
                 res = &mut deadlock_deadline => {
                     res.expect("should wait until deadlock_deadline");
                     eprintln!("deadlock detected ! Checking all active shards...");
+                    let mut stuck = 0usize;
                     for (shard_id, shard) in self.pool.iter_active() {
+                        let stalled = !shard.instances.is_empty() || !shard.reads.is_empty();
+                        if !stalled {
+                            continue;
+                        }
+                        stuck += 1;
+                        if stuck > DEADLOCK_REPORT_LIMIT {
+                            continue;
+                        }
                         if !shard.instances.is_empty() {
                             eprintln!(
                                 "shard={shard_id} is stuck with {} unfinished instance(s), executed={:?}",
                                 shard.instances.len(), shard.executed
                             );
-                            for (id, instance) in shard.instances.iter() {
+                            for (id, instance) in shard.instances.iter().take(DEADLOCK_REPORT_LIMIT) {
                                 eprintln!("  id={id}: {instance:?}");
+                            }
+                            if shard.instances.len() > DEADLOCK_REPORT_LIMIT {
+                                eprintln!("  ... and {} more instance(s), not printed.", shard.instances.len() - DEADLOCK_REPORT_LIMIT);
                             }
                         }
                         if !shard.reads.is_empty() {
@@ -1131,7 +1144,10 @@ impl DepConsensus {
                             );
                         }
                     }
-                    eprintln!("checked all active shards ({} asleep).", self.pool.shard_count() - self.pool.active_count());
+                    if stuck > DEADLOCK_REPORT_LIMIT {
+                        eprintln!("... and {} more stuck shard(s), not printed.", stuck - DEADLOCK_REPORT_LIMIT);
+                    }
+                    eprintln!("{stuck} stuck shard(s) of {} active ({} asleep).", self.pool.active_count(), self.pool.shard_count() - self.pool.active_count());
                     panic!("deadlock detected, terminating.");
                 },
                 command = new_client_commands_rx.recv(), if !done => {

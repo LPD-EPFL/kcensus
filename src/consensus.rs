@@ -15,8 +15,8 @@ use std::fmt::Debug;
 use std::io;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::Mutex;
 use tokio::sync::mpsc::{Receiver, Sender};
+use tokio::sync::Mutex;
 use tokio::{pin, select};
 use tokio_timerfd::Delay;
 
@@ -29,6 +29,10 @@ mod read_tracker;
 pub(crate) mod shard_pool;
 
 pub use shard_pool::DEFAULT_SHARD_POOL_SIZE;
+
+/// Stuck shards printed in full before the report is summarised:
+/// Throughput saturation can cause thousands of false reports.
+pub(crate) const DEADLOCK_REPORT_LIMIT: usize = 10;
 
 pub(crate) struct ConsensusShard<AlgoSettings, AlgoRoundState> {
     // Settings
@@ -226,19 +230,26 @@ where
                 res = &mut deadlock_deadline => {
                     res.expect("should wait until deadlock_deadline");
                     eprintln!("deadlock detected ! Checking all active shards...");
+                    let mut stuck = 0usize;
                     for (shard_id, shard) in self.pool.iter_active() {
                         // A read still short of its quorum keeps a shard awake without
                         // showing up in any of the other three, so it is checked here too.
                         let awaiting_read = !shard.read_tracker.is_empty();
                         if shard.ongoing() || shard.has_queued_commands() || !shard.queued_messages.is_empty() || awaiting_read {
-                            eprintln!("shard={shard_id} is stuck. Shard state: {shard:?}");
-                            eprintln!("Queued messages for shard={shard_id}: {:?}", shard.queued_messages);
-                            if awaiting_read {
-                                eprintln!("Awaited reads for shard={shard_id}: {:?}", shard.read_tracker);
+                            stuck += 1;
+                            if stuck <= DEADLOCK_REPORT_LIMIT {
+                                eprintln!("shard={shard_id} is stuck. Shard state: {shard:?}");
+                                eprintln!("Queued messages for shard={shard_id}: {:?}", shard.queued_messages);
+                                if awaiting_read {
+                                    eprintln!("Awaited reads for shard={shard_id}: {:?}", shard.read_tracker);
+                                }
                             }
                         }
                     }
-                    eprintln!("checked all active shards ({} asleep).", self.pool.shard_count() - self.pool.active_count());
+                    if stuck > DEADLOCK_REPORT_LIMIT {
+                        eprintln!("... and {} more stuck shard(s), not printed.", stuck - DEADLOCK_REPORT_LIMIT);
+                    }
+                    eprintln!("{stuck} stuck shard(s) of {} active ({} asleep).", self.pool.active_count(), self.pool.shard_count() - self.pool.active_count());
                     panic!("deadlock detected, terminating.");
                 },
                 command = new_client_commands_rx.recv(), if !done => {
