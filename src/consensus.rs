@@ -15,8 +15,8 @@ use std::fmt::Debug;
 use std::io;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::Mutex;
+use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::{pin, select};
 use tokio_timerfd::Delay;
 

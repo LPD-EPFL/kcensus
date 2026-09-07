@@ -6,7 +6,7 @@
 //! logging, but nothing of their instance state or their commit-to-execution path.
 
 use crate::consensus::command::{Command, CommitReport};
-use crate::consensus::deps::dep_set::{requester_of, DepSet};
+use crate::consensus::deps::dep_set::{DepSet, requester_of};
 use crate::consensus::deps::execution::{cycle_possible, executable_order, next_executable};
 use crate::consensus::deps::instance::{Instance, Phase};
 use crate::consensus::deps::message::DepMsg;
@@ -24,8 +24,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::io;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::Mutex;
+use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::{pin, select};
 use tokio_timerfd::Delay;
 

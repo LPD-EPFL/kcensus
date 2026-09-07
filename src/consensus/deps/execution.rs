@@ -1,4 +1,4 @@
-use crate::consensus::deps::dep_set::{uid_step, DepSet};
+use crate::consensus::deps::dep_set::{DepSet, uid_step};
 use crate::consensus::deps::instance::Instance;
 use petgraph::algo::tarjan_scc;
 use petgraph::graph::{DiGraph, NodeIndex};

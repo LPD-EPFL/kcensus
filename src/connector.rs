@@ -2,15 +2,15 @@ use crate::message::Message::{Hello, Ready};
 use crate::message::{Message, MsgWithSource};
 use crate::multi_sink::MultiSink;
 use crate::topology::Topology;
-use futures::stream::select_all;
 use futures::TryStreamExt;
+use futures::stream::select_all;
 use log::debug;
 use std::time::Duration;
 use tokio::io;
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::{TcpListener, TcpStream};
-use tokio_serde::formats::Bincode;
 use tokio_serde::Framed;
+use tokio_serde::formats::Bincode;
 use tokio_stream::{Stream, StreamExt};
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 

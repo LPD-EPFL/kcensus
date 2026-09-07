@@ -1,11 +1,11 @@
 use crate::consensus::message::ConsensusMsg::{Commit, PaxosM};
 use crate::consensus::message::{CommandBatch, ConsensusMessage};
-use crate::consensus::paxos_family::message::PaxosMsg::{Accept, ForwardRequest, Prepare};
-use crate::consensus::paxos_family::message::{PaxosMsg, PaxosRound};
-use crate::consensus::paxos_family::round_state::PaxosFamilyRoundState;
 use crate::consensus::paxos_family::PFModeSetting::{
     EPaxos, MultiPaxos, MultiPaxos3P, Pando, SwiftPaxos,
 };
+use crate::consensus::paxos_family::message::PaxosMsg::{Accept, ForwardRequest, Prepare};
+use crate::consensus::paxos_family::message::{PaxosMsg, PaxosRound};
+use crate::consensus::paxos_family::round_state::PaxosFamilyRoundState;
 use crate::consensus::read_tracker::ReadTracker;
 use crate::consensus::{Consensus, ConsensusShard, ConsensusShardTrait};
 use crate::multi_sink::{MultiSink, ShardMultiSink};
