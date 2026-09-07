@@ -445,6 +445,7 @@ function exp-4() {
   local archive="${ABSOLUTE_BASE_LOG_DIR}/exp-4-resources_logs.tar.gz"
   echo "--> Extracting and merging $archive..."
   tar -xzf "$archive" -C "${ABSOLUTE_BASE_LOG_DIR}" --strip-components=1
+  rm "$archive"
   echo "--> Results successfully merged into ${ABSOLUTE_BASE_LOG_DIR}"
 
   echo "--- Finished Experiment 4 ---"
