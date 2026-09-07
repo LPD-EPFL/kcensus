@@ -1,6 +1,0 @@
-regions = ['Canada Central ca-central-1', 'Europe Paris eu-west-3', 'Asia Pacific Seoul ap-northeast-2']
-raw_latencies = [
-  [0, 42.6675, 91.8575],
-  [42.6675, 0, 126.3925],
-  [91.8575, 126.3925, 0]
-]

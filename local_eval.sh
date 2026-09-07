@@ -117,7 +117,7 @@ function exp-3() {
   local type n algo
   for type in "${EXP3_TYPES[@]}"; do
     for n in "${EXP3_SIZES[@]}"; do
-      local configFile="exp-3/${type}/${n}.toml"
+      local configFile="${type}/${n}.toml"
       for algo in "${ALGOS[@]}"; do
         # A quarter of an AWS run's requests: still >=2500 samples at every size, against ~1250
         # with a fixed window. Half would be nicer statistically but costs 1.7h instead of 1.0h,
@@ -144,7 +144,7 @@ function exp-4() {
   echo "--- Experiment 4: resource consumption (local) ---"
   local n algo configFile
   for n in "${EXP4_SIZES[@]}"; do
-    configFile="exp-4/${EXP4_TYPE}/${n}.toml"
+    configFile="${EXP4_TYPE}/${n}.toml"
     for algo in "${ALGOS[@]}"; do
       # Figure 11 normalizes memory by SHARDS, so disable recycling for this experiment by
       # making the physical shard pool as large as the logical shard count.
