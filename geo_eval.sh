@@ -302,13 +302,14 @@ function exp-5() {
           done
         done
       else
-        for keys in "$EXP5_KEYS" "$EXP5_KEYS_SPARSE"; do
-          for skew in "${EXP5_LOAD_SKEWS[@]}"; do
-            exp-5-run "$EXPERIMENT_ID" "$configName" "$algo" "$throughput" "$skew" "$keys"
-          done
+        for skew in "${EXP5_LOAD_SKEWS[@]}"; do
+          exp-5-run "$EXPERIMENT_ID" "$configName" "$algo" "$throughput" "$skew" \
+            "$EXP5_KEYS_SPARSE"
         done
       fi
     done
+    # multi-paxos again, this time with pipelining, one skew, at every rung.
+    exp-5-run "$EXPERIMENT_ID" "$configName" "multi-paxos" "$throughput" 0 "$EXP5_KEYS_SPARSE" "false"
   done
 
   destroy "$varFile" "$EXPERIMENT_ID"
@@ -324,9 +325,14 @@ function exp-5() {
 # saved the failed run's output under `failed/`.
 function exp-5-run() {
   local expId="$1" configName="$2" algo="$3" throughput="$4" skew="$5" keys="$6"
-  if ! run "$expId" "$configName" "$algo" "$EXP5_WRITES" "$DURATION" "exponential" \
-         "$throughput" "" "$keys" "$skew" "$keys" "true"; then
-    echo "--> SKIPPED (not sustainable?): ${algo} t=${throughput} skew=${skew} k=${keys}" >&2
+  local conflicts="${7:-true}"
+  # The CDF rung is the latency-sensitive one, so it gets the longer window.
+  local duration="$DURATION"
+  [ "$throughput" -eq "$EXP5_CDF_THROUGHPUT" ] && duration="$BASELINE_DURATION"
+  if ! run "$expId" "$configName" "$algo" "$EXP5_WRITES" "$duration" "exponential" \
+         "$throughput" "" "$keys" "$skew" "$keys" "$conflicts"; then
+    echo "--> SKIPPED (not sustainable?): ${algo} t=${throughput} skew=${skew} k=${keys}" \
+      "conflicts=${conflicts}" >&2
   fi
 }
 

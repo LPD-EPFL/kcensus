@@ -13,9 +13,7 @@ REPLICATED_ALGOS=(kcensus "swift-paxos" pando epaxos "multi-paxos" paxos)
 ALGOS=("${REPLICATED_ALGOS[@]}")
 
 DURATION=10s
-# The fault-free latency runs -- exp-1, and exp-2's no-fault baseline -- measure steady-state
-# latency, where a longer window tightens the percentiles. exp-2's fault runs keep `DURATION`:
-# there are 63 of them per algorithm.
+# Longer runs for plots that show percentiles. (exp-1, exp-2 0-faults, exp-5 CDF)
 BASELINE_DURATION=60s
 THROUGHPUT=1000 # total req/s, split evenly between the proposers
 SPEEDUP=1
@@ -40,10 +38,10 @@ EXP5_CONFIG="aws-ring-7"
 EXP5_WRITES=0.5
 # Zipf exponent over `EXP5_KEYS` keys. 0.99 is YCSB's default constant and the usual "skewed"
 # point in the literature; 0 is uniform, and even there 10000 keys still conflict occasionally.
-EXP5_SKEWS=(0 0.5 0.75 0.99)
+EXP5_SKEWS=(0 0.8 0.99)
 EXP5_KEYS=10000
 EXP5_KEYS_SPARSE=100000
-# 250 to 60000, in steps that widen as the deployment saturates.
+# 500 to 100000, in steps that widen as the deployment saturates.
 EXP5_THROUGHPUTS=($(awk 'BEGIN {
   printf "500 1000 "
   for (i = 1; i < 10; i++) printf "%d ", 2000 * i
@@ -51,7 +49,7 @@ EXP5_THROUGHPUTS=($(awk 'BEGIN {
   for (i = 5; i < 11; i++) printf "%d ", 10000 * i
 }'))
 EXP5_CDF_THROUGHPUT=1000
-EXP5_LOAD_SKEWS=(0.5 0.99)
+EXP5_LOAD_SKEWS=(0 0.8 0.99)
 
 # A failed run is rare, so exhausting the attempts means something is genuinely wrong.
 MAX_ATTEMPTS=5
