@@ -165,7 +165,7 @@ function run() {
     echo "--> Attempt ${attempt}/${MAX_ATTEMPTS} failed: ${algo} on ${configName} (faults=${faults})" >&2
     if [ "${attempt}" -eq "${MAX_ATTEMPTS}" ]; then
       echo "--> FAILED after ${MAX_ATTEMPTS} attempts: ${title}" >&2
-      exit 1
+      return 1
     fi
     # A crashed run can leave a kcensus process holding port 8000, which would make every
     # further attempt fail too.
@@ -318,15 +318,14 @@ function exp-5() {
 
 # One exp-5 run, skipped rather than fatal when it exhausts its attempts.
 #
-# `run` ends an exhausted run with `exit 1`, which aborts the whole sweep and tears the
-# deployment down. That is right for the paper's experiments, where every run feeds a figure,
-# and wrong here: a run that cannot sustain 8000 req/s is a data point, and losing 500 runs to
-# the last one would be absurd. The subshell keeps that `exit` local, and the ansible playbook
-# has already saved the failed run's output under `failed/`.
+# `run` returns non-zero, which `set -e` turns into an abort for the paper's experiments, where
+# every run feeds a figure. Here it is a data point: a run that cannot sustain 40000 req/s says
+# so, and losing the rest of the sweep to it would be absurd. The ansible playbook has already
+# saved the failed run's output under `failed/`.
 function exp-5-run() {
   local expId="$1" configName="$2" algo="$3" throughput="$4" skew="$5" keys="$6"
-  if ! ( run "$expId" "$configName" "$algo" "$EXP5_WRITES" "$DURATION" "exponential" \
-           "$throughput" "" "$keys" "$skew" "$keys" "true" ); then
+  if ! run "$expId" "$configName" "$algo" "$EXP5_WRITES" "$DURATION" "exponential" \
+         "$throughput" "" "$keys" "$skew" "$keys" "true"; then
     echo "--> SKIPPED (not sustainable?): ${algo} t=${throughput} skew=${skew} k=${keys}" >&2
   fi
 }
