@@ -53,7 +53,7 @@ fc-cache && rm -rf ~/.cache/matplotlib
 Complete §1 first to clone the repository and install the plotting dependencies.
 
 You do not need to rerun the experiments to reproduce the exact paper plots. The complete logs are
-available in the [artifact-evaluation-v1 release](https://github.com/LPD-EPFL/kcensus/releases/tag/artifact-evaluation-v1).
+available in the [artifact-evaluation-v2 release](https://github.com/LPD-EPFL/kcensus/releases/tag/artifact-evaluation-v2).
 From the root of a fresh clone, download them and generate the plots with:
 
 ```bash
