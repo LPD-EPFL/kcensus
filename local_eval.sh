@@ -38,10 +38,6 @@ function run_one() {
   local throughput; throughput="$(local_throughput "$nb")"
   local per_proposer; per_proposer="$(per_proposer_rate "$throughput" "$nb")"
   local nonvoting; nonvoting="$(get_nonvoting "$configName" "$algo")"
-  # The binary needs warmup+duration+sustain = 1.4375x duration and its deadlock detector fires
-  # at 2.16x, but startup and connection establishment cost a fixed amount that does not scale
-  # with the run. 30s + 3x duration covers both, and still leaves the deadlock detector to fire
-  # first so a stuck run reports which shard hung instead of being killed silently.
   local timeout_s=$(( 30 + 3 * ${duration%s} ))
 
   local title; title="$(make_title)"
@@ -75,7 +71,7 @@ function run_one() {
     for pid in "${pids[@]}"; do wait "$pid" || failed=1; done
     [ "$failed" -eq 0 ] && return 0
 
-    # Keep the failed attempt: the next one overwrites this directory, and a deadlock or panic
+    # Keep the failed attempt: the next one overwrites this directory, and a saturation or a bug
     # would otherwise leave no evidence at all.
     local failedDir="${BASE_LOG_DIR}/failed/${title}/attempt=${attempt}"
     mkdir -p "$failedDir" && cp -a "${logDir}/." "${failedDir}/" 2>/dev/null || true

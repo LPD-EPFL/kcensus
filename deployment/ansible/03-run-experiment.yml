@@ -17,7 +17,7 @@
     nonvoting: ""
     conflicts: ""
     result_path: "./results_default"
-    # Where the output of a failed attempt is kept so a deadlock or panic can be investigated
+    # Where the output of a failed attempt is kept so a saturation or bug can be investigated
     # afterwards. Without this a failing run left no logs at all: the shell task marked the host
     # failed and Ansible skipped the save, and the retry then overwrote nothing.
     failed_path: ""
@@ -30,10 +30,6 @@
 
     # `failed_when: false` keeps every host in the play whatever kcensus returns, so the save
     # tasks below always run. The play is failed explicitly at the end instead.
-    # Same formula as `local_eval.sh`: the binary needs warmup+duration+sustain = 1.4375x
-    # duration and its deadlock detector fires at 2.16x, plus a fixed startup cost. 30s + 3x
-    # duration covers both and leaves the detector to fire first, so a stuck run reports which
-    # shard hung instead of being killed silently.
     - name: Run kcensus
       ansible.builtin.shell:
         cmd: >
@@ -83,8 +79,6 @@
         state: directory
         mode: "0755"
 
-    # A deadlock is a distributed symptom, so when any server fails keep *every* server's output,
-    # not just the one that panicked.
     - name: Keep every server's output when any server failed
       delegate_to: localhost
       when:

@@ -56,8 +56,6 @@ function run() {
   local ALGO="$2"
   local WRITES="$3"
   local DURATION="$4"
-  # See `local_eval.sh` for the formula: covers the 1.4375x run and the 2.16x deadlock
-  # deadline, and still lets the detector fire before the timeout does.
   local timeout_s=$(( 30 + 3 * ${DURATION%s} ))
   local INGRESS="$5"
   local THROUGHPUT="$6"
@@ -101,8 +99,7 @@ function run() {
   done
 
   # Keep the output of a failed attempt: the next attempt writes to the same directory and would
-  # otherwise erase the only evidence of a deadlock or panic. Every replica's log is kept, since
-  # a deadlock is visible across the group and not only on the process that gave up.
+  # otherwise erase the only evidence of saturation or bugs.
   if [ "$failed" -ne 0 ]; then
     local FAILED_DIR="$BASE_LOG_DIR/failed/$TITLE/attempt=${ATTEMPT:-1}"
     mkdir -p "$FAILED_DIR"

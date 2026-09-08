@@ -9,7 +9,7 @@ CURRENT_VAR_FILE=""
 CURRENT_EXP_ID=""
 
 # Bounded retries for a failed experiment run. A failure here is rare -- a kcensus panic (e.g.
-# the deadlock detector), the 60s timeout, or a transient SSH/node problem -- so exhausting all
+# experiment timeout), the 60s timeout, or a transient SSH/node problem -- so exhausting all
 # attempts means something is genuinely wrong and the script aborts rather than looping forever.
 # The delay is applied *before* the retry: it gives a transient cause time to clear and gives
 # `pkill` time to actually reap the process that would otherwise still hold port 8000.
