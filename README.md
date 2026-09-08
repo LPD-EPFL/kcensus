@@ -57,7 +57,7 @@ available in the [artifact-evaluation-v2 release](https://github.com/LPD-EPFL/kc
 From the root of a fresh clone, download them and generate the plots with:
 
 ```bash
-curl -L -o logs.zip https://github.com/LPD-EPFL/kcensus/releases/download/artifact-evaluation-v1/logs.zip
+curl -L -o logs.zip https://github.com/LPD-EPFL/kcensus/releases/download/artifact-evaluation-v2/logs.zip
 unzip logs.zip
 ./plot.sh all
 ```
