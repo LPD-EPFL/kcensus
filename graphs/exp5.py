@@ -55,12 +55,7 @@ class Workload:
 
 
 def _rungs_on_disk():
-    """Every `t=` with a run on disk, ascending.
-
-    Read from the logs rather than mirrored from `EXP5_THROUGHPUTS`, so trimming the ladder
-    in lib.sh needs no change here. Rungs that were never run are simply absent, which is
-    what `run_stats` already reports as missing.
-    """
+    """Every `t=` with a run on disk, ascending."""
     root = pathlib.Path(logparser.LOG_DIR) / f"c={EXP5_CONFIG}"
     pattern = f"a=*/w={WRITES:g}/d={EXP5_DURATION}/i={EXP5_INGRESS}/t=*"
     found = set()
