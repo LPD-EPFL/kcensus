@@ -1,5 +1,5 @@
 use crate::consensus::kcensus::node_state::{Knowledge, NodeState};
-use crate::topology::{FAULTY_LATENCY, Topology};
+use crate::topology::{Topology, FAULTY_LATENCY};
 use bit_set::BitSet;
 use log::{debug, info, trace};
 use petgraph::algo::bellman_ford;
@@ -221,17 +221,8 @@ impl LatencyTables {
         let max_faults = (topology.nb_replicas - 1) / 2;
         let max_quorum = topology.nb_replicas - max_faults;
         let maj_quorum = max_quorum; // For now, we don't play with quorum sizes
-        // What recoverable evidence needs is `f + 1`, and with the `n = 2f + 1` the paper
-        // assumes that *is* a majority. With an even replica count it is one short, and then
-        // the knowledge a leader ends up with is one process smaller than the majority
-        // `can_start_paxos_accept` requires: on a conflict the Paxos fallback can never start,
-        // which deadlocks the shard deterministically rather than as a race.
-        //
         // TODO: put it back to `max_faults + 1` and instead make sure at least max_quorum of the
-        // frozen states always reaches the proposer — the knowledge requirement is about who *holds*
-        // the evidence, while the freeze quorum is about who *reports* it, and the second can
-        // be met by having the extra nodes send their frozen state to the proposer rather than
-        // by enlarging the first. That keeps the fast path at `f + 1` for even replica counts.
+        // frozen states always reaches the proposer
         let min_quorum = (max_faults + 1).max(1 + topology.nb_replicas / 2);
         let mut path_latencies = vec![vec![Duration::default(); nb_processes]; nb_processes];
         let mut prev_dest = vec![vec![0; nb_processes]; nb_processes];

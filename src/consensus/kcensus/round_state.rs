@@ -289,9 +289,8 @@ impl KCensusRoundState {
         prepared_count >= self.majority
     }
 
-    /// Debug only: "a majority is frozen", i.e. the census exists even if it does not name
-    /// us. Deliberately unused by the protocol — it is what tells a deadlock report whether
-    /// the round is short of freezes or merely short of freezes *for this leader*.
+    /// Debug only: "a majority is frozen". Deliberately unused by the protocol — it is used to
+    /// report whether we might be stuck due to being short of freezes or not.
     pub fn could_adopt(&self, alive_replicas: &BitSet) -> bool {
         self.node_states
             .iter()

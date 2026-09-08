@@ -32,7 +32,7 @@ pub use shard_pool::DEFAULT_SHARD_POOL_SIZE;
 
 /// Stuck shards printed in full before the report is summarised:
 /// Throughput saturation can cause thousands of false reports.
-pub(crate) const DEADLOCK_REPORT_LIMIT: usize = 10;
+pub(crate) const TIMEOUT_REPORT_LIMIT: usize = 10;
 
 /// Capacity a pooled shard's tables are shrunk back to when it falls asleep, so a shard
 /// that served a hot key does not carry its tables into the cold keys that reuse it.
@@ -212,7 +212,7 @@ where
         mut msg_rx: Receiver<MsgWithSource>,
         mut new_client_commands_rx: Receiver<Command>,
         committed_commands_tx: Sender<Command>,
-        deadlock_deadline: Duration,
+        experiment_timeout: Duration,
     ) -> io::Result<()> {
         let mut count_done = 0usize;
         let mut done = false;
@@ -222,18 +222,18 @@ where
             assert!(sample.can_forward_proposals() || sample.can_propose());
         }
 
-        let deadlock_deadline =
-            Delay::new(Instant::now() + deadlock_deadline).expect("should init timer");
-        pin!(deadlock_deadline);
+        let experiment_timeout =
+            Delay::new(Instant::now() + experiment_timeout).expect("should init timer");
+        pin!(experiment_timeout);
 
         'main_loop: while count_done < self.process_count {
             // Read new messages and/or new local command.
             // `None` means no shard was touched, `false` means the shard has nothing
             // left to propose or repropose.
             let touched: Option<(usize, bool)> = select! {
-                res = &mut deadlock_deadline => {
-                    res.expect("should wait until deadlock_deadline");
-                    eprintln!("deadlock detected ! Checking all active shards...");
+                res = &mut experiment_timeout => {
+                    res.expect("should wait until experiment_timeout");
+                    eprintln!("Experiment ran longer than it should! This can be due to saturation, desync (a process starting late), or deadlocks! Checking all active shards...");
                     let mut stuck = 0usize;
                     for (shard_id, shard) in self.pool.iter_active() {
                         // A read still short of its quorum keeps a shard awake without
@@ -241,8 +241,8 @@ where
                         let awaiting_read = !shard.read_tracker.is_empty();
                         if shard.ongoing() || shard.has_queued_commands() || !shard.queued_messages.is_empty() || awaiting_read {
                             stuck += 1;
-                            if stuck <= DEADLOCK_REPORT_LIMIT {
-                                eprintln!("shard={shard_id} is stuck. Shard state: {shard:?}");
+                            if stuck <= TIMEOUT_REPORT_LIMIT {
+                                eprintln!("shard={shard_id} might be stuck. Shard state: {shard:?}");
                                 eprintln!("Queued messages for shard={shard_id}: {:?}", shard.queued_messages);
                                 if awaiting_read {
                                     eprintln!("Awaited reads for shard={shard_id}: {:?}", shard.read_tracker);
@@ -250,11 +250,11 @@ where
                             }
                         }
                     }
-                    if stuck > DEADLOCK_REPORT_LIMIT {
-                        eprintln!("... and {} more stuck shard(s), not printed.", stuck - DEADLOCK_REPORT_LIMIT);
+                    if stuck > TIMEOUT_REPORT_LIMIT {
+                        eprintln!("... and {} more stuck shard(s), not printed.", stuck - TIMEOUT_REPORT_LIMIT);
                     }
                     eprintln!("{stuck} stuck shard(s) of {} active ({} asleep).", self.pool.active_count(), self.pool.shard_count() - self.pool.active_count());
-                    panic!("deadlock detected, terminating.");
+                    panic!("Experiment timed-out. Deadline reached. Terminating.");
                 },
                 command = new_client_commands_rx.recv(), if !done => {
                     match command {

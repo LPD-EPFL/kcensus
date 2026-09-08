@@ -13,7 +13,7 @@ use crate::consensus::deps::message::DepMsg;
 use crate::consensus::deps::read_tracker::ReadTracker;
 use crate::consensus::message::{CommandBatch, ConsensusMessage, ConsensusMsg};
 use crate::consensus::shard_pool::{PooledShard, ShardPool};
-use crate::consensus::DEADLOCK_REPORT_LIMIT;
+use crate::consensus::TIMEOUT_REPORT_LIMIT;
 use crate::eval;
 use crate::message::Message::{ConsensusM, Done};
 use crate::message::MsgWithSource;
@@ -1127,20 +1127,20 @@ impl DepConsensus {
         mut msg_rx: Receiver<MsgWithSource>,
         mut new_client_commands_rx: Receiver<Command>,
         committed_commands_tx: Sender<Command>,
-        deadlock_deadline: Duration,
+        experiment_timeout: Duration,
     ) -> io::Result<()> {
         let mut count_done = 0usize;
         let mut done = false;
 
-        let deadlock_deadline =
-            Delay::new(Instant::now() + deadlock_deadline).expect("should init timer");
-        pin!(deadlock_deadline);
+        let experiment_timeout =
+            Delay::new(Instant::now() + experiment_timeout).expect("should init timer");
+        pin!(experiment_timeout);
 
         'main_loop: while count_done < self.process_count {
             let touched: Option<usize> = select! {
-                res = &mut deadlock_deadline => {
-                    res.expect("should wait until deadlock_deadline");
-                    eprintln!("deadlock detected ! Checking all active shards...");
+                res = &mut experiment_timeout => {
+                    res.expect("should wait until experiment_timeout");
+                    eprintln!("Experiment ran longer than it should! This can be due to saturation, desync (a late starting process), or deadlocks! Checking all active shards...");
                     let mut stuck = 0usize;
                     for (shard_id, shard) in self.pool.iter_active() {
                         let stalled = !shard.instances.is_empty() || !shard.reads.is_empty();
@@ -1148,19 +1148,19 @@ impl DepConsensus {
                             continue;
                         }
                         stuck += 1;
-                        if stuck > DEADLOCK_REPORT_LIMIT {
+                        if stuck > TIMEOUT_REPORT_LIMIT {
                             continue;
                         }
                         if !shard.instances.is_empty() {
                             eprintln!(
-                                "shard={shard_id} is stuck with {} unfinished instance(s), executed={:?}",
+                                "shard={shard_id} might be stuck with {} unfinished instance(s), executed={:?}",
                                 shard.instances.len(), shard.executed
                             );
-                            for (id, instance) in shard.instances.iter().take(DEADLOCK_REPORT_LIMIT) {
+                            for (id, instance) in shard.instances.iter().take(TIMEOUT_REPORT_LIMIT) {
                                 eprintln!("  id={id}: {instance:?}");
                             }
-                            if shard.instances.len() > DEADLOCK_REPORT_LIMIT {
-                                eprintln!("  ... and {} more instance(s), not printed.", shard.instances.len() - DEADLOCK_REPORT_LIMIT);
+                            if shard.instances.len() > TIMEOUT_REPORT_LIMIT {
+                                eprintln!("  ... and {} more instance(s), not printed.", shard.instances.len() - TIMEOUT_REPORT_LIMIT);
                             }
                         }
                         if !shard.reads.is_empty() {
@@ -1170,11 +1170,11 @@ impl DepConsensus {
                             );
                         }
                     }
-                    if stuck > DEADLOCK_REPORT_LIMIT {
-                        eprintln!("... and {} more stuck shard(s), not printed.", stuck - DEADLOCK_REPORT_LIMIT);
+                    if stuck > TIMEOUT_REPORT_LIMIT {
+                        eprintln!("... and {} more stuck shard(s), not printed.", stuck - TIMEOUT_REPORT_LIMIT);
                     }
                     eprintln!("{stuck} stuck shard(s) of {} active ({} asleep).", self.pool.active_count(), self.pool.shard_count() - self.pool.active_count());
-                    panic!("deadlock detected, terminating.");
+                    panic!("Experiment timed-out. Deadline reached. Terminating.");
                 },
                 command = new_client_commands_rx.recv(), if !done => {
                     match command {

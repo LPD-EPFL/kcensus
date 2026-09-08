@@ -35,8 +35,7 @@ pub struct ReadTracker {
     reads: BTreeMap<ReadId, PendingRead>,
 }
 
-/// Reports every read still waiting, so that a stuck shard says what it is waiting for. A
-/// shard holding a pending read cannot sleep, so the deadlock detector always reaches it.
+/// Reports every read still waiting, so that a stuck shard says what it is waiting for.
 impl Debug for ReadTracker {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "quorum={}, pending=[", self.read_quorum)?;

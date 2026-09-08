@@ -231,7 +231,9 @@ pub async fn run() -> io::Result<()> {
         .unwrap_or(args.duration / 10 + Duration::from_secs(1));
     let warmup = warmup.max(sustain);
     let exp_length = warmup + duration + sustain;
-    let deadlock_deadline = ((exp_length * 3) / 2).max(Duration::from_secs(5));
+    // If an experiment is longer than exp_length + sustain, one process might be desynchronized
+    // by more than sustain so we can't trust the results, while runovers >2s suggest saturation.
+    let experiment_timeout = exp_length + Duration::from_secs(2).min(sustain);
     let no_conflicts = !args.conflicts.unwrap_or(false);
     let partition_keys = if no_conflicts {
         args.keys / process_count
@@ -302,7 +304,7 @@ pub async fn run() -> io::Result<()> {
                             delayed_msg_rx,
                             new_client_request_rx,
                             committed_request_tx,
-                            deadlock_deadline,
+                            experiment_timeout,
                         )
                         .await
                 }),
@@ -331,7 +333,7 @@ pub async fn run() -> io::Result<()> {
                             delayed_msg_rx,
                             new_client_request_rx,
                             committed_request_tx,
-                            deadlock_deadline,
+                            experiment_timeout,
                         )
                         .await
                 }),
@@ -362,7 +364,7 @@ pub async fn run() -> io::Result<()> {
                             delayed_msg_rx,
                             new_client_request_rx,
                             committed_request_tx,
-                            deadlock_deadline,
+                            experiment_timeout,
                         )
                         .await
                 }),
@@ -403,7 +405,7 @@ pub async fn run() -> io::Result<()> {
                             delayed_msg_rx,
                             new_client_request_rx,
                             committed_request_tx,
-                            deadlock_deadline,
+                            experiment_timeout,
                         )
                         .await
                 }),
@@ -432,7 +434,7 @@ pub async fn run() -> io::Result<()> {
                             delayed_msg_rx,
                             new_client_request_rx,
                             committed_request_tx,
-                            deadlock_deadline,
+                            experiment_timeout,
                         )
                         .await
                 }),
@@ -466,7 +468,7 @@ pub async fn run() -> io::Result<()> {
                             delayed_msg_rx,
                             new_client_request_rx,
                             committed_request_tx,
-                            deadlock_deadline,
+                            experiment_timeout,
                         )
                         .await
                 }),
@@ -508,7 +510,7 @@ pub async fn run() -> io::Result<()> {
                             delayed_msg_rx,
                             new_client_request_rx,
                             committed_request_tx,
-                            deadlock_deadline,
+                            experiment_timeout,
                         )
                         .await
                 }),

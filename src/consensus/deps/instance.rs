@@ -29,8 +29,7 @@ pub enum Phase {
 /// part of both protocols this repository does not implement.
 #[derive(Debug)]
 pub struct Instance {
-    /// Who submitted the command, derived from its uid. Also read through `Debug` in the
-    /// deadlock report.
+    /// Who submitted the command, derived from its uid.
     pub coordinator_pid: usize,
     /// The payload. Always present: an instance is not created until it arrives, because
     /// a command we do not hold conflicts with nothing (`cmd[id] = ⊥` in both papers).

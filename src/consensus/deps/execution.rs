@@ -1,4 +1,4 @@
-use crate::consensus::deps::dep_set::{DepSet, uid_step};
+use crate::consensus::deps::dep_set::{uid_step, DepSet};
 use crate::consensus::deps::instance::Instance;
 use petgraph::algo::tarjan_scc;
 use petgraph::graph::{DiGraph, NodeIndex};
@@ -50,9 +50,7 @@ pub fn next_executable(instances: &HashMap<usize, Instance>, executed: &DepSet) 
 /// or two and the graph is never built.
 ///
 /// It has to be asked on every stall, not only when a commit arrived: the fast path
-/// executes as it goes, and an execution can close a set just as a commit can. A gate that
-/// only re-examined the command just committed missed exactly that — a cycle whose last
-/// outside blocker was executed by the fast path in the same call — and deadlocked.
+/// executes as it goes, and an execution can close a set just as a commit can.
 pub fn cycle_possible(instances: &HashMap<usize, Instance>, executed: &DepSet) -> bool {
     heads(executed).any(|uid| {
         instances.get(&uid).is_some_and(|instance| {
