@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Latency against offered load, one plot per skew -- only `LOAD_SKEWS` ran the full ladder.
+"""Latency against offered load: four plots, `LOAD_SKEWS` by key count -- the only
+combinations given the full ladder.
 
 Upper panel: mean latency. Lower: achieved against offered throughput, with the diagonal.
 

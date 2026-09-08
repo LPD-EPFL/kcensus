@@ -94,8 +94,18 @@ function exp-4() {
   )
 }
 
-# exp-5 has no plot command yet: which figures it produces is exactly what the sweep is meant to
-# settle. Its logs live under `logs/exp-5/`.
+function exp-5() {
+  # Contention and load.
+  (
+    cd graphs &&
+    echo -n 'plotting exp-5 figure 1/2 (CDFs)... ' &&
+    python3 exp-5-cdfs.py $LOCAL_FLAG ${1+"$@"} > "./plots/${LOCAL_FLAG:+local-}exp-5-cdfs.txt" &&
+    echo 'done.' &&
+    echo -n 'plotting exp-5 figure 2/2 (load)... ' &&
+    python3 exp-5-load.py $LOCAL_FLAG ${1+"$@"} > "./plots/${LOCAL_FLAG:+local-}exp-5-load.txt" &&
+    echo 'done.'
+  )
+}
 
 function show_help() {
     cat << EOF
@@ -106,6 +116,7 @@ Available commands:
   exp-2            Figure  8         - impact of failures on latency
   exp-3            Figures 9 and 12  - scalability, and time to optimize requirements
   exp-4            Figures 10 and 11 - resource consumption (traffic/messages, CPU/memory)
+  exp-5            No figure yet     - contention and load (CDFs/conflicts, throughput)
   all              Plot every figure in the paper
 
 The command names match ./eval.sh, so whatever you ran, plot it with the same name.
@@ -155,6 +166,9 @@ function main() {
       ;;
     "exp-4")
       exp-4
+      ;;
+    "exp-5")
+      exp-5 "$@"
       ;;
     "all")
       run_all_plots

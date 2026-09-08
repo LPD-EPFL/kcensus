@@ -285,7 +285,7 @@ function exp-5() {
 
   # The grid is deliberately lopsided. Every skew runs at one rung, `EXP5_CDF_THROUGHPUT`, which
   # is where the CDFs are cut; the rest of the ladder runs only `EXP5_LOAD_SKEWS`, because a
-  # latency-against-load curve needs many rungs.
+  # latency-against-load curve needs many rungs. Both key counts run throughout.
   local throughput algo skew keys
   for throughput in "${EXP5_THROUGHPUTS[@]}"; do
     for algo in "${ALGOS[@]}"; do
@@ -298,8 +298,10 @@ function exp-5() {
           done
         done
       else
-        for skew in "${EXP5_LOAD_SKEWS[@]}"; do
-          exp-5-run "$EXPERIMENT_ID" "$configName" "$algo" "$throughput" "$skew" "$EXP5_KEYS"
+        for keys in "$EXP5_KEYS" "$EXP5_KEYS_SPARSE"; do
+          for skew in "${EXP5_LOAD_SKEWS[@]}"; do
+            exp-5-run "$EXPERIMENT_ID" "$configName" "$algo" "$throughput" "$skew" "$keys"
+          done
         done
       fi
     done

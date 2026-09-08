@@ -39,8 +39,12 @@ EXP5_WRITES=0.5
 EXP5_SKEWS=(0 0.5 0.75 0.99)
 EXP5_KEYS=10000
 EXP5_KEYS_SPARSE=100000
-# 500 to 16000 in exponential steps
-EXP5_THROUGHPUTS=($(awk 'BEGIN { for (i = 0; i <= 50; i++) printf "%d ", int(500 * 2 ^ (i / 10) + 0.5) }'))
+# 250 to 60000, in steps that widen as the deployment saturates.
+EXP5_THROUGHPUTS=($(awk 'BEGIN {
+  printf "250 500 1000 "
+  for (i = 1; i < 20; i++) printf "%d ", 2000 * i
+  for (i = 8; i < 13; i++) printf "%d ", 5000 * i
+}'))
 EXP5_CDF_THROUGHPUT=1000
 EXP5_LOAD_SKEWS=(0.5 0.99)
 

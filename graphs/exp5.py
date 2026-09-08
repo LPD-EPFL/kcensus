@@ -1,7 +1,9 @@
 """The exp-5 grid and log access, shared so the two plot scripts cannot disagree on it."""
+import pathlib
 import sys
 from dataclasses import dataclass
 
+import logparser
 from common import ALGORITHMS, args, blue
 from logparser import duration_to_ms, parse
 
@@ -23,11 +25,9 @@ EXP5_ALGORITHMS = {
 
 WRITES = 0.5
 KEYS = 10000
-# Ten times the conflict domain for the same distribution. Only run at `CDF_THROUGHPUT`.
+# Ten times the conflict domain for the same distribution.
 KEYS_SPARSE = 100000
 CDF_THROUGHPUT = 1000
-# Must match `EXP5_THROUGHPUTS` in lib.sh.
-THROUGHPUTS = tuple(round(500 * 2 ** (i / 10)) for i in range(51))
 SKEWS = (0.0, 0.5, 0.75, 0.99)
 # The only skews given the full ladder.
 LOAD_SKEWS = (0.5, 0.99)
@@ -54,10 +54,33 @@ class Workload:
         return {0.0: 340, 0.5: 390, 0.75: 440, 0.99: 490}[self.skew]
 
 
+def _rungs_on_disk():
+    """Every `t=` with a run on disk, ascending.
+
+    Read from the logs rather than mirrored from `EXP5_THROUGHPUTS`, so trimming the ladder
+    in lib.sh needs no change here. Rungs that were never run are simply absent, which is
+    what `run_stats` already reports as missing.
+    """
+    root = pathlib.Path(logparser.LOG_DIR) / f"c={EXP5_CONFIG}"
+    pattern = f"a=*/w={WRITES:g}/d={EXP5_DURATION}/i={EXP5_INGRESS}/t=*"
+    found = set()
+    for path in root.glob(pattern):
+        try:
+            value = float(path.name.removeprefix("t="))
+        except ValueError:
+            continue
+        found.add(int(value) if value.is_integer() else value)
+    return tuple(sorted(found))
+
+
+THROUGHPUTS = _rungs_on_disk()
+
 CDF_WORKLOADS = tuple(
     Workload(skew, keys) for keys in (KEYS, KEYS_SPARSE) for skew in SKEWS
 )
-LOAD_WORKLOADS = tuple(Workload(skew) for skew in LOAD_SKEWS)
+LOAD_WORKLOADS = tuple(
+    Workload(skew, keys) for keys in (KEYS, KEYS_SPARSE) for skew in LOAD_SKEWS
+)
 
 
 def _flag_given(*names):
