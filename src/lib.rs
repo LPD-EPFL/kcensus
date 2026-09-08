@@ -223,8 +223,13 @@ pub async fn run() -> io::Result<()> {
     ));
 
     let duration = args.duration;
-    let warmup = args.warmup.unwrap_or(args.duration / 4);
-    let sustain = args.sustain.unwrap_or((warmup * 3) / 4);
+    let warmup = args
+        .warmup
+        .unwrap_or(args.duration * 4 / 10 + Duration::from_secs(1));
+    let sustain = args
+        .sustain
+        .unwrap_or(args.duration / 10 + Duration::from_secs(1));
+    let warmup = warmup.max(sustain);
     let exp_length = warmup + duration + sustain;
     let deadlock_deadline = ((exp_length * 3) / 2).max(Duration::from_secs(5));
     let no_conflicts = !args.conflicts.unwrap_or(false);
