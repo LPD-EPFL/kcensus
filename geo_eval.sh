@@ -96,15 +96,19 @@ function destroy() {
   echo "--> Infrastructure is DOWN."
 }
 
-# Tear down whatever is still provisioned when the script exits non-zero or is interrupted.
+# Tear down whatever is still provisioned when the script exits. `destroy` clears both
+# variables, so a non-empty `CURRENT_EXP_ID` here means infrastructure is still up.
 function teardown_on_abort() {
   local code=$?
   trap - EXIT INT TERM
-  if [ "${code}" -ne 0 ] && [ -n "${CURRENT_EXP_ID}" ]; then
+  if [ -n "${CURRENT_EXP_ID}" ]; then
     echo "--> Aborting: tearing down ${CURRENT_EXP_ID} before exit..." >&2
     destroy "${CURRENT_VAR_FILE}" "${CURRENT_EXP_ID}" || echo \
       "--> WARNING: teardown FAILED. Destroy manually:" \
       "./geo_eval.sh destroy ${CURRENT_VAR_FILE} ${CURRENT_EXP_ID}" >&2
+    # A zero status with infrastructure still up means a signal: bash defers the trap until
+    # the running command returns, so `$?` is that command's success.
+    [ "${code}" -eq 0 ] && code=130
   fi
   exit "${code}"
 }
