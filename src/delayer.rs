@@ -40,13 +40,18 @@ impl Delayer {
         }
 
         let mut stream_ended = false;
+        let mut consumer_gone = false;
 
         loop {
-            let opt_deadline = queues
-                .iter()
-                .filter_map(|q| q.front())
-                .map(|msg| msg.deadline)
-                .min();
+            let opt_deadline = if consumer_gone {
+                None
+            } else {
+                queues
+                    .iter()
+                    .filter_map(|q| q.front())
+                    .map(|msg| msg.deadline)
+                    .min()
+            };
             if let Some(deadline) = opt_deadline {
                 delay.as_mut().reset(deadline)
             }
@@ -66,10 +71,12 @@ impl Delayer {
                         }
                     };
 
+                    if consumer_gone {
+                        continue
+                    }
+
                     if !msg.msg.is_consensus_msg() {
-                        self.delayed_msg_tx.send(msg).await.expect(
-                            "Channel should not be closed yet"
-                        );
+                        consumer_gone |= self.delayed_msg_tx.send(msg).await.is_err();
                         continue
                     }
 
@@ -79,10 +86,7 @@ impl Delayer {
                             msg.with_deadline(deadline)
                         );
                     } else {
-                        let res = self.delayed_msg_tx.send(msg).await;
-                        if res.is_err() {
-                            return;
-                        }
+                        consumer_gone |= self.delayed_msg_tx.send(msg).await.is_err();
                     }
                 }
 
@@ -94,9 +98,10 @@ impl Delayer {
                     for q in queues.iter_mut() {
                         if let Some(m) = q.front() {
                             if m.deadline < now {
-                                let res = self.delayed_msg_tx.send(q.pop_front().unwrap().msg).await;
-                                if res.is_err() {
-                                    return;
+                                let msg = q.pop_front().unwrap().msg;
+                                if self.delayed_msg_tx.send(msg).await.is_err() {
+                                    consumer_gone = true;
+                                    break;
                                 }
                             }
                         }
@@ -105,8 +110,8 @@ impl Delayer {
                          .map(|q| q.len()).sum::<usize>());
                 }
 
-                () = self.delayed_msg_tx.closed() => {
-                    return;
+                () = self.delayed_msg_tx.closed(), if !consumer_gone => {
+                    consumer_gone = true;
                 }
             } // select!
         } // loop
