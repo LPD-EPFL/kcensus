@@ -93,7 +93,8 @@ function exp-1() {
   local configName algo
   for configName in "${EXP1_CONFIGS[@]}"; do
     for algo in "${ALGOS[@]}"; do
-      run_one "$configName" "${configName}.toml" "$algo" 1 "$(local_duration "$(digits "$configName")")s" exponential "$SPEEDUP"
+      run_one "$configName" "${configName}.toml" "$algo" 1 \
+        "$(local_duration "$(digits "$configName")" 2 "${BASELINE_DURATION%s}")s" exponential "$SPEEDUP"
     done
   done
   echo "--- Finished Experiment 1 ---"
@@ -105,7 +106,10 @@ function exp-2() {
   local algo faults
   for algo in "${REPLICATED_ALGOS[@]}"; do
     for faults in "" $(all_faults "$(digits "$EXP2_CONFIG")" "$(get_nonvoting "$EXP2_CONFIG" "$algo")"); do
-      run_one "$EXP2_CONFIG" "${EXP2_CONFIG}.toml" "$algo" 1 "$(local_duration "$(digits "$EXP2_CONFIG")")s" exponential "$SPEEDUP" "$faults"
+      local base="${DURATION%s}"
+      [ -z "$faults" ] && base="${BASELINE_DURATION%s}"
+      run_one "$EXP2_CONFIG" "${EXP2_CONFIG}.toml" "$algo" 1 \
+        "$(local_duration "$(digits "$EXP2_CONFIG")" 2 "$base")s" exponential "$SPEEDUP" "$faults"
     done
   done
   echo "--- Finished Experiment 2 ---"

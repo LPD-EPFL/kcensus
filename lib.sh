@@ -13,6 +13,10 @@ REPLICATED_ALGOS=(kcensus "swift-paxos" pando epaxos "multi-paxos" paxos)
 ALGOS=("${REPLICATED_ALGOS[@]}")
 
 DURATION=10s
+# The fault-free latency runs -- exp-1, and exp-2's no-fault baseline -- measure steady-state
+# latency, where a longer window tightens the percentiles. exp-2's fault runs keep `DURATION`:
+# there are 63 of them per algorithm.
+BASELINE_DURATION=60s
 THROUGHPUT=1000 # total req/s, split evenly between the proposers
 SPEEDUP=1
 KEYS=10000
@@ -141,8 +145,7 @@ function per_proposer_rate() {
 # `local_duration` in graphs/common.py must compute the same value, or the `d=` in the path it
 # looks for will not exist.
 function local_duration() {
-  local num_replicas="$1" sample_divisor="${2:-2}"
-  local base="${DURATION%s}"
+  local num_replicas="$1" sample_divisor="${2:-2}" base="${3:-${DURATION%s}}"
   local target=$(( (THROUGHPUT * base) / sample_divisor ))
   local rate; rate="$(local_throughput "$num_replicas")"
   awk -v target="$target" -v rate="$rate" -v base="$base" \

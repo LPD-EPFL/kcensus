@@ -255,7 +255,7 @@ function exp-1() {
 
     for writes in 1; do
       for algo in "${ALGOS[@]}"; do
-        run "$EXPERIMENT_ID" "$configName" "$algo" "$writes" "$DURATION" "exponential" "$THROUGHPUT"
+        run "$EXPERIMENT_ID" "$configName" "$algo" "$writes" "$BASELINE_DURATION" "exponential" "$THROUGHPUT"
       done
     done
 
@@ -335,14 +335,15 @@ function exp-2() {
   local EXPERIMENT_ID; EXPERIMENT_ID="$(experiment_id "exp-2")"
   local varFile="${CONFIGS[$configName]}"
   local writes=1
-  local duration="10s"
   local throughput="$THROUGHPUT"
 
   provision "$varFile" "$EXPERIMENT_ID"
   deploy "$EXPERIMENT_ID"
 
+  local duration
   for algo in "${REPLICATED_ALGOS[@]}"; do
     for faults in "" $(all_faults "$(digits "$configName")" "$(get_nonvoting "$configName" "$algo")"); do
+      if [ -z "$faults" ]; then duration="$BASELINE_DURATION"; else duration="$DURATION"; fi
       run "$EXPERIMENT_ID" "$configName" "$algo" $writes $duration exponential $throughput "$faults"
     done
   done

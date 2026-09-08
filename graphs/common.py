@@ -93,6 +93,10 @@ parser.add_argument(
     "-d", "--duration", type=str, default="10s", help="Duration of the experiment in seconds"
 )
 parser.add_argument(
+    "--baseline-duration", type=str, default=None,
+    help="Duration of the fault-free runs, when it differs from --duration (exp-2)",
+)
+parser.add_argument(
     "-i", "--ingress", type=str, default="exponential", help="Type of ingress"
 )
 parser.add_argument(
@@ -142,6 +146,8 @@ parser.add_argument(
          "throughput a local run uses.",
 )
 args = parser.parse_args()
+if args.baseline_duration is None:
+    args.baseline_duration = args.duration
 
 # eval.sh writes to a separate root so a local run can never overwrite the AWS results.
 logparser.LOG_DIR = "../local-logs" if args.local else "../logs"

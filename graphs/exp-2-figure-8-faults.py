@@ -71,7 +71,10 @@ for num_faults, plot in enumerate(plots):
                 algo=experiment,
                 config=args.config,
                 writes=args.writes,
-                duration=local_duration(args.duration, num_replicas),
+                duration=local_duration(
+                    args.baseline_duration if num_faults == 0 else args.duration,
+                    num_replicas,
+                ),
                 ingress=args.ingress,
                 throughput=local_throughput(args.throughput, num_replicas),
                 speedup=args.speedup,

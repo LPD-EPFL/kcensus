@@ -53,7 +53,8 @@ fc-cache && rm -rf ~/.cache/matplotlib
 Complete §1 first to clone the repository and install the plotting dependencies.
 
 You do not need to rerun the experiments to reproduce the exact paper plots. The complete logs are
-available in the [artifact-evaluation-v1 release](https://github.com/LPD-EPFL/kcensus/releases/tag/artifact-evaluation-v1).
+available in
+the [artifact-evaluation-v1 release](https://github.com/LPD-EPFL/kcensus/releases/tag/artifact-evaluation-v1).
 From the root of a fresh clone, download them and generate the plots with:
 
 ```bash
@@ -75,23 +76,23 @@ The same four experiments, described in the table below, are available locally a
 them, complete the [build setup (§4)](#4-build-setup-for-new-experiments), then follow
 [local runs (§5)](#5-running-locally-without-aws) or [AWS runs (§6)](#6-running-experiments-on-aws).
 
-| Experiment | Description | Figures | Local runtime | AWS runtime |
-|---|---|---|---|---|
-| `exp-1` | End-to-end latency in four 7-replica deployments: Northern Hemisphere, Europe, North America, and East Asia | 1, 7 | 15min | 30min |
-| `exp-2` | Northern Hemisphere, with every combination of up to 3 crashed replicas | 8 | 1h45min | 2h30min |
-| `exp-3` | Latency scaling from 3 to 31 replicas worldwide, and requirements optimization time | 9, 12 | 1h10min | 1h30min |
-| `exp-4` | Traffic, CPU, and memory consumption on a single machine with simulated link delays | 10, 11 | 1h50min | 30min |
+| Experiment | Description                                                                                                 | Figures | Local runtime | AWS runtime |
+|------------|-------------------------------------------------------------------------------------------------------------|---------|---------------|-------------|
+| `exp-1`    | End-to-end latency in four 7-replica deployments: Northern Hemisphere, Europe, North America, and East Asia | 1, 7    | 45min         | 1h          |
+| `exp-2`    | Northern Hemisphere, with every combination of up to 3 crashed replicas                                     | 8       | 1h55min       | 2h40min     |
+| `exp-3`    | Latency scaling from 3 to 31 replicas worldwide, and requirements optimization time                         | 9, 12   | 1h10min       | 1h30min     |
+| `exp-4`    | Traffic, CPU, and memory consumption on a single machine with simulated link delays                         | 10, 11  | 1h50min       | 30min       |
 
-Runtimes are approximate, totaling about 5 hours for either workflow.
+Runtimes are approximate, totaling about 6 hours for either workflow.
 
 Each figure has a `.pdf` and a `.txt` containing its underlying numbers in `graphs/plots/`:
 
-| Experiment | Output filenames (before `.pdf` or `.txt`) |
-|---|---|
-| `exp-1` | `exp-1-figure-1-intro`, `exp-1-figure-7-latency` |
-| `exp-2` | `exp-2-figure-8-faults` |
-| `exp-3` | `exp-3-figure-9-scalability`, `exp-3-figure-12-propagation` |
-| `exp-4` | `exp-4-figure-10-network`, `exp-4-figure-11-cpu-mem` |
+| Experiment | Output filenames (before `.pdf` or `.txt`)                  |
+|------------|-------------------------------------------------------------|
+| `exp-1`    | `exp-1-figure-1-intro`, `exp-1-figure-7-latency`            |
+| `exp-2`    | `exp-2-figure-8-faults`                                     |
+| `exp-3`    | `exp-3-figure-9-scalability`, `exp-3-figure-12-propagation` |
+| `exp-4`    | `exp-4-figure-10-network`, `exp-4-figure-11-cpu-mem`        |
 
 Local figure filenames have an additional `local-` prefix.
 
@@ -139,7 +140,7 @@ in `configs/`. Complete §1 and §4 first, then run an experiment and plot its r
 ./plot.sh --local exp-1
 ```
 
-These commands build and run experiment 1 (~15 minutes), then plot Figures 1 and 7.
+These commands build and run experiment 1 (~45 minutes), then plot Figures 1 and 7.
 No cloud cleanup is needed.
 
 All experiments, their figures, and estimated runtimes are listed in the [table in §3](#3-experiments-and-outputs).
@@ -151,7 +152,7 @@ To generate every figure:
 ./plot.sh --local all
 ```
 
-The full suite takes approximately 5 hours.
+The full suite takes approximately 6 hours.
 
 ### What is different from the AWS runs
 
@@ -169,7 +170,9 @@ Local runs use latency snapshots from AWS regions and can match the original res
 a fresh deployment, whose network delays may have changed. Differences in delays can still affect
 which leaders and quorums are chosen, and which regions have the lowest latency.
 
-- **Latency (Figures 1, 7, 8, 9):** on our laptop, local results closely matched experiments 1 and 2. In Figure 7, protocol/deployment averages differed from the archived results by 3% on average. Differences can be larger at larger replica counts (experiment 3), or depending on topology and hardware.
+- **Latency (Figures 1, 7, 8, 9):** on our laptop, local results closely matched experiments 1 and 2. In Figure 7,
+  protocol/deployment averages differed from the archived results by 3% on average. Differences can be larger at larger
+  replica counts (experiment 3), or depending on topology and hardware.
 - **Traffic (Figure 10):** bytes per request are identical across local and AWS runs.
 - **Memory (Figure 11):** usage is almost identical across local and AWS runs.
 - **CPU time and optimization time (Figures 11 and 12):** absolute values depend on hardware.
@@ -240,7 +243,8 @@ When several reviewers share the AWS account, each must choose a different run I
 
 The run ID should follow the shape of `reviewer-x`, e.g. `reviewer-a`, `reviewer-b`, ... (lowercase)
 or `reviewer-1`, `reviewer-2`, ...
-It namespaces all AWS resources created by the command; it does not change the log paths or the subsequent `./plot.sh exp-N`
+It namespaces all AWS resources created by the command; it does not change the log paths or the subsequent
+`./plot.sh exp-N`
 command. Running multiple AWS experiments in parallel requires separate clones and distinct run IDs
 to keep Terraform state, logs, and cloud resources separate.
 
@@ -258,7 +262,7 @@ To run everything the paper depends on:
 ./plot.sh all                      # every figure
 ```
 
-Running everything takes ~5h.
+Running everything takes ~6h.
 
 > **Note**: The experiments take several hours and incur AWS costs - `exp-2` (faults) dominates,
 > and `exp-3` holds 31 instances across every region for its whole duration.
@@ -302,12 +306,12 @@ For the instance name `kcensus-exp-1-aws-europe-7-reviewer-a-eu-west-1`, `<exper
 `exp-1-aws-europe-7-reviewer-a` and `<instance-aws-region>` is `eu-west-1`.
 Choose `<tfvars-path>` from the region set in `<experiment-id>`:
 
-| Region set | Terraform variable file |
-|---|---|
-| `aws-ring-7` | `ring-7.tfvars` |
-| `aws-europe-7` | `europe-7.tfvars` |
+| Region set            | Terraform variable file  |
+|-----------------------|--------------------------|
+| `aws-ring-7`          | `ring-7.tfvars`          |
+| `aws-europe-7`        | `europe-7.tfvars`        |
 | `aws-north-america-7` | `north-america-7.tfvars` |
-| `aws-east-asia-7` | `east-asia-7.tfvars` |
+| `aws-east-asia-7`     | `east-asia-7.tfvars`     |
 
 This single command tears down every instance in one region set:
 
@@ -315,7 +319,8 @@ This single command tears down every instance in one region set:
 ./eval.sh destroy deployment/terraform/regions/europe-7.tfvars exp-1-aws-europe-7-reviewer-a
 ```
 
-The other experiments each use a single, fixed `.tfvars` file, so you only need to replace the `<experiment-id>` with your own:
+The other experiments each use a single, fixed `.tfvars` file, so you only need to replace the `<experiment-id>` with
+your own:
 
 ```bash
 ./eval.sh destroy deployment/terraform/regions/ring-7.tfvars exp-2-reviewer-a  # exp-2 (faults)
