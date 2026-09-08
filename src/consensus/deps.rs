@@ -5,15 +5,15 @@
 //! replacing it: the two share the shard pool, the sinks, the command types and the eval
 //! logging, but nothing of their instance state or their commit-to-execution path.
 
-use crate::consensus::DEADLOCK_REPORT_LIMIT;
 use crate::consensus::command::{Command, CommitReport};
-use crate::consensus::deps::dep_set::{DepSet, requester_of};
+use crate::consensus::deps::dep_set::{requester_of, DepSet};
 use crate::consensus::deps::execution::{cycle_possible, executable_order, next_executable};
 use crate::consensus::deps::instance::{Instance, Phase};
 use crate::consensus::deps::message::DepMsg;
 use crate::consensus::deps::read_tracker::ReadTracker;
 use crate::consensus::message::{CommandBatch, ConsensusMessage, ConsensusMsg};
 use crate::consensus::shard_pool::{PooledShard, ShardPool};
+use crate::consensus::DEADLOCK_REPORT_LIMIT;
 use crate::eval;
 use crate::message::Message::{ConsensusM, Done};
 use crate::message::MsgWithSource;
@@ -25,8 +25,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::io;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::Mutex;
 use tokio::sync::mpsc::{Receiver, Sender};
+use tokio::sync::Mutex;
 use tokio::{pin, select};
 use tokio_timerfd::Delay;
 
@@ -291,6 +291,8 @@ impl DepShard {
         if self.in_fast_quorum(self.my_pid) {
             instance.record_preaccept(self.my_pid, init_deps.clone());
         }
+        // Our own proposal is the coordinator's: acks come back to us with theirs left out.
+        instance.set_coordinator_deps(&init_deps);
         self.instances.insert(id, instance);
 
         debug!(
@@ -600,7 +602,9 @@ impl DepShard {
         let my_pid = self.my_pid;
         let votes = self.in_fast_quorum(my_pid);
         let src_votes = self.in_fast_quorum(src);
+        let echoes_coordinator = my_deps == coordinator_deps;
         let instance = self.instance_mut(id);
+        instance.set_coordinator_deps(&coordinator_deps);
         // The coordinator's `PreAccept` doubles as its own pre-accept: it is a replica's
         // local proposal like any other, and both protocols keep everyone's. In EPaxos it
         // is also the leader's, and so the set a fast commit would agree on; in SwiftPaxos
@@ -617,11 +621,12 @@ impl DepShard {
 
         if votes {
             instance.record_preaccept(my_pid, my_deps.clone());
+            let acked = (!echoes_coordinator).then(|| my_deps.clone());
 
             match self.mode {
                 // EPaxos: only the coordinator decides, so the answer goes to it alone.
                 DepMode::EPaxos { .. } => {
-                    self.send(DepMsg::PreAcceptOk { id, deps: my_deps }, src)
+                    self.send(DepMsg::PreAcceptOk { id, deps: acked }, src)
                         .await?
                 }
                 // We are the leader: our proposal is the one everyone else adopts, and its
@@ -635,7 +640,7 @@ impl DepShard {
                 // served first.
                 DepMode::SwiftPaxos { .. } => {
                     self.priority_broadcast(
-                        DepMsg::PreAcceptOk { id, deps: my_deps },
+                        DepMsg::PreAcceptOk { id, deps: acked },
                         None,
                         // Send in priority to the requester (can be a non-voting proposer)
                         self.requester_of(id),
@@ -660,8 +665,22 @@ impl DepShard {
 
     /// A process's own proposal — EPaxos' `PreAcceptOk`, SwiftPaxos' `FastAck`. The same
     /// state either way; the two protocols differ only in who receives it.
-    async fn on_pre_accept_ok(&mut self, src: usize, id: usize, deps: DepSet) -> io::Result<()> {
+    async fn on_pre_accept_ok(
+        &mut self,
+        src: usize,
+        id: usize,
+        deps: Option<DepSet>,
+    ) -> io::Result<()> {
         let instance = self.instance_mut(id);
+        let deps = match deps {
+            Some(deps) => deps,
+            // Left out because it repeats the coordinator's, which the `PreAccept` this
+            // answers delivered to us before this message could be acted on.
+            None => instance
+                .coordinator_deps()
+                .expect("an ack echoes a `PreAccept` we have handled")
+                .clone(),
+        };
         if instance.is_committed() || !instance.record_preaccept(src, deps) {
             return Ok(());
         }

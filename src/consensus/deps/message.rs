@@ -32,13 +32,14 @@ pub enum DepMsg {
     /// paper and its reference implementation (Fig. 4 lines 19/21, an unconditional
     /// `SendToAll`): each replica evaluates the fast route on its own once it holds
     /// matching proposals from a fast quorum, rather than waiting for the leader's
-    /// `Commit`. Either way it carries the dependency set and is sent unconditionally — it
-    /// is this replica's own proposal, formed before the leader's is known, so there is
-    /// nothing yet to agree with.
+    /// `Commit`. Either way it is sent unconditionally — it is this replica's own proposal,
+    /// formed before the leader's is known, so there is nothing yet to agree with.
+    ///
+    /// deps are optional: A None implies the preacceptance of the initially proposed deps.
     ///
     /// The leader's counterpart — what SwiftPaxos also calls a `FastAck`, sent by the
     /// leader — is the `Accept` below.
-    PreAcceptOk { id: usize, deps: DepSet },
+    PreAcceptOk { id: usize, deps: Option<DepSet> },
 
     /// EPaxos\* `Accept(b, id, c, D)`: the slow path, carrying the union of the
     /// dependencies reported by a quorum.

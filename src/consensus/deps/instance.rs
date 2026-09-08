@@ -63,6 +63,8 @@ pub struct Instance {
     /// Whether this instance has left the fast route. Read into `CommitReport::fast`.
     /// SwiftPaxos sets it outright, EPaxos infers it from the `Accept`.
     left_fast_path: bool,
+    /// A coordinator might not be a voter
+    coordinator_deps: Option<DepSet>,
 }
 
 impl Instance {
@@ -84,6 +86,7 @@ impl Instance {
             union: DepSet::new(process_count),
             accept_acked: BitSet::with_capacity(process_count),
             left_fast_path: false,
+            coordinator_deps: None,
         }
     }
 
@@ -106,6 +109,20 @@ impl Instance {
     #[inline]
     pub fn leader_deps(&self) -> Option<&DepSet> {
         self.preaccepts[self.leader].as_ref()
+    }
+
+    /// What the coordinator proposed, once its `PreAccept` has been handled.
+    #[inline]
+    pub fn coordinator_deps(&self) -> Option<&DepSet> {
+        self.coordinator_deps.as_ref()
+    }
+
+    /// Records what the coordinator proposed, for acks that leave their own out.
+    #[inline]
+    pub fn set_coordinator_deps(&mut self, deps: &DepSet) {
+        if self.coordinator_deps.is_none() {
+            self.coordinator_deps = Some(deps.clone());
+        }
     }
 
     /// Records `src`'s own proposal. Returns false if we already had one from it, which is
