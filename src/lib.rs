@@ -249,7 +249,8 @@ pub async fn run() -> io::Result<()> {
                 committed_request_tx,
                 deadlock_deadline,
             );
-            let _ = tokio::join!(app.run(), client.run(workload), consensus);
+            let (_, _, c) = tokio::join!(app.run(), client.run(workload), consensus);
+            c?;
             expected_latency
         }
         Algo::Paxos => {
@@ -271,7 +272,8 @@ pub async fn run() -> io::Result<()> {
                 committed_request_tx,
                 deadlock_deadline,
             );
-            let _ = tokio::join!(app.run(), client.run(workload), consensus);
+            let (_, _, c) = tokio::join!(app.run(), client.run(workload), consensus);
+            c?;
             propagation_graphs.paxos_latencies[my_pid]
         }
         Algo::Pando => {
@@ -295,7 +297,8 @@ pub async fn run() -> io::Result<()> {
                 committed_request_tx,
                 deadlock_deadline,
             );
-            let _ = tokio::join!(app.run(), client.run(workload), consensus);
+            let (_, _, c) = tokio::join!(app.run(), client.run(workload), consensus);
+            c?;
             propagation_graphs.pando_latencies[my_pid]
         }
         Algo::EPaxos => {
@@ -317,7 +320,8 @@ pub async fn run() -> io::Result<()> {
                 committed_request_tx,
                 deadlock_deadline,
             );
-            let _ = tokio::join!(app.run(), client.run(workload), consensus);
+            let (_, _, c) = tokio::join!(app.run(), client.run(workload), consensus);
+            c?;
             propagation_graphs.epaxos_latencies[my_pid]
         }
         Algo::SwiftPaxos => {
@@ -338,7 +342,8 @@ pub async fn run() -> io::Result<()> {
                 committed_request_tx,
                 deadlock_deadline,
             );
-            let _ = tokio::join!(app.run(), client.run(workload), consensus);
+            let (_, _, c) = tokio::join!(app.run(), client.run(workload), consensus);
+            c?;
             println!(
                 "SwiftPaxos fixed quorum: {:?}",
                 propagation_graphs.swift_paxos_fixed_fast_quorum
@@ -388,7 +393,8 @@ pub async fn run() -> io::Result<()> {
                 committed_request_tx,
                 deadlock_deadline,
             );
-            let _ = tokio::join!(app.run(), client.run(workload), consensus);
+            let (_, _, c) = tokio::join!(app.run(), client.run(workload), consensus);
+            c?;
             println!("Leader: {leader}");
             multi_paxos_latencies[leader][my_pid]
         }
