@@ -17,7 +17,7 @@ source "$(dirname "$0")/lib.sh"
 BASE_LOG_DIR="./local-logs"
 BIN=./target/release/kcensus
 GRAPH_BENCH=./target/release/graph_bench
-TIME_FORMAT='[log=time] Memory (KB): %M, System (s): %S User (s): %U | {"memory": %M, "system": %S, "user": %U}'
+TIME_FORMAT='[log=time] Memory (KiB): %M, System (s): %S User (s): %U | {"memory": %M, "system": %S, "user": %U}'
 
 
 function build_binaries() {
@@ -41,7 +41,8 @@ function run_one() {
   local timeout_s=$(( 30 + 3 * ${duration%s} ))
 
   local title; title="$(make_title)"
-  local logDir="${BASE_LOG_DIR}/${title}"
+  local logRoot="${BASE_LOG_DIR}${LOG_NAMESPACE:+/${LOG_NAMESPACE}}"
+  local logDir="${logRoot}/${title}"
   mkdir -p "$logDir"
 
   echo "--> RUNNING: ${title}"
@@ -73,7 +74,7 @@ function run_one() {
 
     # Keep the failed attempt: the next one overwrites this directory, and a saturation or a bug
     # would otherwise leave no evidence at all.
-    local failedDir="${BASE_LOG_DIR}/failed/${title}/attempt=${attempt}"
+    local failedDir="${logRoot}/failed/${title}/attempt=${attempt}"
     mkdir -p "$failedDir" && cp -a "${logDir}/." "${failedDir}/" 2>/dev/null || true
     echo "--> Attempt ${attempt}/${MAX_ATTEMPTS} failed: ${algo} on ${configName}; output kept in ${failedDir}" >&2
     if [ "$attempt" -eq "${MAX_ATTEMPTS}" ]; then
@@ -111,18 +112,20 @@ function exp-2() {
   echo "--- Finished Experiment 2 ---"
 }
 
-# --- Experiment 3: scalability and optimization time (Figures 9 and 12) ---
+# --- Experiment 3: scalability, resources and optimization time (Figures 9-12) ---
 function exp-3() {
-  echo "--- Experiment 3: scalability + optimization time (local) ---"
+  echo "--- Experiment 3: scalability + resources + optimization time (local) ---"
   local type n algo
   for type in "${EXP3_TYPES[@]}"; do
     for n in "${EXP3_SIZES[@]}"; do
       local configFile="${type}/${n}.toml"
       for algo in "${ALGOS[@]}"; do
-        # A quarter of an AWS run's requests: still >=2500 samples at every size, against ~1250
-        # with a fixed window. Half would be nicer statistically but costs 1.7h instead of 1.0h,
-        # and a local run is stable enough that the extra samples buy little.
-        run_one "${type}/${n}.toml" "$configFile" "$algo" 1 "$(local_duration "$n" 4)s" exponential "$SPEEDUP"
+        # The random deployments also feed the CPU figure, so reproduce the full AWS request
+        # count there. The Parisian latency-only runs retain the cheaper quarter sample.
+        local sample_divisor=4
+        [ "$type" = "aws-random" ] && sample_divisor=1
+        run_one "${type}/${n}.toml" "$configFile" "$algo" 1 \
+          "$(local_duration "$n" "$sample_divisor")s" exponential "$SPEEDUP"
       done
       # One propagation measurement per deployment (Figure 12).
       local graphDir="${BASE_LOG_DIR}/c=${type}/${n}.toml"
@@ -142,15 +145,17 @@ function exp-3() {
 # shortfall grows with n, bending the very curve the figure is meant to show.
 function exp-4() {
   echo "--- Experiment 4: resource consumption (local) ---"
+  # Keep the aws-random paths separate from experiment 3, which uses the same configurations.
+  local LOG_NAMESPACE="exp-4"
   local n algo configFile
   for n in "${EXP4_SIZES[@]}"; do
     configFile="${EXP4_TYPE}/${n}.toml"
     for algo in "${ALGOS[@]}"; do
-      # Figure 11 normalizes memory by SHARDS, so disable recycling for this experiment by
-      # making the physical shard pool as large as the logical shard count.
+      # Use the default pool of 1,000 physical shards. Rust reports its final allocation so the
+      # plot can detect and account for any growth rather than assuming the requested size.
       run_one "${EXP4_TYPE}/${n}.toml" "$configFile" "$algo" 1 \
-        "$(local_duration "$n" 1)s" exponential "$EXP4_SPEEDUP" \
-        "" "$KEYS" "$SKEW" "$SHARDS" "" "$SHARDS"
+        "$(local_duration "$n" 1)s" exponential "$SPEEDUP" \
+        "" "$KEYS" "$SKEW" "$SHARDS"
     done
   done
   echo "--- Finished Experiment 4 ---"
@@ -171,7 +176,7 @@ function main() {
     "exp-2") exp-2 ;;
     "exp-3") exp-3 ;;
     "exp-4") exp-4 ;;
-    "all")   exp-1; exp-2; exp-3; exp-4 ;;
+    "all")   exp-1; exp-2; exp-3 ;;
     "help"|"-h"|"--help") show_help ;;
     *) echo "Error: Unknown command '$1'"; echo; show_help; exit 1 ;;
   esac

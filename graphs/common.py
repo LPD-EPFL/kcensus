@@ -145,12 +145,18 @@ parser.add_argument(
     help="Read ../local-logs (produced by eval.sh) instead of ../logs, and expect the reduced "
          "throughput a local run uses.",
 )
+parser.add_argument(
+    "--log-subdir", type=str, default="",
+    help="Optional experiment namespace below the log root (for example, exp-4).",
+)
 args = parser.parse_args()
 if args.baseline_duration is None:
     args.baseline_duration = args.duration
 
 # eval.sh writes to a separate root so a local run can never overwrite the AWS results.
 logparser.LOG_DIR = "../local-logs" if args.local else "../logs"
+if args.log_subdir:
+    logparser.LOG_DIR = f"{logparser.LOG_DIR}/{args.log_subdir.strip('/')}"
 # Local figures are prefixed so a local run never overwrites the real ones.
 PLOT_PREFIX = "local-" if args.local else ""
 

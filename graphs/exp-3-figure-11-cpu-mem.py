@@ -1,28 +1,21 @@
 #!/usr/bin/env python3
 from matplotlib.lines import Line2D
-from matplotlib.ticker import MultipleLocator
+from matplotlib.ticker import MaxNLocator, MultipleLocator
 
-from common import ALGORITHMS, args, ki_formatter, local_throughput, PLOT_PREFIX, local_duration
+from common import ALGORITHMS, args, local_throughput, PLOT_PREFIX, local_duration
 from logparser import *
 from prelude import plt
+
+EXPECTED_INITIAL_POOL_SIZE = min(args.shards, 1000)
 
 fig, plots = plt.subplots(1, 2, figsize=(3.26, 0.93), tight_layout=True)
 plt.tight_layout(pad=0, w_pad=0, h_pad=0)  # , rect=(0,0,.80,1))
 plots[0].set_title("Average Compute", pad=0)
 plots[0].set_ylabel("CPU time (s)", labelpad=1)
-# plots[0].yaxis.set_major_locator(MultipleLocator(1))
-# plots[0].yaxis.set_major_formatter(k_formatter)
-plots[1].set_title("Average Shard Memory", pad=0)
-plots[1].set_ylabel("Memory (KiB)", labelpad=1)
-plots[1].yaxis.set_major_formatter(ki_formatter)
-plots[1].yaxis.set_minor_locator(MultipleLocator(2.5))
-plots[1].yaxis.set_major_locator(MultipleLocator(5))
-# if args.geo ==1:
-#     plots[1].set_ylim(5.3 * 1024 * 1024, 10 * 1024 * 1024)
-# else:
-#     plots[1].set_ylim(7.2 * 1024 * 1024, 10.9 * 1024 * 1024)
-plots[0].yaxis.set_minor_locator(MultipleLocator(1))
-plots[0].yaxis.set_major_locator(MultipleLocator(2))
+plots[1].set_title("Average Peak Memory", pad=0)
+plots[1].set_ylabel("Memory (MiB)", labelpad=1)
+for plot in plots:
+    plot.yaxis.set_major_locator(MaxNLocator(nbins=5, min_n_ticks=3))
 for plot in plots:
     plot.set_xlabel("Number of Servers", labelpad=1)
     plot.grid(axis="y", which="major", linestyle="--", linewidth="0.5")
@@ -59,27 +52,60 @@ for i, experiment in enumerate(ALGORITHMS):
                 std=source,
                 conflicts="conflicts=false",
             )
-            assert (
-                    len(raw_output["time"]) == num_replicas
-            ), f'Some replicas ({num_replicas - len(logs["err"]["time"])} out of {num_replicas}) did not report CPU+mem stats'
+            assert len(raw_output["time"]) == num_replicas, (
+                f'{num_replicas - len(raw_output["time"])} out of {num_replicas} replicas '
+                f'did not report {"memory" if source == "err" else "CPU"} stats'
+            )
             flattened_output = defaultdict(list)
             for category, pid_data in raw_output.items():
                 for pid, items in pid_data.items():
                     flattened_output[category].extend(items)
             logs[source] = flattened_output
 
-        cpu = sum(map(lambda log: log["user"], logs["out"]["time"])) / num_replicas
-        # cpu = compute_average(logs['time'], lambda log: log['user'] + log['system'])
-        mem = compute_average(logs["err"]["time"], lambda log: log["memory"] * 1024) / args.shards
+        pool_reports = logs["out"]["shard-pool-done"]
+        assert len(pool_reports) == num_replicas, (
+            f'{num_replicas - len(pool_reports)} out of {num_replicas} replicas did not '
+            'report their Rust shard-pool allocation'
+        )
+        assert all(log["initial_pool_size"] == EXPECTED_INITIAL_POOL_SIZE for log in pool_reports), (
+            f"expected every Rust shard pool to start with {EXPECTED_INITIAL_POOL_SIZE} physical "
+            "shards"
+        )
+        assert all(log.get("logical_shards", args.shards) == args.shards for log in pool_reports), (
+            f"expected every Rust shard pool to serve {args.shards} logical shards"
+        )
+
+        # ProcessTime is process-wide CPU time (user + system), measured over the workload.
+        # `user` is accepted for old logs, where this same value had a misleading field name.
+        cpu = compute_average(
+            logs["out"]["time"],
+            lambda log: log["cpu"] if "cpu" in log else log["user"],
+        )
+        # GNU time's %M is the directly measured peak resident set size in KiB. Plot the whole
+        # process RSS: dividing it by the logical shard count was only valid when every logical
+        # shard was physically preallocated, and substantially understates a pooled deployment.
+        mem = compute_average(logs["err"]["time"], lambda log: log["memory"]) / 1024
+        total_pool_size = sum(log["pool_size"] for log in pool_reports)
+        total_initial_pool_size = sum(log["initial_pool_size"] for log in pool_reports)
+        average_pool_size = total_pool_size / len(pool_reports)
         xs.append(num_replicas)
         ys_cpu.append(cpu)
-        ys_mem.append(mem / 1024)
-        print(experiment, num_replicas, ys_cpu[-1], ys_mem[-1])
+        ys_mem.append(mem)
+        print(
+            experiment,
+            num_replicas,
+            f"cpu_seconds={ys_cpu[-1]}",
+            f"peak_memory_mib={ys_mem[-1]}",
+            f"preallocated_physical_shards={total_initial_pool_size}",
+            f"physical_shards={total_pool_size}",
+            f"pool_growth={total_pool_size - total_initial_pool_size}",
+            f"average_pool_size={average_pool_size}",
+        )
     plots[0].plot(xs, ys_cpu, **ALGORITHMS[experiment], markevery=(1, 3), zorder=(2 - i / 100))
     plots[1].plot(xs, ys_mem, **ALGORITHMS[experiment], markevery=(1, 3), zorder=(2 - i / 100))
 
-plots[0].set_ylim(0, 6)
-plots[1].set_ylim(0, 15)
+plots[0].set_ylim(0, None)
+plots[1].set_ylim(0, None)
 fig.subplots_adjust(wspace=0.4, hspace=0)
 
 legends = [Line2D([0], [0], **algo) for (k, algo) in ALGORITHMS.items() if k != "weak-replication"]
@@ -98,6 +124,6 @@ fig.legend(
     handletextpad=0.5,
 )
 
-pdf_path = f"plots/{PLOT_PREFIX}exp-4-figure-11-cpu-mem.pdf"
+pdf_path = f"plots/{PLOT_PREFIX}exp-3-figure-11-cpu-mem.pdf"
 plt.savefig(pdf_path, format="pdf", bbox_inches="tight", pad_inches=0.01)
 print(pdf_path)

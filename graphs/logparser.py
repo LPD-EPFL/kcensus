@@ -41,10 +41,17 @@ def parse(
 def parse_file(file):
     output = defaultdict(list)
     log_pattern = r"\[log=(.*?)\] ([^\|]*) \| (.*)"
+    # Older exp-3 logs predate the structured resource line above. Keep them usable for
+    # Figure 11 instead of requiring an expensive cloud rerun.
+    legacy_memory_pattern = r"\[time\] Memory\(KB\): (\d+)"
     for line in file:
         match = re.match(log_pattern, line)
         if match:
             output[match.group(1)].append(json.loads(match.group(3)))
+            continue
+        match = re.match(legacy_memory_pattern, line)
+        if match:
+            output["time"].append({"memory": int(match.group(1))})
     return output
 
 

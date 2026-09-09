@@ -62,7 +62,9 @@ for p in range(2):
                 algo=experiment,
                 config=config.replace("@", str(num_replicas)),
                 writes=writes,
-                duration=local_duration(duration, num_replicas, 4),
+                # Random deployments also feed Figure 11 and therefore reproduce the full
+                # request count locally; Parisian deployments retain the quarter sample.
+                duration=local_duration(duration, num_replicas, 1 if p == 0 else 4),
                 ingress=ingress,
                 throughput=local_throughput(throughput, num_replicas),
                 speedup=speedup,

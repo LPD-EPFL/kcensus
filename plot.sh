@@ -62,34 +62,41 @@ function exp-2() {
 }
 
 function exp-3() {
-  # Experiment 3 also produces two figures: Figure 9 (Scalability) and Figure 12 (Time to
-  # Optimize Requirements). Both come from the same 31-node deployment.
+  # The aws-random half of experiment 3 also records the traffic, CPU and peak-memory values
+  # needed by Figures 10 and 11.
   (
     cd graphs &&
-    echo -n 'plotting exp-3 figure 1/2 (Figure 9)... ' &&
+    echo -n 'plotting exp-3 figure 1/4 (Figure 9)... ' &&
     python3 exp-3-figure-9-scalability.py $LOCAL_FLAG  -g 1 > "./plots/${LOCAL_FLAG:+local-}exp-3-figure-9-scalability.txt" &&
     echo 'done.' &&
-    echo -n 'plotting exp-3 figure 2/2 (Figure 12)... ' &&
+    echo -n 'plotting exp-3 figure 2/4 (Figure 10)... ' &&
+    python3 exp-3-figure-10-network.py $LOCAL_FLAG -c aws-random/@.toml -w 1 --duration 10s -i exponential -t 1000 -s 1 --shards 100000 --keys 100000 --skew 0 -g 1 > "./plots/${LOCAL_FLAG:+local-}exp-3-figure-10-network.txt" &&
+    echo 'done.' &&
+    echo -n 'plotting exp-3 figure 3/4 (Figure 11)... ' &&
+    python3 exp-3-figure-11-cpu-mem.py $LOCAL_FLAG -c aws-random/@.toml -w 1 --duration 10s -i exponential -t 1000 -s 1 --shards 100000 --keys 100000 --skew 0 -g 1 > "./plots/${LOCAL_FLAG:+local-}exp-3-figure-11-cpu-mem.txt" &&
+    echo 'done.' &&
+    echo -n 'plotting exp-3 figure 4/4 (Figure 12)... ' &&
     python3 exp-3-figure-12-propagation.py $LOCAL_FLAG -g 1 > "./plots/${LOCAL_FLAG:+local-}exp-3-figure-12-propagation.txt" &&
     echo 'done.'
   )
 }
 
 function exp-4() {
-  # Figures 10 (traffic/messages) and 11 (CPU/memory), both in Resource Consumption.
+  # Optional dedicated resource run. The normal `all` workflow builds these figures from
+  # exp-3 instead; this command remains able to plot explicitly collected exp-4 logs.
   local writes=1.0
   local duration="10s"
   local throughput=1000
-  local speedup=2
+  local speedup=1
   local keys=100000
   local skew=0.0
   (
     cd graphs &&
     echo -n 'plotting exp-4 figure 1/2 (Figure 10)... ' &&
-    python3 exp-4-figure-10-network.py $LOCAL_FLAG -c aws-random/@.toml -w "$writes" --duration "$duration" -i exponential -t $throughput -s "$speedup" --shards $keys --keys $keys --skew $skew -g 1 > "./plots/${LOCAL_FLAG:+local-}exp-4-figure-10-network.txt" &&
+    python3 exp-3-figure-10-network.py $LOCAL_FLAG --log-subdir exp-4 -c aws-random/@.toml -w "$writes" --duration "$duration" -i exponential -t $throughput -s "$speedup" --shards $keys --keys $keys --skew $skew -g 1 > "./plots/${LOCAL_FLAG:+local-}exp-3-figure-10-network.txt" &&
     echo 'done.' &&
     echo -n 'plotting exp-4 figure 2/2 (Figure 11)... ' &&
-    python3 exp-4-figure-11-cpu-mem.py $LOCAL_FLAG -c aws-random/@.toml -w "$writes" --duration "$duration" -i exponential -t $throughput -s "$speedup" --shards $keys --keys $keys --skew $skew -g 1 > "./plots/${LOCAL_FLAG:+local-}exp-4-figure-11-cpu-mem.txt" &&
+    python3 exp-3-figure-11-cpu-mem.py $LOCAL_FLAG --log-subdir exp-4 -c aws-random/@.toml -w "$writes" --duration "$duration" -i exponential -t $throughput -s "$speedup" --shards $keys --keys $keys --skew $skew -g 1 > "./plots/${LOCAL_FLAG:+local-}exp-3-figure-11-cpu-mem.txt" &&
     echo 'done.'
   )
 }
@@ -114,13 +121,13 @@ Usage: ./plot.sh [--local] [COMMAND]
 Available commands:
   exp-1            Figures 1 and 7   - intro teaser and end-to-end latency
   exp-2            Figure  8         - impact of failures on latency
-  exp-3            Figures 9 and 12  - scalability, and time to optimize requirements
-  exp-4            Figures 10 and 11 - resource consumption (traffic/messages, CPU/memory)
-  exp-5            No figure yet     - contention and load (CDFs/conflicts, throughput)
+  exp-3            Figures 9-12      - scalability, resources, and optimization time
+  exp-4            Figures 10 and 11 - optional dedicated resource-run logs
+  exp-5            Figures 13 and 14 - contention and load (CDFs/conflicts, throughput)
   all              Plot every figure in the paper
 
 The command names match ./eval.sh, so whatever you ran, plot it with the same name.
-(plot-1 .. plot-4 are also accepted.)
+(plot-1 .. plot-5 are also accepted.)
 
 Options:
   --local          Plot ./local-logs (produced by eval.sh) instead of ./logs. Figures are
@@ -134,8 +141,8 @@ function run_all_plots() {
   exp-1
   exp-2
   exp-3
-  exp-4
-  # exp-5 is not included: it maps to no figure yet, and `geo_eval.sh all` does not run it.
+  # Experiment 5 is AWS-only, so local `all` stops after Figure 12.
+  if [ -z "$LOCAL_FLAG" ]; then exp-5; fi
 }
 
 function main() {

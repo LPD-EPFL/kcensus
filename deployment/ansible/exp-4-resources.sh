@@ -2,13 +2,13 @@
 
 
 CASSANDRA_BASE_PORT="9042"
-BASE_LOG_DIR="./logs"
+BASE_LOG_DIR="./logs/exp-4"
 # REPLICATED_ALGOS=(kcensus "weak-replication" "swift-paxos" pando epaxos "multi-paxos" paxos)
 # ALGOS=(no-replication "${REPLICATED_ALGOS[@]}")
 REPLICATED_ALGOS=(kcensus "swift-paxos" pando epaxos "multi-paxos" paxos)
 ALGOS=("${REPLICATED_ALGOS[@]}")
 WRITES=(1)
-SPEEDUP=2 # latency precision does not matter
+SPEEDUP=1
 
 # Bounded retries for a failed run: abort if 5 consecutive attempts fail. No delay is needed
 # here -- everything runs locally on a single machine and `run` already does `killall kcensus`
@@ -66,7 +66,10 @@ function run() {
   local TITLE="c=$CONFIG/a=$ALGO/w=$WRITES/d=$DURATION/i=$INGRESS/t=$THROUGHPUT/s=$SPEEDUP/f=$FAULTS/k=$KEYS/skew=$SKEW/shards=$SHARDS/conflicts=false"
   local LOG_DIR="$BASE_LOG_DIR/$TITLE/"
   local NB=$(digits "$CONFIG")
-  local PER_PROPOSER_THROUGHPUT=$(($THROUGHPUT / $NB))
+  # Floating point for accuracy
+  local PER_PROPOSER_THROUGHPUT
+  PER_PROPOSER_THROUGHPUT=$(awk -v throughput="$THROUGHPUT" -v replicas="$NB" \
+    'BEGIN { printf "%.6g", throughput / replicas }')
   mkdir -p "$LOG_DIR"
   killall kcensus 2>/dev/null
 #  if [[ "${CASSANDRA,,}" != "false" && "$CASSANDRA" != "0" ]]; then
@@ -84,10 +87,8 @@ function run() {
     if [[ "$FAULTS" != "" ]]; then
        FAULTS_ARG="-f $FAULTS"
     fi
-    local time_format='[log=time] Memory (KB): %M, System (s): %S User (s): %U | {"memory": %M, "system": %S, "user": %U}'
-    # Figure 11 divides process memory by SHARDS, so every logical shard must have a
-    # preallocated physical shard for that normalization to remain meaningful.
-    (timeout "${timeout_s}s" /usr/bin/time -f "$time_format" ./kcensus --simulate-delays true -p "$pid" --config "configs/$CONFIG" $CASSANDRA_ARG -a "$ALGO" -w "$WRITES" --duration "$DURATION" -i "$INGRESS" -t "$PER_PROPOSER_THROUGHPUT" -s "$SPEEDUP" $FAULTS_ARG -k "$KEYS" --skew "$SKEW" --shards "$SHARDS" --shard-pool "$SHARDS")>"$LOG_DIR/$pid.stdout" 2>"$LOG_DIR/$pid.stderr" &
+    local time_format='[log=time] Memory (KiB): %M, System (s): %S User (s): %U | {"memory": %M, "system": %S, "user": %U}'
+    (timeout "${timeout_s}s" /usr/bin/time -f "$time_format" ./kcensus --simulate-delays true -p "$pid" --config "configs/$CONFIG" $CASSANDRA_ARG -a "$ALGO" -w "$WRITES" --duration "$DURATION" -i "$INGRESS" -t "$PER_PROPOSER_THROUGHPUT" $FAULTS_ARG -k "$KEYS" --skew "$SKEW" --shards "$SHARDS")>"$LOG_DIR/$pid.stdout" 2>"$LOG_DIR/$pid.stderr" &
     pids+=($!)
   done
 

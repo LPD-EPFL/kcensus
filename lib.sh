@@ -25,13 +25,12 @@ SHARDS=$KEYS
 EXP1_CONFIGS=("aws-ring-7" "aws-europe-7" "aws-north-america-7" "aws-east-asia-7")
 # Experiment 2 (Figure 8): faults, on the Northern-Hemisphere deployment.
 EXP2_CONFIG="aws-ring-7"
-# Experiment 3 (Figures 9 and 12): 3..31 replicas, two placement strategies.
+# Experiment 3 (Figures 9-12): 3..31 replicas, two placement strategies, to measure scalability and resource-consumption.
 EXP3_TYPES=(aws-from-paris aws-random)
 EXP3_SIZES=(31 29 27 25 23 21 19 17 15 13 11 9 7 5 3)
-# Experiment 4 (Figures 10 and 11): resource consumption, one machine, sped-up clock.
+# Experiment 4 (Figures 10 and 11): resource consumption on one machine, in real time.
 EXP4_TYPE=aws-random
 EXP4_SIZES=(3 5 7 9 11 13 15 17 19 21 23 25 27 29 31)
-EXP4_SPEEDUP=2
 
 # Experiment 5 (no figure yet): contention and load, on the Northern-Hemisphere deployment.
 EXP5_CONFIG="aws-ring-7"
@@ -69,9 +68,10 @@ run concurrently in the same account. Use 1-32 lowercase letters, digits, or hyp
 Available commands:
   exp-1             End-to-end latency              -> Figures 1 and 7
   exp-2             Impact of failures              -> Figure 8
-  exp-3             Scalability + optimization time -> Figures 9 and 12
-  exp-4             Resource consumption            -> Figures 10 and 11
-  all               Run every experiment the paper depends on (exp-1..exp-4)
+  exp-3             Scalability + resources         -> Figures 9, 10, 11 and 12
+  exp-4             Deprecated resource run         -> None (Old Figures 10 and 11)
+  exp-5             Contention + offered load       -> Figures 13 and 14 (AWS only)
+  all               Run every experiment the paper depends on (exp-1..exp-3 + exp-5)
   destroy           Tear down a deployment by hand (AWS only):
                       ./eval.sh destroy <terraform-var-file> <experiment-id>
   help/-h/--help    Show this help
@@ -133,7 +133,7 @@ function per_proposer_rate() {
 # <sample_divisor> says how much of an AWS run's request count to reproduce:
 #   2 (default) -- half. Enough for stable latency percentiles, and a local run is far less noisy
 #                  than a wide-area one, so matching exactly would cost hours for no benefit.
-#   1           -- all of them. Experiment 4 needs this: it measures compute, which is essentially
+#   1           -- all of them. Figure 11 needs this: it measures compute, which is essentially
 #                  proportional to the number of requests processed. A shorter local run would
 #                  understate CPU, and understate it *more* at larger n -- distorting the very
 #                  axis Figure 11 plots against.

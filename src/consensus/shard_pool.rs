@@ -27,6 +27,8 @@ pub(crate) trait PooledShard {
 /// End-of-run report on the physical shard pool.
 #[derive(serde::Serialize)]
 struct ShardPoolStats {
+    /// Number of logical shards sharing this pool.
+    logical_shards: usize,
     /// Size of the pool at the end of the run.
     pool_size: usize,
     /// Size it was preallocated with. A larger `pool_size` means it was too small.
@@ -204,10 +206,11 @@ impl<S: PooledShard> ShardPool<S> {
         eval::log(
             "shard-pool-done",
             &format!(
-                "{pool_size} physical shards ({} preallocated)",
+                "shard pool has {pool_size} physical shards ({} preallocated)",
                 self.initial_pool_size
             ),
             &ShardPoolStats {
+                logical_shards: self.shard_count(),
                 pool_size,
                 initial_pool_size: self.initial_pool_size,
             },

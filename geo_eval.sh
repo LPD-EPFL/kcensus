@@ -540,8 +540,8 @@ function run_all_experiments() {
   exp-1
   exp-2
   exp-3
-  exp-4
-  # exp-5 is deliberately excluded: it is exploratory and maps to no figure yet.
+  # exp-4 is no longer needed. We use exp-3's aws-random runs for traffic, CPU and memory measurements.
+  exp-5
 }
 
 function main() {

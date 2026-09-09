@@ -91,6 +91,6 @@ fig.legend(
     handletextpad=0.5,
 )
 
-pdf_path = f"plots/{PLOT_PREFIX}exp-4-figure-10-network.pdf"
+pdf_path = f"plots/{PLOT_PREFIX}exp-3-figure-10-network.pdf"
 plt.savefig(pdf_path, format="pdf", bbox_inches="tight", pad_inches=0.01)
 print(pdf_path)

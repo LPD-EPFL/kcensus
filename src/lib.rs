@@ -78,7 +78,7 @@ struct Args {
         long,
         value_name = "SHARD_POOL_SIZE",
         help = "Number of preallocated physical shards, reused by the active logical shards. \
-                Defaults to min(shard count, 64)."
+                Defaults to min(shard count, 1000)."
     )]
     shard_pool: Option<usize>,
     #[arg(
@@ -679,9 +679,10 @@ pub async fn run() -> io::Result<()> {
     let process_runtime = process_start
         .try_elapsed()
         .expect("Getting process time failed");
-    println!(
-        "[log=time] process time (in seconds) | {{\"user\": {}}}",
-        process_runtime.as_secs_f64()
+    eval::log(
+        "time",
+        &format!("process CPU time: {process_runtime:?}"),
+        &serde_json::json!({"cpu": process_runtime.as_secs_f64()}),
     );
     println!("Expected local latency (no-contention): {expected_latency:?}",);
     println!("Total duration: {:?}", start.elapsed());

@@ -35,7 +35,7 @@
         cmd: >
           RUST_BACKTRACE=1
           timeout {{ 30 + 3 * (duration | regex_replace('s$', '') | int) }}s
-          /usr/bin/time -f "[time] Memory(KB): %M"
+          /usr/bin/time -f '[log=time] peak process memory (KiB): %M | {"memory": %M}'
           ./kcensus --config config.toml -p {{ sub_exp_id }}
           -a "{{ algo }}"
           -w "{{ writes }}"
