@@ -3,13 +3,51 @@
   hosts: kcensus_nodes
   gather_facts: no
   strategy: free
+  vars:
+    kcensus_process_name: kcensus
+    kcensus_port: 8000
   tasks:
-    - name: Kill any running kcensus processes
+    - name: Stop kcensus processes and wait for them to exit
       ansible.builtin.shell:
-        cmd: "pkill -f kcensus"
-      register: pkill_result
-      failed_when: "pkill_result.rc != 0 and pkill_result.rc != 1"
-      changed_when: pkill_result.rc == 0
+        cmd: |
+          changed=0
+
+          if pgrep -x "{{ kcensus_process_name }}" >/dev/null; then
+            changed=1
+            pkill -TERM -x "{{ kcensus_process_name }}" || true
+          fi
+
+          for _ in 1 2 3 4 5; do
+            if ! pgrep -x "{{ kcensus_process_name }}" >/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+
+          if pgrep -x "{{ kcensus_process_name }}" >/dev/null; then
+            pkill -KILL -x "{{ kcensus_process_name }}" || true
+          fi
+
+          for _ in 1 2 3 4 5; do
+            if ! pgrep -x "{{ kcensus_process_name }}" >/dev/null; then
+              echo "changed=${changed}"
+              exit 0
+            fi
+            sleep 1
+          done
+
+          echo "kcensus processes remain after SIGKILL" >&2
+          exit 1
+      register: cleanup_result
+      changed_when: "'changed=1' in cleanup_result.stdout"
+
+    - name: Verify that the experiment port is no longer listening
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: "{{ kcensus_port }}"
+        state: stopped
+        timeout: 5
+        connect_timeout: 1
 
 # this file will be used in case of errors in order to clean up the
 # environment and rerun experiments

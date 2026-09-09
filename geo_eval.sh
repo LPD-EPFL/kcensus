@@ -11,10 +11,10 @@ CURRENT_EXP_ID=""
 # Bounded retries for a failed experiment run. A failure here is rare -- a kcensus panic (e.g.
 # experiment timeout), the 60s timeout, or a transient SSH/node problem -- so exhausting all
 # attempts means something is genuinely wrong and the script aborts rather than looping forever.
-# The delay is applied *before* the retry: it gives a transient cause time to clear and gives
-# `pkill` time to actually reap the process that would otherwise still hold port 8000.
+# The delay is applied *before* the retry to give transient causes time to clear. Process cleanup
+# itself is a barrier: it waits for kcensus to exit and for port 8000 to stop listening.
 # MAX_ATTEMPTS comes from lib.sh; the delays are AWS-only (a local retry has nothing to wait for).
-RETRY_DELAYS=(0 60 120 300)   # before attempts 2, 3, 4 and 5 respectively
+RETRY_DELAYS=(2 60 120 300)   # before attempts 2, 3, 4 and 5 respectively
 
 # Experiment definitions shared with eval.sh (algorithms, workload, configs, log-path schema).
 source "$(dirname "$0")/lib.sh"
@@ -167,8 +167,8 @@ function run() {
       echo "--> FAILED after ${MAX_ATTEMPTS} attempts: ${title}" >&2
       return 1
     fi
-    # A crashed run can leave a kcensus process holding port 8000, which would make every
-    # further attempt fail too.
+    # A crashed run can leave a kcensus process alive. Cleanup does not return until all such
+    # processes are gone and port 8000 is no longer listening.
     cleanup_processes "${expId}"
     retry_backoff "${attempt}"
   done
@@ -189,15 +189,14 @@ function cleanup_processes() {
   local expId="$1"
   local inventoryFile="inventory-${expId}.ini"
   echo "--> Cleaning up stray processes on all nodes..."
-  # Best-effort. This runs between retries, and whatever is being retried may be a transient SSH
-  # problem that makes this playbook fail too. Aborting here (`set -e`) would end the experiment
-  # and tear the deployment down after a single attempt, spending none of the retry budget.
+  # Do not start another attempt unless every node confirms that kcensus is gone. Otherwise a
+  # cleanup/SSH failure can turn one bad attempt into a cross-run connection mix-up.
   if ! (
     cd deployment/ansible
     ansible-playbook -i "${inventoryFile}" 04-kill-processes.yml
   ); then
-    echo "--> WARNING: cleanup failed; retrying the run anyway." >&2
-    return 0
+    echo "--> ERROR: cleanup could not be verified; refusing to start another attempt." >&2
+    return 1
   fi
   echo "--> Cleanup complete."
 }
