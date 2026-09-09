@@ -11,7 +11,7 @@ from prelude import lighten_color, plt
 # python3 1-bars.py -c=aws-europe-8.toml -w=1
 # python3 1-bars.py -c=aws-north-america-7 -w=1
 writes = 1.0
-duration = "60s"
+duration = "10s"
 ingress = "exponential"
 throughput = 1000
 speedup = 1

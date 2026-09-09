@@ -14,7 +14,7 @@ ALGOS=("${REPLICATED_ALGOS[@]}")
 
 DURATION=10s
 # Longer runs for plots that show percentiles. (exp-1, exp-2 0-faults, exp-5 CDF)
-BASELINE_DURATION=60s
+BASELINE_DURATION=10s
 THROUGHPUT=1000 # total req/s, split evenly between the proposers
 SPEEDUP=1
 KEYS=100000
@@ -38,7 +38,7 @@ EXP5_CONFIG="aws-ring-7"
 EXP5_WRITES=0.5
 # Zipf exponent. 0.99 is YCSB's default constant and the usual "skewed"
 # point in the literature; 0 is uniform.
-EXP5_SKEWS=(0 0.8 0.99)
+EXP5_SKEWS=() # No Skews, since EXP5_LOAD_SKEWS lists those and BASELINE_DURATION == DURATION
 # 500 to 100000, in steps that widen as the deployment saturates.
 EXP5_THROUGHPUTS=($(awk 'BEGIN {
   printf "500 1000 "
