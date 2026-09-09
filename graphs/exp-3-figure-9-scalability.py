@@ -14,9 +14,8 @@ ingress = "exponential"
 throughput = 1000
 speedup = 1
 faults = ""
-keys = 10000
+keys = 100000
 skew = 0.0
-shards = 10000
 
 fig, subplots = plt.subplots(2, 1, figsize=(3.155, 2.265), tight_layout=True)
 plt.tight_layout(pad=0, w_pad=0, h_pad=0)  # , rect=(0,0,.80,1))
@@ -70,7 +69,7 @@ for p in range(2):
                 faults=faults,
                 keys=keys,
                 skew=skew,
-                shards=shards,
+                shards=keys,
                 conflicts="conflicts=false",
             )
 

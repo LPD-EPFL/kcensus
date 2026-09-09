@@ -17,7 +17,7 @@ DURATION=10s
 BASELINE_DURATION=60s
 THROUGHPUT=1000 # total req/s, split evenly between the proposers
 SPEEDUP=1
-KEYS=10000
+KEYS=100000
 SKEW=0
 SHARDS=$KEYS
 
@@ -36,11 +36,9 @@ EXP4_SPEEDUP=2
 # Experiment 5 (no figure yet): contention and load, on the Northern-Hemisphere deployment.
 EXP5_CONFIG="aws-ring-7"
 EXP5_WRITES=0.5
-# Zipf exponent over `EXP5_KEYS` keys. 0.99 is YCSB's default constant and the usual "skewed"
-# point in the literature; 0 is uniform, and even there 10000 keys still conflict occasionally.
+# Zipf exponent. 0.99 is YCSB's default constant and the usual "skewed"
+# point in the literature; 0 is uniform.
 EXP5_SKEWS=(0 0.8 0.99)
-EXP5_KEYS=10000
-EXP5_KEYS_SPARSE=100000
 # 500 to 100000, in steps that widen as the deployment saturates.
 EXP5_THROUGHPUTS=($(awk 'BEGIN {
   printf "500 1000 "

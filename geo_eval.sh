@@ -287,29 +287,20 @@ function exp-5() {
   provision "$varFile" "$EXPERIMENT_ID"
   deploy "$EXPERIMENT_ID"
 
-  # The grid is deliberately lopsided. Every skew runs at one rung, `EXP5_CDF_THROUGHPUT`, which
-  # is where the CDFs are cut; the rest of the ladder runs only `EXP5_LOAD_SKEWS`, because a
-  # latency-against-load curve needs many rungs. Both key counts run throughout.
   local throughput algo skew keys
   for throughput in "${EXP5_THROUGHPUTS[@]}"; do
     for algo in "${ALGOS[@]}"; do
       if [ "$throughput" -eq "$EXP5_CDF_THROUGHPUT" ]; then
-        # Both key counts, so the CDFs can separate "skewed" from "crowded": the same
-        # distribution over ten times the keys conflicts about a tenth as often.
-        for keys in "$EXP5_KEYS" "$EXP5_KEYS_SPARSE"; do
-          for skew in "${EXP5_SKEWS[@]}"; do
-            exp-5-run "$EXPERIMENT_ID" "$configName" "$algo" "$throughput" "$skew" "$keys"
-          done
-        done
-      else
-        for skew in "${EXP5_LOAD_SKEWS[@]}"; do
-          exp-5-run "$EXPERIMENT_ID" "$configName" "$algo" "$throughput" "$skew" \
-            "$EXP5_KEYS_SPARSE"
+        for skew in "${EXP5_SKEWS[@]}"; do
+          exp-5-run "$EXPERIMENT_ID" "$configName" "$algo" "$throughput" "$skew" "$BASELINE_DURATION"
         done
       fi
+      for skew in "${EXP5_LOAD_SKEWS[@]}"; do
+        exp-5-run "$EXPERIMENT_ID" "$configName" "$algo" "$throughput" "$skew" "$DURATION"
+      done
     done
     # multi-paxos again, this time with pipelining, one skew, at every rung.
-    exp-5-run "$EXPERIMENT_ID" "$configName" "multi-paxos" "$throughput" 0 "$EXP5_KEYS_SPARSE" "false"
+    exp-5-run "$EXPERIMENT_ID" "$configName" "multi-paxos" "$throughput" 0 "$DURATION" "false"
   done
 
   destroy "$varFile" "$EXPERIMENT_ID"
@@ -318,17 +309,10 @@ function exp-5() {
 }
 
 # One exp-5 run, skipped rather than fatal when it exhausts its attempts.
-#
-# `run` returns non-zero, which `set -e` turns into an abort for the paper's experiments, where
-# every run feeds a figure. Here it is a data point: a run that cannot sustain 40000 req/s says
-# so, and losing the rest of the sweep to it would be absurd. The ansible playbook has already
-# saved the failed run's output under `failed/`.
 function exp-5-run() {
-  local expId="$1" configName="$2" algo="$3" throughput="$4" skew="$5" keys="$6"
+  local expId="$1" configName="$2" algo="$3" throughput="$4" skew="$5" duration="$6"
   local conflicts="${7:-true}"
-  # The CDF rung is the latency-sensitive one, so it gets the longer window.
-  local duration="$DURATION"
-  [ "$throughput" -eq "$EXP5_CDF_THROUGHPUT" ] && duration="$BASELINE_DURATION"
+  local keys="$KEYS"
   if ! run "$expId" "$configName" "$algo" "$EXP5_WRITES" "$duration" "exponential" \
          "$throughput" "" "$keys" "$skew" "$keys" "$conflicts"; then
     echo "--> SKIPPED (not sustainable?): ${algo} t=${throughput} skew=${skew} k=${keys}" \

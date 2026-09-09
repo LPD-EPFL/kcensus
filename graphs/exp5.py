@@ -9,6 +9,7 @@ from logparser import duration_to_ms, parse
 
 EXP5_CONFIG = "aws-ring-7"
 EXP5_DURATION = "10s"
+EXP5_CDF_DURATION = "60s"
 EXP5_INGRESS = "exponential"
 EXP5_ALGORITHMS = {
     **ALGORITHMS,
@@ -24,13 +25,10 @@ EXP5_ALGORITHMS = {
 }
 
 WRITES = 0.5
-KEYS = 10000
-# Ten times the conflict domain for the same distribution.
-KEYS_SPARSE = 100000
+KEYS = 100000
 CDF_THROUGHPUT = 1000
-SKEWS = (0.0, 0.5, 0.75, 0.99)
-# The only skews given the full ladder.
-LOAD_SKEWS = (0.5, 0.99)
+SKEWS = (0.0, 0.8, 0.99)
+LOAD_SKEWS = (0.0, 0.8, 0.99)
 
 
 @dataclass(frozen=True)
@@ -51,7 +49,7 @@ class Workload:
     @property
     def latency_xlim(self) -> float:
         """Where to cut the CDF, per skew."""
-        return {0.0: 340, 0.5: 390, 0.75: 440, 0.99: 490}[self.skew]
+        return {0.0: 340, 0.5: 390, 0.8: 440, 0.99: 490}[self.skew]
 
 
 def _rungs_on_disk():
@@ -71,10 +69,10 @@ def _rungs_on_disk():
 THROUGHPUTS = _rungs_on_disk()
 
 CDF_WORKLOADS = tuple(
-    Workload(skew, keys) for keys in (KEYS, KEYS_SPARSE) for skew in SKEWS
+    Workload(skew, KEYS) for skew in SKEWS
 )
 LOAD_WORKLOADS = tuple(
-    Workload(skew, keys) for keys in (KEYS, KEYS_SPARSE) for skew in LOAD_SKEWS
+    Workload(skew, KEYS) for skew in LOAD_SKEWS
 )
 
 
@@ -108,7 +106,7 @@ def selected_workloads(candidates):
     return chosen
 
 
-def run_stats(algo, workload, throughput):
+def run_stats(algo, workload, throughput, duration=EXP5_DURATION):
     """`(write_latencies_ms, achieved_req_per_s)` for one run, or `None` if it is not there.
 
     Missing is a result, not an error: the ladder runs past what the deployment sustains. Both
@@ -120,7 +118,7 @@ def run_stats(algo, workload, throughput):
             config=EXP5_CONFIG,
             algo=algo,
             writes=WRITES,
-            duration=EXP5_DURATION,
+            duration=duration,
             ingress=EXP5_INGRESS,
             throughput=throughput,
             speedup=1,
@@ -140,5 +138,5 @@ def run_stats(algo, workload, throughput):
     ]
     # Counted, not read from `[log=throughput]`: that event only exists on the Cassandra path.
     completed = sum(len(items) for items in logs["executed"].values())
-    achieved = completed / float(EXP5_DURATION.rstrip("s"))
+    achieved = completed / float(duration.rstrip("s"))
     return latencies, achieved

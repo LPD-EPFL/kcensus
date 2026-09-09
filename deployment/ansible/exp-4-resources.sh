@@ -114,16 +114,15 @@ function run() {
 function run_resources() {
   local duration="10s"
   local throughput=1000
-  local keys=10000
+  local keys=100000
   local skew=0
-  local shards=10000
   for configs in aws-random; do
     for writes in "${WRITES[@]}"; do
       for num_replicas in $(seq 3 2 31); do
         for algo in "${ALGOS[@]}"; do
           for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
             ATTEMPT="$attempt"
-            if run "${configs}/${num_replicas}.toml" "$algo" "$writes" "$duration" exponential "$throughput" "" "$keys" "$skew" "$shards"; then
+            if run "${configs}/${num_replicas}.toml" "$algo" "$writes" "$duration" exponential "$throughput" "" "$keys" "$skew" "$keys"; then
               break
             fi
             echo "Attempt ${attempt}/${MAX_ATTEMPTS} failed: ${algo} on ${configs}/${num_replicas}.toml" >&2

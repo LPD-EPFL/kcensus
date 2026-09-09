@@ -52,12 +52,11 @@ function exp-2() {
   local duration="10s"
   local baseline_duration="60s"
   local throughput=1000
-  local shards=10000
-  local keys=10000
+  local keys=100000
   (
     cd graphs &&
     echo -n 'plotting exp-2 figure 1/1 (Figure 8)... ' &&
-    python3 exp-2-figure-8-faults.py $LOCAL_FLAG -c "$config" -w "$writes" --duration "$duration" --baseline-duration "$baseline_duration" -i exponential -t $throughput -s "$SPEEDUP" --shards $shards --keys $keys -g 1 > "./plots/${LOCAL_FLAG:+local-}exp-2-figure-8-faults.txt" &&
+    python3 exp-2-figure-8-faults.py $LOCAL_FLAG -c "$config" -w "$writes" --duration "$duration" --baseline-duration "$baseline_duration" -i exponential -t $throughput -s "$SPEEDUP" --shards $keys --keys $keys -g 1 > "./plots/${LOCAL_FLAG:+local-}exp-2-figure-8-faults.txt" &&
     echo 'done.'
   )
 }
@@ -82,16 +81,15 @@ function exp-4() {
   local duration="10s"
   local throughput=1000
   local speedup=2
-  local keys=10000
+  local keys=100000
   local skew=0.0
-  local shards=10000
   (
     cd graphs &&
     echo -n 'plotting exp-4 figure 1/2 (Figure 10)... ' &&
-    python3 exp-4-figure-10-network.py $LOCAL_FLAG -c aws-random/@.toml -w "$writes" --duration "$duration" -i exponential -t $throughput -s "$speedup" --shards $shards --keys $keys --skew $skew -g 1 > "./plots/${LOCAL_FLAG:+local-}exp-4-figure-10-network.txt" &&
+    python3 exp-4-figure-10-network.py $LOCAL_FLAG -c aws-random/@.toml -w "$writes" --duration "$duration" -i exponential -t $throughput -s "$speedup" --shards $keys --keys $keys --skew $skew -g 1 > "./plots/${LOCAL_FLAG:+local-}exp-4-figure-10-network.txt" &&
     echo 'done.' &&
     echo -n 'plotting exp-4 figure 2/2 (Figure 11)... ' &&
-    python3 exp-4-figure-11-cpu-mem.py $LOCAL_FLAG -c aws-random/@.toml -w "$writes" --duration "$duration" -i exponential -t $throughput -s "$speedup" --shards $shards --keys $keys --skew $skew -g 1 > "./plots/${LOCAL_FLAG:+local-}exp-4-figure-11-cpu-mem.txt" &&
+    python3 exp-4-figure-11-cpu-mem.py $LOCAL_FLAG -c aws-random/@.toml -w "$writes" --duration "$duration" -i exponential -t $throughput -s "$speedup" --shards $keys --keys $keys --skew $skew -g 1 > "./plots/${LOCAL_FLAG:+local-}exp-4-figure-11-cpu-mem.txt" &&
     echo 'done.'
   )
 }

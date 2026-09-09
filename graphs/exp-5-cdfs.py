@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Latency CDF, one plot per (skew, key count) -- eight, all cut at `CDF_THROUGHPUT`.
+"""Latency CDF, one plot per skew.
 
-  ./exp-5-cdfs.py              # all eight
-  ./exp-5-cdfs.py --skew 0.99  # both key counts at that skew
-  ./exp-5-cdfs.py -t 2000      # a different rung, where only two skews were run
+  ./exp-5-cdfs.py              # all three
+  ./exp-5-cdfs.py --skew 0.99  # only that skew
+  ./exp-5-cdfs.py -t 2000      # a different rung, from the load sub-experiment
 """
 from matplotlib.lines import Line2D
 from matplotlib.ticker import MultipleLocator
@@ -11,6 +11,9 @@ from matplotlib.ticker import MultipleLocator
 from common import PLOT_PREFIX, args
 from exp5 import (
     CDF_WORKLOADS,
+    CDF_THROUGHPUT,
+    EXP5_CDF_DURATION,
+    EXP5_DURATION,
     EXP5_ALGORITHMS as ALGORITHMS,
     WRITES,
     run_stats,
@@ -21,6 +24,7 @@ from logparser import *
 from prelude import plt
 
 throughput = selected_throughput()
+duration = EXP5_CDF_DURATION if throughput == CDF_THROUGHPUT else EXP5_DURATION
 
 for workload in selected_workloads(CDF_WORKLOADS):
     fig, plot = plt.subplots(figsize=(3.11, 2.7), tight_layout=True)
@@ -45,7 +49,7 @@ for workload in selected_workloads(CDF_WORKLOADS):
     drawn = []
     for algo in ALGORITHMS:
         stats = run_stats(
-            algo=algo, workload=workload, throughput=throughput
+            algo=algo, workload=workload, throughput=throughput, duration=duration
         )
         latencies = stats[0] if stats else []
         if not latencies:

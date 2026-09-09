@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Latency against offered load: four plots, `LOAD_SKEWS` by key count -- the only
-combinations given the full ladder.
+"""Latency against offered load: three plots, one per skew.
 
 Upper panel: mean latency. Lower: achieved against offered throughput, with the diagonal.
 
-  ./exp-5-load.py              # both
+  ./exp-5-load.py              # all
   ./exp-5-load.py --skew 0.99  # one
 """
 from matplotlib.lines import Line2D

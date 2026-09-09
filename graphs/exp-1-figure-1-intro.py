@@ -26,9 +26,8 @@ ingress = "exponential"
 throughput = 1000
 speedup = 1
 faults = ""
-keys = 10000
+keys = 100000
 skew = 0.0
-shards = 10000
 
 algos = list(ALGORITHMS)
 x_middle = len(algos) // 2
@@ -116,7 +115,7 @@ for c in range(2):
             faults=faults,
             keys=keys,
             skew=skew,
-            shards=shards,
+            shards=keys,
         )
 
         all_executed = []
