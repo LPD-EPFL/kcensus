@@ -113,6 +113,39 @@ function teardown_on_abort() {
   exit "${code}"
 }
 
+# Check a completed attempt after Ansible has collected all process logs. This detects occasional
+# significant network fluctuations that would unfairly distort an individual data point. Such a
+# quality failure is retryable, except on the final attempt: keeping that result is preferable to
+# failing an entire deployment after exhausting the available samples. Checker errors are never
+# ignored.
+function latency_quality_passes() {
+  local resultPath="$1"
+  local failedPath="$2"
+  local attempt="$3"
+  local maxAttempts="$4"
+  local checkerStatus=0
+
+  python3 "$(dirname "$0")/graphs/check_expected_latency.py" "${resultPath}" || checkerStatus=$?
+  if [ "${checkerStatus}" -eq 0 ]; then
+    return 0
+  fi
+  if [ "${checkerStatus}" -ne 1 ]; then
+    echo "--> ERROR: latency quality checker exited ${checkerStatus}." >&2
+    return "${checkerStatus}"
+  fi
+  if [ "${attempt}" -eq "${maxAttempts}" ]; then
+    echo "--> WARNING: final attempt failed latency quality checks; keeping it anyway." >&2
+    return 0
+  fi
+
+  if ! mkdir -p "${failedPath}" || ! cp -a "${resultPath}/." "${failedPath}/"; then
+    echo "--> ERROR: could not preserve latency-rejected output in ${failedPath}." >&2
+    return 2
+  fi
+  echo "--> Latency quality checks failed; output kept in ${failedPath}." >&2
+  return 1
+}
+
 function run() {
   local expId="$1"
   local configName="$2"
@@ -142,6 +175,7 @@ function run() {
 
   local attempt
   for attempt in $(seq 1 "${MAX_ATTEMPTS}"); do
+    local failedPath="${ABSOLUTE_BASE_LOG_DIR}/failed/${title}/attempt=${attempt}"
     if (
       cd deployment/ansible
       ansible-playbook -i "${inventoryFile}" 03-run-experiment.yml \
@@ -158,9 +192,11 @@ function run() {
         -e "nonvoting=${nonvoting}" \
         -e "conflicts=${conflicts}" \
         -e "result_path=${resultPath}" \
-        -e "failed_path=${ABSOLUTE_BASE_LOG_DIR}/failed/${title}/attempt=${attempt}"
+        -e "failed_path=${failedPath}"
     ); then
-      break
+      if latency_quality_passes "${resultPath}" "${failedPath}" "${attempt}" "${MAX_ATTEMPTS}"; then
+        break
+      fi
     fi
     echo "--> Attempt ${attempt}/${MAX_ATTEMPTS} failed: ${algo} on ${configName} (faults=${faults})" >&2
     if [ "${attempt}" -eq "${MAX_ATTEMPTS}" ]; then
@@ -407,6 +443,7 @@ function exp-3() {
 
             echo "--> RUNNING: ${run_title}"
             for attempt in $(seq 1 "${MAX_ATTEMPTS}"); do
+              local failedPath="${ABSOLUTE_BASE_LOG_DIR}/failed/${run_title}/attempt=${attempt}"
               if (
                 cd deployment/ansible
                 ansible-playbook -i "${subInventoryFile}" 03-run-experiment.yml \
@@ -414,9 +451,11 @@ function exp-3() {
                   -e "ingress=exponential" -e "throughput=${per_proposer_throughput}" -e "speedup=${SPEEDUP}" \
                   -e "keys=${KEYS}" -e "skew=${SKEW}" -e "shards=${SHARDS}" \
                   -e "result_path=${resultPath}" -e "sub_config_file=${subConfigFile}" \
-                  -e "failed_path=${ABSOLUTE_BASE_LOG_DIR}/failed/${run_title}/attempt=${attempt}"
+                  -e "failed_path=${failedPath}"
               ); then
-                break
+                if latency_quality_passes "${resultPath}" "${failedPath}" "${attempt}" "${MAX_ATTEMPTS}"; then
+                  break
+                fi
               fi
               echo "--> Attempt ${attempt}/${MAX_ATTEMPTS} failed: ${algo} on ${configName}" >&2
               if [ "${attempt}" -eq "${MAX_ATTEMPTS}" ]; then
