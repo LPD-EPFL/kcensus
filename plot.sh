@@ -102,14 +102,14 @@ function exp-4() {
 }
 
 function exp-5() {
-  # Contention and load.
+  # Figures 13 (latency under conflicts) and 14 (latency under load).
   (
     cd graphs &&
-    echo -n 'plotting exp-5 figure 1/2 (CDFs)... ' &&
-    python3 exp-5-cdfs.py $LOCAL_FLAG ${1+"$@"} > "./plots/${LOCAL_FLAG:+local-}exp-5-cdfs.txt" &&
+    echo -n 'plotting exp-5 figure 1/2 (Figure 13)... ' &&
+    python3 exp-5-figure-13-conflict.py $LOCAL_FLAG ${1+"$@"} > "./plots/${LOCAL_FLAG:+local-}exp-5-figure-13-conflict.txt" &&
     echo 'done.' &&
-    echo -n 'plotting exp-5 figure 2/2 (load)... ' &&
-    python3 exp-5-load.py $LOCAL_FLAG ${1+"$@"} > "./plots/${LOCAL_FLAG:+local-}exp-5-load.txt" &&
+    echo -n 'plotting exp-5 figure 2/2 (Figure 14)... ' &&
+    python3 exp-5-figure-14-load.py $LOCAL_FLAG ${1+"$@"} > "./plots/${LOCAL_FLAG:+local-}exp-5-figure-14-load.txt" &&
     echo 'done.'
   )
 }

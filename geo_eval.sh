@@ -304,10 +304,7 @@ function exp-1() {
   echo "--- Finished Experiment 1 ---"
 }
 
-# Legacy: latency under conflicts. Maps to no figure in the current paper; kept as the
-# starting point for the camera-ready conflicts experiment. Not part of `all`.
-# Experiment 5: contention and load. Feeds no figure yet -- this is the exploratory sweep the
-# conflicts figure will be chosen from. See lib.sh for the parameter lists and why they are wide.
+# Experiment 5: contention and load. Feeds Figures 13 and 14.
 function exp-5() {
   echo "--- Starting Experiment 5: Conflicts and load ---"
 

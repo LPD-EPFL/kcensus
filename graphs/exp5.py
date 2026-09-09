@@ -1,34 +1,30 @@
 """The exp-5 grid and log access, shared so the two plot scripts cannot disagree on it."""
-import pathlib
 import sys
 from dataclasses import dataclass
 
-import logparser
-from common import ALGORITHMS, args, blue
+from common import ALGORITHMS, args
 from logparser import duration_to_ms, parse
 
 EXP5_CONFIG = "aws-ring-7"
 EXP5_DURATION = "10s"
 EXP5_CDF_DURATION = "10s"
 EXP5_INGRESS = "exponential"
-EXP5_ALGORITHMS = {
-    **ALGORITHMS,
-    "paxos": {
-        "label": "Paxos",
-        "color": blue,
-        "lw": 0.7,
-        "linestyle": "-",
-        "marker": "v",
-        "markersize": 2.2,
-        "markeredgewidth": None,
-    },
-}
+EXP5_ALGORITHMS = ALGORITHMS
 
 WRITES = 0.5
 KEYS = 100000
 CDF_THROUGHPUT = 1000
 SKEWS = (0.0, 0.8, 0.99)
 LOAD_SKEWS = (0.0, 0.8, 0.99)
+# Keep this in sync with EXP5_THROUGHPUTS in lib.sh. Using the configured ladder, rather than
+# discovering only successful runs on disk, lets Figure 14 stop each curve at the first
+# unsustained point.
+THROUGHPUTS = (
+    500,
+    1000,
+    *range(2000, 20000, 2000),
+    *range(20000, 50000, 5000),
+)
 
 
 @dataclass(frozen=True)
@@ -44,29 +40,19 @@ class Workload:
 
     @property
     def label(self) -> str:
-        return f"Zipf {self.skew:g}, {self.keys // 1000}k keys"
+        return f"Zipf {self.skew:g}" if self.skew > 0 else "Uniform"
 
     @property
     def latency_xlim(self) -> float:
         """Where to cut the CDF, per skew."""
-        return {0.0: 340, 0.5: 390, 0.8: 440, 0.99: 490}[self.skew]
+        # return {0.0: 340, 0.5: 390, 0.8: 440, 0.99: 490}[self.skew]
+        return 450
 
 
-def _rungs_on_disk():
-    """Every `t=` with a run on disk, ascending."""
-    root = pathlib.Path(logparser.LOG_DIR) / f"c={EXP5_CONFIG}"
-    pattern = f"a=*/w={WRITES:g}/d={EXP5_DURATION}/i={EXP5_INGRESS}/t=*"
-    found = set()
-    for path in root.glob(pattern):
-        try:
-            value = float(path.name.removeprefix("t="))
-        except ValueError:
-            continue
-        found.add(int(value) if value.is_integer() else value)
-    return tuple(sorted(found))
-
-
-THROUGHPUTS = _rungs_on_disk()
+@dataclass(frozen=True)
+class RunStats:
+    latencies: list[float]
+    sustained: bool
 
 CDF_WORKLOADS = tuple(
     Workload(skew, KEYS) for skew in SKEWS
@@ -107,11 +93,12 @@ def selected_workloads(candidates):
 
 
 def run_stats(algo, workload, throughput, duration=EXP5_DURATION):
-    """`(write_latencies_ms, achieved_req_per_s)` for one run, or `None` if it is not there.
+    """Write latencies and whether every proposer completed, or `None` if logs are absent.
 
-    Missing is a result, not an error: the ladder runs past what the deployment sustains. Both
-    figures come from one parse -- the top rungs run to hundreds of thousands of lines. Reads
-    are left out of the latencies, being served from a read quorum rather than ordered.
+    A proposer emits `client-done` only after every request it scheduled has received a response.
+    Requiring that marker from all seven proposers therefore distinguishes a completed run from
+    the partial logs left by a timed-out, unsustained run. Reads are omitted from the latency
+    samples because they are served from a read quorum rather than ordered.
     """
     try:
         logs = parse(
@@ -136,7 +123,6 @@ def run_stats(algo, workload, throughput, duration=EXP5_DURATION):
         for log in items
         if log["response"].get("Put") is not None
     ]
-    # Counted, not read from `[log=throughput]`: that event only exists on the Cassandra path.
-    completed = sum(len(items) for items in logs["executed"].values())
-    achieved = completed / float(duration.rstrip("s"))
-    return latencies, achieved
+    proposer_count = int("".join(char for char in EXP5_CONFIG if char.isdigit()))
+    sustained = all(logs["client-done"].get(pid) for pid in range(proposer_count))
+    return RunStats(latencies, sustained)

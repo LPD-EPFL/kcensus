@@ -32,7 +32,7 @@ EXP3_SIZES=(31 29 27 25 23 21 19 17 15 13 11 9 7 5 3)
 EXP4_TYPE=aws-random
 EXP4_SIZES=(3 5 7 9 11 13 15 17 19 21 23 25 27 29 31)
 
-# Experiment 5 (no figure yet): contention and load, on the Northern-Hemisphere deployment.
+# Experiment 5 (Figures 13 and 14): contention and load, on the Northern-Hemisphere deployment.
 EXP5_CONFIG="aws-ring-7"
 EXP5_WRITES=0.5
 # Zipf exponent. 0.99 is YCSB's default constant and the usual "skewed"
@@ -70,7 +70,7 @@ Available commands:
   exp-2             Impact of failures              -> Figure 8
   exp-3             Scalability + resources         -> Figures 9, 10, 11 and 12
   exp-4             Deprecated resource run         -> None (Old Figures 10 and 11)
-  exp-5             Contention + offered load       -> Figures 13 and 14 (AWS only)
+  exp-5             Contention + throughput         -> Figures 13 and 14 (AWS only)
   all               Run every experiment the paper depends on (exp-1..exp-3 + exp-5)
   destroy           Tear down a deployment by hand (AWS only):
                       ./eval.sh destroy <terraform-var-file> <experiment-id>
