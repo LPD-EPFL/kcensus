@@ -16,28 +16,83 @@
         content: |
           {% raw %}
           #!/usr/bin/env bash
+          set -Eeuo pipefail
+
+          readonly ping_count=50
+          readonly ping_interval=0.2
+          readonly batch_count=7
+          readonly min_replies=45
+          readonly trim_count=5
+          readonly max_one_way_latency_ms=1000
+          readonly source_host="$1"
+          shift
           nodes=("$@")
+          export ping_count ping_interval batch_count min_replies trim_count max_one_way_latency_ms source_host
 
           nodes_json=$(
             printf "%s\n" "${nodes[@]}" |
             xargs -P 100 -I{} bash -c '
+              set -Eeuo pipefail
               n="$1"
-              val=$(sudo ping -c 100 -i 0.3 "$n" \
-                | grep "icmp_seq" \
-                | grep -oP "time=\K[0-9.]+" \
-                | sort -n \
-                | head -n -5 \
-                | tail -n +6 \
-                | awk "{ total += \$1; count++ } END { if (count>0) print total/count/2; else print \"9999\" }")
-              printf "\"%s\": %s\n" "$n" "$val"
+
+              if [[ "$n" == "$source_host" ]]; then
+                printf "\"%s\": 0.0\n" "$n"
+                exit 0
+              fi
+
+              estimates=()
+
+              for ((batch = 1; batch <= batch_count; batch++)); do
+                if ! ping_output=$(sudo -n ping -n -c "$ping_count" -i "$ping_interval" "$n" 2>&1); then
+                  printf "ping batch %s/%s to %s failed: %s\n" \
+                    "$batch" "$batch_count" "$n" "$ping_output" >&2
+                  exit 255
+                fi
+
+                rtts=$(printf "%s\n" "$ping_output" \
+                  | sed -nE "s/.*time[=<]([0-9.]+).*/\1/p")
+                replies=$(printf "%s\n" "$rtts" | sed "/^$/d" | wc -l)
+                replies=${replies//[[:space:]]/}
+
+                if (( replies < min_replies || replies > ping_count )); then
+                  printf "ping batch %s/%s to %s had %s/%s usable replies; require at least %s\n" \
+                    "$batch" "$batch_count" "$n" "$replies" "$ping_count" "$min_replies" >&2
+                  exit 255
+                fi
+
+                estimate=$(printf "%s\n" "$rtts" \
+                  | sort -n \
+                  | head -n "-$trim_count" \
+                  | tail -n "+$((trim_count + 1))" \
+                  | awk "{ total += \$1; count++ }
+                    END {
+                      if (count == 0) exit 1
+                      printf \"%.6f\", total / count / 2
+                    }")
+
+                if ! awk -v value="$estimate" -v max="$max_one_way_latency_ms" \
+                  "BEGIN { exit !(value >= 0 && value <= max) }"; then
+                  printf "implausible one-way latency for ping batch %s/%s to %s: %s ms\n" \
+                    "$batch" "$batch_count" "$n" "$estimate" >&2
+                  exit 255
+                fi
+
+                estimates+=("$estimate")
+              done
+
+              median_position=$((batch_count / 2 + 1))
+              median=$(printf "%s\n" "${estimates[@]}" | sort -n | sed -n "${median_position}p")
+              printf "\"%s\": %s\n" "$n" "$median"
             ' _ {} | paste -sd "," -)
-          
+
           printf "{%s}\n" "$nodes_json"
           {% endraw %}
 
     - name: Run ping script
-      ansible.builtin.shell: /tmp/ping_nodes.sh {{ groups['kcensus_nodes'] | join(' ') }}
+      ansible.builtin.command:
+        argv: "{{ ['/tmp/ping_nodes.sh', inventory_hostname] + groups['kcensus_nodes'] }}"
       register: latencies
+      changed_when: false
 
     - name: Report latencies
       ansible.builtin.debug:
