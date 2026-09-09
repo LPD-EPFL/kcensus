@@ -22,7 +22,8 @@ instances belonging to that ID; otherwise, checks every KCensus instance in the 
                times out. Terminating them lets the destroy through.
 
                Given an instance id, terminates only that one -- every region is still scanned,
-               to find where it lives, and everything found is still listed.
+               to find where it lives, and everything found is still listed. Without an instance
+               id, --run-id is required and all instances belonging to that run are terminated.
 EOF
 }
 
@@ -35,8 +36,8 @@ while [ $# -gt 0 ]; do
       ;;
     --terminate)
       TERMINATE=1
-      # An instance id may follow, to terminate only that one. Another flag, or nothing, leaves
-      # every instance found targeted.
+      # An instance id may follow, to terminate only that one. With --run-id, omitting the instance
+      # id targets every instance found for that run.
       if [ $# -ge 2 ] && [[ "$2" =~ ^i-[0-9a-f]+$ ]]; then
         TERMINATE_ID="$2"
         shift
@@ -57,6 +58,11 @@ done
 
 if [ -n "$RUN_ID" ] && [[ ! "$RUN_ID" =~ ^[a-z0-9][a-z0-9-]{0,31}$ ]]; then
   echo "Error: --run-id must be 1-32 lowercase letters, digits, or hyphens, and start with a letter or digit." >&2
+  exit 2
+fi
+
+if [ "$TERMINATE" -eq 1 ] && [ -z "$TERMINATE_ID" ] && [ -z "$RUN_ID" ]; then
+  echo "Error: --terminate without an instance ID requires --run-id." >&2
   exit 2
 fi
 
@@ -178,7 +184,8 @@ Tear them down with:
 If that hangs on a security group, some of these are not in Terraform's state -- an interrupted
 apply leaves instances it never recorded, and they hold the group open. Terminate them directly,
 then let the destroy finish:
-  ./check-aws-cleanup.sh --terminate <instance-id>   # the i-xxx above; omit it to take all
+  ./check-aws-cleanup.sh --terminate <instance-id>   # terminate one instance
+  ./check-aws-cleanup.sh --run-id <run-id> --terminate   # terminate everything in one run
 HINT
   exit 1
 fi
