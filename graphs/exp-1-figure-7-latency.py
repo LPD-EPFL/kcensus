@@ -84,7 +84,7 @@ for c, row in enumerate(subplots):
     alpha_regions = regions.copy()
     alpha_regions.sort()
 
-    ymax = [350, 100, 35, 100][c]
+    ymax = [350, 105, 30, 105][c]
     if c == 2:
         row[0].set_ylabel("                        Request Latency (ms)", labelpad=1)
     for plot in row:

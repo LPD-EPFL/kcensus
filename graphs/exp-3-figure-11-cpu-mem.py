@@ -14,8 +14,11 @@ plots[0].set_title("Average Compute", pad=0)
 plots[0].set_ylabel("CPU time (s)", labelpad=1)
 plots[1].set_title("Average Peak Memory", pad=0)
 plots[1].set_ylabel("Memory (MiB)", labelpad=1)
-for plot in plots:
-    plot.yaxis.set_major_locator(MaxNLocator(nbins=5, min_n_ticks=3))
+plots[0].yaxis.set_major_locator(MultipleLocator(2))
+plots[1].yaxis.set_major_locator(MultipleLocator(20))
+plots[0].set_ylim(0, 8)
+# for plot in plots:
+    # plot.yaxis.set_major_locator(MaxNLocator(nbins=5, min_n_ticks=3))
 for plot in plots:
     plot.set_xlabel("Number of Servers", labelpad=1)
     plot.grid(axis="y", which="major", linestyle="--", linewidth="0.5")

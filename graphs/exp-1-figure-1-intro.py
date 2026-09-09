@@ -51,7 +51,7 @@ for plot in plots:
     plot.grid(axis="y", which="minor", linestyle=":", linewidth="0.25")
     plot.yaxis.set_major_locator(MultipleLocator(20))
     plot.yaxis.set_minor_locator(MultipleLocator(10))
-    plot.set_ylim(30, 100)
+    plot.set_ylim(30, 105)
     plot.set_xticks(
         [x_middle + i * x_offset for i in range(2)],
         labels=["East Asia", "North America"],
