@@ -14,8 +14,7 @@
         dest: /tmp/ping_nodes.sh
         mode: '0755'
         content: |
-          {% raw %}
-          #!/usr/bin/env bash
+          {% raw %}#!/usr/bin/env bash
           set -Eeuo pipefail
 
           readonly ping_count=50
