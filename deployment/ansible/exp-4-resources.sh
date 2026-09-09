@@ -73,7 +73,8 @@ function run() {
 #    start_cassandra "$NB"
 #  fi
   echo "Starting $TITLE"
-  pids=()
+  local pids=()
+  local exit_codes=()
   for pid in $(seq 0 $((NB - 1))); do
     local CASSANDRA_ARG=""
 #    if [[ "${CASSANDRA,,}" != "false" && "$CASSANDRA" != "0" ]]; then
@@ -91,10 +92,17 @@ function run() {
   done
 
   # Wait for all and capture failures
-  failed=0
-  for pid in "${pids[@]}"; do
-    if ! wait "$pid"; then
+  local failed=0
+  local replica
+  local status
+  for replica in "${!pids[@]}"; do
+    if wait "${pids[$replica]}"; then
+      exit_codes+=(0)
+    else
+      status=$?
+      exit_codes+=("$status")
       failed=1
+      echo "Replica $replica exited with status $status (see $LOG_DIR/$replica.stderr)" >&2
     fi
   done
 
@@ -104,6 +112,13 @@ function run() {
     local FAILED_DIR="$BASE_LOG_DIR/failed/$TITLE/attempt=${ATTEMPT:-1}"
     mkdir -p "$FAILED_DIR"
     cp -a "$LOG_DIR"/. "$FAILED_DIR"/ 2>/dev/null
+    {
+      printf 'title=%s\n' "$TITLE"
+      printf 'attempt=%s\n' "${ATTEMPT:-1}"
+      for replica in "${!exit_codes[@]}"; do
+        printf 'replica=%s exit_status=%s\n' "$replica" "${exit_codes[$replica]}"
+      done
+    } > "$FAILED_DIR/exit-statuses.txt"
     echo "Attempt ${ATTEMPT:-1} failed; output kept in $FAILED_DIR" >&2
   fi
 

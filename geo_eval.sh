@@ -495,22 +495,35 @@ function exp-4() {
   local EXPERIMENT_ID; EXPERIMENT_ID="$(experiment_id "exp-4")"
   local varFile="${CONFIGS[$configName]}"
   local inventoryFile="inventory-${EXPERIMENT_ID}.ini"
+  local archive="${ABSOLUTE_BASE_LOG_DIR}/exp-4-resources_logs.tar.gz"
+  local experiment_status=0
 
   provision "$varFile" "$EXPERIMENT_ID"
 
   (
     cd deployment/ansible/
     ansible-playbook -i "${inventoryFile}" exp-4-resources.yml
-  )
+  ) || experiment_status=$?
 
+  # The playbook fetches its archive before reporting an experiment failure. Tear the instance
+  # down promptly, but continue locally so the diagnostic logs are not stranded in the archive.
   destroy "$varFile" "$EXPERIMENT_ID"
 
   echo "--> Processing and merging experiment results..."
-  local archive="${ABSOLUTE_BASE_LOG_DIR}/exp-4-resources_logs.tar.gz"
-  echo "--> Extracting and merging $archive..."
-  tar -xzf "$archive" -C "${ABSOLUTE_BASE_LOG_DIR}" --strip-components=1
-  rm "$archive"
-  echo "--> Results successfully merged into ${ABSOLUTE_BASE_LOG_DIR}"
+  if [ -f "$archive" ]; then
+    echo "--> Extracting and merging $archive..."
+    tar -xzf "$archive" -C "${ABSOLUTE_BASE_LOG_DIR}" --strip-components=1
+    rm "$archive"
+    echo "--> Results successfully merged into ${ABSOLUTE_BASE_LOG_DIR}"
+  else
+    echo "--> ERROR: exp-4 produced no log archive at $archive" >&2
+    experiment_status=1
+  fi
+
+  if [ "$experiment_status" -ne 0 ]; then
+    echo "--> Experiment 4 failed; available logs were preserved in ${ABSOLUTE_BASE_LOG_DIR}" >&2
+    return "$experiment_status"
+  fi
 
   echo "--- Finished Experiment 4 ---"
 }

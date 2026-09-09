@@ -62,6 +62,8 @@
       async: 14400
       poll: 30
       register: experiment_job
+      # Preserve and fetch the per-process logs before propagating the experiment failure.
+      failed_when: false
 
     - name: Archive the logs directory on the remote server
       community.general.archive:
@@ -74,3 +76,11 @@
         src: "{{ remote_work_dir }}/logs.tar.gz"
         dest: "{{ local_results_dir }}/exp-4-resources_logs.tar.gz"
         flat: yes
+
+    - name: Fail after preserving logs if the experiment failed
+      ansible.builtin.fail:
+        msg: >-
+          exp-4-resources.sh exited with status
+          {{ experiment_job.rc | default('unknown') }}. Its logs were archived and fetched to
+          {{ local_results_dir }}/exp-4-resources_logs.tar.gz.
+      when: (experiment_job.rc | default(1) | int) != 0
