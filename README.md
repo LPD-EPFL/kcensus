@@ -16,7 +16,7 @@ Ways to reproduce the results:
 - [Run on AWS (§6)](#6-running-experiments-on-aws) to repeat the deployed experiments.
 
 Start with §1 for all three workflows. Running new experiments also requires the build setup in §4.
-Allow approximately 10 GB of disk space to store all experiment logs.
+Allow approximately 15~30 GB of disk space to store all experiment logs.
 
 ## 1. Getting Started
 
@@ -52,7 +52,7 @@ fc-cache && rm -rf ~/.cache/matplotlib
 
 Complete §1 first to clone the repository and install the plotting dependencies.
 
-You do not need to rerun the experiments to reproduce the exact paper plots. The complete logs are
+You do not need to rerun the experiments to reproduce the exact experimental figures. The complete logs are
 available in
 the [artifact-evaluation-v1 release](https://github.com/LPD-EPFL/kcensus/releases/tag/artifact-evaluation-v1).
 From the root of a fresh clone, download them and generate the plots with:
@@ -72,34 +72,33 @@ and figures. Make a copy if you want to keep both.
 
 ## 3. Experiments and Outputs
 
-The same four experiments, described in the table below, are available locally and on AWS. To run
-them, complete the [build setup (§4)](#4-build-setup-for-new-experiments), then follow
+The experiments that produce the paper's experimental figures are described below. To run them, complete the
+[build setup (§4)](#4-build-setup-for-new-experiments), then follow
 [local runs (§5)](#5-running-locally-without-aws) or [AWS runs (§6)](#6-running-experiments-on-aws).
 
 | Experiment | Description                                                                                                 | Figures | Local runtime | AWS runtime |
 |------------|-------------------------------------------------------------------------------------------------------------|---------|---------------|-------------|
 | `exp-1`    | End-to-end latency in four 7-replica deployments: Northern Hemisphere, Europe, North America, and East Asia | 1, 7    | 45min         | 1h          |
 | `exp-2`    | Northern Hemisphere, with every combination of up to 3 crashed replicas                                     | 8       | 1h55min       | 2h40min     |
-| `exp-3`    | Latency scaling from 3 to 31 replicas worldwide, and requirements optimization time                         | 9, 12   | 1h10min       | 1h30min     |
-| `exp-4`    | Traffic, CPU, and memory consumption on a single machine with simulated link delays                         | 10, 11  | 1h50min       | 30min       |
+| `exp-3`    | Latency and resource scaling from 3 to 31 replicas worldwide, and requirements optimization time            | 9-12    | 2h30min       | 1h30min     |
+| `exp-5`    | Contention and throughput sweep in the 7-replica Northern Hemisphere deployment                          | 13, 14  | AWS only      | 7h30min |
 
-Runtimes are approximate, totaling about 6 hours for either workflow.
+Runtimes are approximate. Experiments 1-3 total about 5 hours for either workflow.
 
-Each figure has a `.pdf` and a `.txt` containing its underlying numbers in `graphs/plots/`:
+Each figure writes a `.pdf` and a `.txt` containing the underlying numbers to `graphs/plots/`:
 
 | Experiment | Output filenames (before `.pdf` or `.txt`)                  |
 |------------|-------------------------------------------------------------|
 | `exp-1`    | `exp-1-figure-1-intro`, `exp-1-figure-7-latency`            |
 | `exp-2`    | `exp-2-figure-8-faults`                                     |
-| `exp-3`    | `exp-3-figure-9-scalability`, `exp-3-figure-12-propagation` |
-| `exp-4`    | `exp-4-figure-10-network`, `exp-4-figure-11-cpu-mem`        |
+| `exp-3`    | `exp-3-figure-9-scalability`, `exp-3-figure-10-network`, `exp-3-figure-11-cpu-mem`, `exp-3-figure-12-propagation` |
+| `exp-5`    | `exp-5-figure-13-conflict`, `exp-5-figure-14-load` |
 
 Local figure filenames have an additional `local-` prefix.
 
 The TOML files in `configs/` define each topology's regions and latency matrix (`raw_latencies`,
-in milliseconds). The `EXP1_CONFIGS`, `EXP2_CONFIG`, `EXP3_TYPES`/`EXP3_SIZES`, and
-`EXP4_TYPE`/`EXP4_SIZES` variables near the top of `lib.sh` select the topologies used by each
-experiment.
+in milliseconds). The `EXP1_CONFIGS`, `EXP2_CONFIG`, `EXP3_TYPES`/`EXP3_SIZES`, and `EXP5_*`
+variables near the top of `lib.sh` select the topologies and workloads used by each experiment.
 
 ## 4. Build Setup for New Experiments
 
@@ -143,16 +142,17 @@ in `configs/`. Complete §1 and §4 first, then run an experiment and plot its r
 These commands build and run experiment 1 (~45 minutes), then plot Figures 1 and 7.
 No cloud cleanup is needed.
 
-All experiments, their figures, and estimated runtimes are listed in the [table in §3](#3-experiments-and-outputs).
+All locally supported experiments, their figures, and runtimes are listed in the
+[table in §3](#3-experiments-and-outputs).
 
-To generate every figure:
+To generate every locally supported experimental figure:
 
 ```bash
 ./eval.sh --local all
 ./plot.sh --local all
 ```
 
-The full suite takes approximately 6 hours.
+The local suite takes approximately 5 hours.
 
 ### What is different from the AWS runs
 
@@ -161,8 +161,9 @@ so they do not overwrite AWS results.
 
 To fit on one machine, throughput is divided by `(f+1)/2`: half rate at 7 replicas, an eighth
 at 31. Log paths record the reduced rate, so plotting requires `--local`.
-Measurement windows are extended: experiments 1-3 collect at least a quarter of the AWS request
-count, and experiment 4 matches it to keep compute measurements comparable.
+Measurement windows are extended so sample counts do not fall with replica count. The
+`aws-random` runs in experiment 3 match the full AWS request count for the compute figure; the
+latency-only runs use smaller fixed samples.
 
 ### How to read the results
 
@@ -176,14 +177,12 @@ which leaders and quorums are chosen, and which regions have the lowest latency.
 - **Traffic (Figure 10):** bytes per request are identical across local and AWS runs.
 - **Memory (Figure 11):** usage is almost identical across local and AWS runs.
 - **CPU time and optimization time (Figures 11 and 12):** absolute values depend on hardware.
-  For reference, the paper used an `m5.16xlarge` for Figure 11 and a `t3.medium` for Figure 12.
 
 ## 6. Running Experiments on AWS
 
 Complete §1 and §4 first, then configure the cloud tools below.
 On AWS, `eval.sh` provisions infrastructure, deploys the binaries, runs the experiment, collects
-logs, and tears down the deployment. Experiment 3 provisions 31 instances; experiment 4 uses
-one `m5.16xlarge` with simulated link delays.
+logs, and tears down the deployment.
 
 > **Reproducibility note.** A fresh AWS run reproduces the experimental procedure, but is not
 > guaranteed to produce the exact values reported in the paper. Inter-region latencies vary over
@@ -231,9 +230,9 @@ Keep these paths: the evaluation scripts expect `~/.ssh/kcensus_key` and `~/.ssh
 
 ### 6.4 Run and Plot
 
-The same experiment names from §5 apply, but with `--local` omitted from both commands, and
-`--run-id reviewer-x` added for evaluation. Replace `exp-N` below with an experiment from
-the [table in §3](#3-experiments-and-outputs), which lists all experiments, their figures, and estimated runtimes.
+For AWS runs, omit `--local` and add `--run-id reviewer-x` to the evaluation command. Replace
+`exp-N` below with an experiment from the [table in §3](#3-experiments-and-outputs), which lists
+all experiments, their figures, and runtimes.
 When several reviewers share the AWS account, each must choose a different run ID:
 
 ```bash
@@ -255,14 +254,12 @@ to keep Terraform state, logs, and cloud resources separate.
 > Figure 8 subfigures from the same deployment (same instances, same latencies); rerun `exp-2` if
 > you ran them in reverse order.
 
-To run everything the paper depends on:
+To run all experiments:
 
 ```bash
-./eval.sh --run-id reviewer-a all  # exp-1 .. exp-4
-./plot.sh all                      # every figure
+./eval.sh --run-id reviewer-a all  # exp-1 .. exp-3, then exp-5
+./plot.sh all                      # Figures 1 and 7-14
 ```
-
-Running everything takes ~6h.
 
 > **Note**: The experiments take several hours and incur AWS costs - `exp-2` (faults) dominates,
 > and `exp-3` holds 31 instances across every region for its whole duration.
@@ -324,8 +321,8 @@ your own:
 
 ```bash
 ./eval.sh destroy deployment/terraform/regions/ring-7.tfvars exp-2-reviewer-a  # exp-2 (faults)
-./eval.sh destroy deployment/terraform/regions/aws-31.tfvars exp-3-reviewer-a  # exp-3 (scalability)
-./eval.sh destroy deployment/terraform/regions/one.tfvars    exp-4-reviewer-a  # exp-4 (resources)
+./eval.sh destroy deployment/terraform/regions/aws-31.tfvars exp-3-reviewer-a  # exp-3 (scalability/resources)
+./eval.sh destroy deployment/terraform/regions/ring-7.tfvars exp-5-reviewer-a  # exp-5 (contention/load)
 ```
 
 Rerun `check-aws-cleanup.sh --run-id reviewer-a` after manual cleanup to verify that all instances are terminated.
