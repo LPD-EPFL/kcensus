@@ -9,7 +9,7 @@ from logparser import duration_to_ms, parse
 
 EXP5_CONFIG = "aws-ring-7"
 EXP5_DURATION = "10s"
-EXP5_CDF_DURATION = "60s"
+EXP5_CDF_DURATION = "10s"
 EXP5_INGRESS = "exponential"
 EXP5_ALGORITHMS = {
     **ALGORITHMS,

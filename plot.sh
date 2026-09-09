@@ -31,7 +31,7 @@ function activate_env() {
 }
 
 function exp-1() {
-  local duration="60s"
+  local duration="10s"
   # Experiment 1 produces TWO figures, in two different sections of the paper:
   # Figure 1 (Introduction) and Figure 7 (End-to-End Latency). Both come from the same runs,
   # so they are always plotted together.
@@ -50,7 +50,7 @@ function exp-2() {
   local config=aws-ring-7
   local writes=1
   local duration="10s"
-  local baseline_duration="60s"
+  local baseline_duration="10s"
   local throughput=1000
   local keys=100000
   (
