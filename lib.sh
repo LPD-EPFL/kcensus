@@ -44,7 +44,6 @@ EXP5_THROUGHPUTS=($(awk 'BEGIN {
   printf "500 1000 "
   for (i = 1; i < 10; i++) printf "%d ", 2000 * i
   for (i = 4; i < 10; i++) printf "%d ", 5000 * i
-  for (i = 5; i < 11; i++) printf "%d ", 10000 * i
 }'))
 EXP5_CDF_THROUGHPUT=1000
 EXP5_LOAD_SKEWS=(0 0.8 0.99)
