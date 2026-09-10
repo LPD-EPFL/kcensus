@@ -9,7 +9,8 @@
 # Not shared: how a run is executed (Ansible on EC2 vs local processes) and the AWS-only
 # provisioning, retry-backoff and teardown machinery.
 
-REPLICATED_ALGOS=(kcensus "swift-paxos" pando epaxos "multi-paxos" paxos)
+# This order is intentionnal: it makes sure paxos (unplotted) serves as warmup for the switch caches.
+REPLICATED_ALGOS=(paxos "multi-paxos" pando epaxos kcensus "swift-paxos")
 ALGOS=("${REPLICATED_ALGOS[@]}")
 
 DURATION=10s
