@@ -64,6 +64,10 @@ pub struct Instance {
     left_fast_path: bool,
     /// A coordinator might not be a voter
     coordinator_deps: Option<DepSet>,
+    /// Scratch used by the dependency executor's in-place Tarjan traversal. Zero means that
+    /// this instance has not been visited in the current pass. These are not consensus state.
+    pub(crate) execution_index: usize,
+    pub(crate) execution_lowlink: usize,
 }
 
 impl Instance {
@@ -86,6 +90,8 @@ impl Instance {
             accept_acked: BitSet::with_capacity(process_count),
             left_fast_path: false,
             coordinator_deps: None,
+            execution_index: 0,
+            execution_lowlink: 0,
         }
     }
 

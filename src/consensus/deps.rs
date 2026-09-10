@@ -7,7 +7,7 @@
 
 use crate::consensus::command::{Command, CommitReport};
 use crate::consensus::deps::dep_set::{requester_of, DepSet};
-use crate::consensus::deps::execution::{cycle_possible, executable_order, next_executable};
+use crate::consensus::deps::execution::{cycle_possible, next_executable, ExecutionScratch};
 use crate::consensus::deps::instance::{Instance, Phase};
 use crate::consensus::deps::message::DepMsg;
 use crate::consensus::deps::read_tracker::ReadTracker;
@@ -125,6 +125,9 @@ pub(crate) struct DepShard {
     reads: ReadTracker,
     /// Commands executed since the last drain, in execution order.
     ready: Vec<Command>,
+    /// Reused by the uncommon cyclic execution path, matching the reference EPaxos
+    /// executor's retained Tarjan stack.
+    execution_scratch: ExecutionScratch,
 }
 
 impl DepShard {
@@ -166,6 +169,7 @@ impl DepShard {
             deferred: HashMap::new(),
             parked_accepts: HashSet::new(),
             ready: Vec::new(),
+            execution_scratch: ExecutionScratch::default(),
         }
     }
 
@@ -865,7 +869,10 @@ impl DepShard {
             self.execute(uid);
         }
         if cycle_possible(&self.instances, &self.executed) {
-            for uid in executable_order(&self.instances, &self.executed) {
+            for uid in self
+                .execution_scratch
+                .executable_order(&mut self.instances, &self.executed)
+            {
                 self.execute(uid);
             }
             // `executable_order` returns the largest set closed under "depends only on
