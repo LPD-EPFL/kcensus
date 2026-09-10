@@ -17,9 +17,6 @@ HATCHES = {
     "multi-paxos": "////",
 }
 
-# python3 1-bars.py -c=aws-east-asia-9.toml -w=1
-# python3 1-bars.py -c=aws-europe-8.toml -w=1
-# python3 1-bars.py -c=aws-north-america-7 -w=1
 writes = 1.0
 duration = "10s"
 ingress = "exponential"

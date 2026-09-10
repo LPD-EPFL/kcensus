@@ -37,7 +37,6 @@ function run_one() {
   local nb; nb="$(digits "$configName")"
   local throughput; throughput="$(local_throughput "$nb")"
   local per_proposer; per_proposer="$(per_proposer_rate "$throughput" "$nb")"
-  local nonvoting; nonvoting="$(get_nonvoting "$configName" "$algo")"
   local timeout_s=$(( 30 + 3 * ${duration%s} ))
 
   local title; title="$(make_title)"
@@ -54,16 +53,15 @@ function run_one() {
     pkill -x kcensus 2>/dev/null || true
     local pids=() pid
     for pid in $(seq 0 $((nb - 1))); do
-      local faultsArg=() nonvotingArg=() conflictsArg=() shardPoolArg=()
+      local faultsArg=() conflictsArg=() shardPoolArg=()
       [ -n "$faults" ]     && faultsArg=(-f "$faults")
-      [ -n "$nonvoting" ]  && nonvotingArg=(-v "$nonvoting")
       [ -n "$conflicts" ]  && conflictsArg=("--conflicts=$conflicts")
       [ -n "$shard_pool" ] && shardPoolArg=(--shard-pool "$shard_pool")
       ( timeout "${timeout_s}s" /usr/bin/time -f "$TIME_FORMAT" "$BIN" \
           --simulate-delays true -p "$pid" --config "configs/${configFile}" \
           -a "$algo" -w "$writes" --duration "$duration" -i "$ingress" \
           -t "$per_proposer" -s "$speedup" -k "$keys" --skew "$skew" --shards "$shards" \
-          "${nonvotingArg[@]}" "${faultsArg[@]}" "${conflictsArg[@]}" "${shardPoolArg[@]}" \
+          "${faultsArg[@]}" "${conflictsArg[@]}" "${shardPoolArg[@]}" \
       ) > "${logDir}/${pid}.stdout" 2> "${logDir}/${pid}.stderr" &
       pids+=($!)
     done
@@ -101,10 +99,12 @@ function exp-1() {
 function exp-2() {
   echo "--- Experiment 2: impact of failures (local) ---"
   local algo faults
-  for algo in "${REPLICATED_ALGOS[@]}"; do
-    for faults in "" $(all_faults "$(digits "$EXP2_CONFIG")" "$(get_nonvoting "$EXP2_CONFIG" "$algo")"); do
-      local base="${DURATION%s}"
-      [ -z "$faults" ] && base="${BASELINE_DURATION%s}"
+  # Match the AWS ordering: compare all algorithms under one fault pattern before advancing to
+  # the next pattern, minimizing time-dependent system conditions as a source of bias.
+  for faults in "" $(all_faults "$(digits "$EXP2_CONFIG")"); do
+    local base="${DURATION%s}"
+    [ -z "$faults" ] && base="${BASELINE_DURATION%s}"
+    for algo in "${REPLICATED_ALGOS[@]}"; do
       run_one "$EXP2_CONFIG" "${EXP2_CONFIG}.toml" "$algo" 1 \
         "$(local_duration "$(digits "$EXP2_CONFIG")" 2 "$base")s" exponential "$SPEEDUP" "$faults"
     done

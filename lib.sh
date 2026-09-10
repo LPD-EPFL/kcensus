@@ -148,55 +148,15 @@ function local_duration() {
       'BEGIN { d = target / rate; d = (d == int(d) ? d : int(d) + 1); print (d > base ? d : base) }'
 }
 
-# Every fault combination up to a minority of the voting replicas.
+# Every fault combination up to a minority of the replicas.
 function all_faults() {
 python3 - <<END
 from itertools import combinations
 SERVERS=$1
-NON_VOTERS=[$2]
-FROM="$3"
-TO="$4"
-VOTERS=list(range(SERVERS))
-for non_voter in NON_VOTERS:
-  VOTERS.remove(non_voter)
-MINORITY=(len(VOTERS) - 1) // 2
-done = False
-should_yield = FROM == ''
+MINORITY=(SERVERS - 1) // 2
 for r in range(1, MINORITY + 1):
-    if done: break
-    for comb in combinations(VOTERS, r):
+    for comb in combinations(range(SERVERS), r):
         formatted = ','.join(map(str, comb))
-        if formatted == FROM: should_yield = True
-        if formatted == TO and TO != '': done = True; break;
-        if should_yield:
-          print(formatted, end=' ')
+        print(formatted, end=' ')
 END
-}
-
-# Replicas that take part in the protocol but do not vote. Only the older, non-2f+1 deployments
-# need this; the four 7-replica deployments the paper uses have every replica voting.
-get_nonvoting() {
-  local config=$1
-  local algo=$2
-  case "$config-$algo" in
-    aws-europe-8-weak-replication) echo "4";;
-    aws-europe-8-kcensus) echo "4";;
-    aws-europe-8-swift-paxos) echo "4";;
-    aws-europe-8-pando) echo "4";;
-    aws-europe-8-epaxos) echo "4";;
-    aws-europe-8-multi-paxos) echo "4";;
-    aws-europe-8-multi-paxos-3p) echo "4";;
-    aws-europe-8-paxos) echo "4";;
-
-    aws-east-asia-9-weak-replication) echo "1,8";;
-    aws-east-asia-9-kcensus) echo "1,8";;
-    aws-east-asia-9-swift-paxos) echo "2,4";;
-    aws-east-asia-9-pando) echo "2,4";;
-    aws-east-asia-9-epaxos) echo "1,4";;
-    aws-east-asia-9-multi-paxos) echo "2,4";; # any pair composed of 0,1,2,3,4 works
-    aws-east-asia-9-multi-paxos-3p) echo "2,4";;
-    aws-east-asia-9-paxos) echo "1,8";;
-
-    *) echo "";;
-  esac
 }

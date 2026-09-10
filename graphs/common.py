@@ -116,25 +116,6 @@ parser.add_argument(
     "-k", "--keys", type=int, default=100, help="Key count"
 )
 parser.add_argument(
-    "--nonvoting_weak_replication", type=lambda x: list(map(int, x.split(","))), default=[],
-    help="Non-voting processes for weak-replication"
-)
-parser.add_argument(
-    "--nonvoting_paxos", type=lambda x: list(map(int, x.split(","))), default=[], help="Non-voting processes for paxos"
-)
-parser.add_argument(
-    "--nonvoting_epaxos", type=lambda x: list(map(int, x.split(","))), default=[],
-    help="Non-voting processes for epaxos"
-)
-parser.add_argument(
-    "--nonvoting_multi_paxos_3p", type=lambda x: list(map(int, x.split(","))), default=[],
-    help="Non-voting processes for multi-paxos-3p"
-)
-parser.add_argument(
-    "--nonvoting_kcensus", type=lambda x: list(map(int, x.split(","))), default=[],
-    help="Non-voting processes for kcensus"
-)
-parser.add_argument(
     "--skew", type=float, default=0, help="Zipfian skew"
 )
 parser.add_argument(

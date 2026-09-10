@@ -27,12 +27,6 @@ CONFIGS["aws-north-america-7"]="deployment/terraform/regions/north-america-7.tfv
 CONFIGS["aws-europe-7"]="deployment/terraform/regions/europe-7.tfvars"
 CONFIGS["aws-east-asia-7"]="deployment/terraform/regions/east-asia-7.tfvars"
 CONFIGS["aws-exp-4"]="deployment/terraform/regions/one.tfvars"
-# Old
-CONFIGS["aws-east-asia-9"]="deployment/terraform/regions/east-asia-9.tfvars"
-CONFIGS["aws-europe-8"]="deployment/terraform/regions/europe-8.tfvars"
-CONFIGS["old/aws-europe-7"]="deployment/terraform/regions/europe-7.tfvars"
-CONFIGS["old/aws-europe-3"]="deployment/terraform/regions/europe-3.tfvars"
-CONFIGS["old/aws-europe-2"]="deployment/terraform/regions/europe-2.tfvars"
 
 # Namespace an AWS deployment for concurrent users of the same account. Keeping the experiment
 # name first makes resources easy to associate with the README and preserves the old IDs when no
@@ -161,8 +155,6 @@ function run() {
   local conflicts="${12:-}"
   local speedup="${SPEEDUP}"
 
-  local nonvoting="$(get_nonvoting "$configName" "$algo")"
-
   local inventoryFile="inventory-${expId}.ini"
   local title; title="$(make_title)"
   local resultPath="${ABSOLUTE_BASE_LOG_DIR}/${title}"
@@ -189,7 +181,6 @@ function run() {
         -e "keys=${keys}" \
         -e "skew=${skew}" \
         -e "shards=${shards}" \
-        -e "nonvoting=${nonvoting}" \
         -e "conflicts=${conflicts}" \
         -e "result_path=${resultPath}" \
         -e "failed_path=${failedPath}"
@@ -365,10 +356,11 @@ function exp-2() {
   provision "$varFile" "$EXPERIMENT_ID"
   deploy "$EXPERIMENT_ID"
 
-  local duration
-  for algo in "${REPLICATED_ALGOS[@]}"; do
-    for faults in "" $(all_faults "$(digits "$configName")" "$(get_nonvoting "$configName" "$algo")"); do
-      if [ -z "$faults" ]; then duration="$BASELINE_DURATION"; else duration="$DURATION"; fi
+  local algo duration faults
+  # Iterate over algos last so network conditions are as similar as possible.
+  for faults in "" $(all_faults "$(digits "$configName")"); do
+    if [ -z "$faults" ]; then duration="$BASELINE_DURATION"; else duration="$DURATION"; fi
+    for algo in "${REPLICATED_ALGOS[@]}"; do
       run "$EXPERIMENT_ID" "$configName" "$algo" $writes $duration exponential $throughput "$faults"
     done
   done
