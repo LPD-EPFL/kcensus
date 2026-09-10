@@ -222,19 +222,23 @@ pub async fn run() -> io::Result<()> {
         delay_mode,
     ));
 
+    let no_conflicts = !args.conflicts.unwrap_or(false);
     let duration = args.duration;
     let warmup = args
         .warmup
         .unwrap_or(args.duration * 4 / 10 + Duration::from_secs(1));
     let sustain = args
         .sustain
-        .unwrap_or(args.duration / 10 + Duration::from_secs(1));
+        .unwrap_or(args.duration / 10 + Duration::from_secs(match (algo, no_conflicts) {
+            (Algo::EPaxos, false) => 4, // To let EPaxos resolve dependency chains
+            _ => 1
+        }));
     let warmup = warmup.max(sustain);
     let exp_length = warmup + duration + sustain;
     // If an experiment is longer than exp_length + sustain, one process might be desynchronized
-    // by more than sustain so we can't trust the results, while runovers >2s suggest saturation.
-    let experiment_timeout = exp_length + Duration::from_secs(2).min(sustain);
-    let no_conflicts = !args.conflicts.unwrap_or(false);
+    // by more than sustain so we can't trust the results, while runovers >5s suggest saturation.
+    let experiment_timeout = exp_length + Duration::from_secs(5).min(sustain);
+
     let partition_keys = if no_conflicts {
         args.keys / process_count
     } else {
