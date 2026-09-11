@@ -141,8 +141,8 @@ impl DepShard {
             // SwiftPaxos C1: more than 3/4 of the replicas, including the leader.
             DepMode::SwiftPaxos { .. } => ((replica_count * 3 - 1) / 4 + 1).max(slow_quorum),
         };
-        // EPaxos has no leader, and its own read dependencies would be a quorum union like
-        // ours; SwiftPaxos' leader bounds that union. See `submit_read`.
+        // EPaxos has no leader. When SwiftPaxos' leader is part of the first read quorum,
+        // its view bounds that quorum's union. See `submit_read`.
         let read_leader = match &mode {
             DepMode::EPaxos { .. } => None,
             DepMode::SwiftPaxos { leader, .. } => Some(*leader),
@@ -325,16 +325,16 @@ impl DepShard {
     /// voted on by a quorum, every quorum is a majority, and two majorities meet, so at
     /// least one answer names it.
     ///
-    /// In SwiftPaxos the union is also bounded by the leader's own answer, which is what
-    /// the protocol would have used as the read's dependencies (Fig. 4 line 26: the
-    /// leader's `D` overwrites everyone's). The bound is sound in both directions. Nothing
-    /// completed is lost by dropping what the leader has not seen, because every committed
-    /// command passes through the leader; and nothing completed is lost by dropping what
-    /// no answer names, because a completed command was seen by a majority, which meets
-    /// ours. Both halves assume a single leader, which holds here only because recovery is
-    /// not implemented. **Implementing it means the answers must carry their ballot, with a
-    /// majority agreeing on it** — otherwise a superseded leader's view would prune a
-    /// command committed under its successor.
+    /// When SwiftPaxos' leader is among the first majority to answer, its view bounds the
+    /// union: the protocol would have used the leader's dependencies for the read (Fig. 4
+    /// line 26: the leader's `D` overwrites everyone's). Nothing completed is lost by the
+    /// intersection because every committed command passes through the leader. If the
+    /// leader is not in the first majority, the unbounded quorum union is sufficient and
+    /// the read does not wait for another response. The leader bound assumes a single
+    /// leader, which holds here only because recovery is not implemented. **Implementing
+    /// recovery means the answers must carry their ballot, with a majority agreeing on
+    /// it** — otherwise a superseded leader's view could prune a command committed under
+    /// its successor.
     ///
     /// EPaxos has no leader to bound with, and its own read dependencies are a quorum union
     /// like this one.

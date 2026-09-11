@@ -13,24 +13,24 @@ struct PendingRead {
     /// How many answers went into `union` — the first quorum to reply, and no more. Each
     /// replica answers a request exactly once, so counting is enough to know who has.
     answers: usize,
-    /// SwiftPaxos: the leader's own answer, which bounds the union. `None` until it comes.
+    /// SwiftPaxos: the leader's answer, when it contributed to the first quorum. Its view
+    /// then bounds the union. A leader response arriving after the quorum is ignored.
     leader_seen: Option<DepSet>,
-    /// Filled in the first time the read's requirement is known, i.e. when the quorum (and,
-    /// in SwiftPaxos, the leader) has answered. A read is fast when that requirement is
-    /// already executed then: the answers alone were enough, with nothing to wait for.
+    /// Filled in the first time the quorum has answered. A read is fast when its requirement
+    /// is already executed then: the answers alone were enough, with nothing to wait for.
     report: Option<CommitReport>,
 }
 
 /// The reads this node has issued for one shard and has not served yet.
 ///
 /// A read takes no instance and no dependency set of its own. It is served once the union
-/// of what a majority of replicas had seen — bounded, in SwiftPaxos, by what the leader
-/// had seen — is executed here. See `DepShard::submit_read` for why that is enough.
+/// of what a majority of replicas had seen is executed here. In SwiftPaxos, the leader's
+/// view bounds that union when the leader is part of the majority. See `DepShard::submit_read`.
 pub struct ReadTracker {
     next_id: usize,
     read_quorum: usize,
-    /// SwiftPaxos' leader, whose answer bounds the union. `None` in EPaxos, which has no
-    /// leader and whose own read dependencies are a quorum union like ours.
+    /// SwiftPaxos' leader, whose answer bounds the union when it is part of the first
+    /// quorum. `None` in EPaxos, which has no leader.
     leader: Option<usize>,
     reads: BTreeMap<ReadId, PendingRead>,
 }
@@ -44,9 +44,6 @@ impl Debug for ReadTracker {
                 write!(f, ", ")?;
             }
             write!(f, "{id:?}: {} answer(s)", read.answers)?;
-            if self.leader.is_some() && read.leader_seen.is_none() {
-                write!(f, ", waiting on the leader")?;
-            }
             write!(f, ", needs {:?}", read.union)?;
         }
         write!(f, "]")
@@ -109,8 +106,8 @@ impl ReadTracker {
     /// it would only make the read wait for commands it is free to miss. Which majority it
     /// is settles itself — the fastest to reply, which is what the latency model assumes.
     ///
-    /// The leader's answer is kept whenever it comes, because it *bounds* the union rather
-    /// than adding to it.
+    /// A leader answer bounds the union only when it is one of that first quorum. A later
+    /// leader answer is ignored like every other response after the quorum is complete.
     pub fn receive(&mut self, id: ReadId, src: usize, seen: &DepSet) {
         let quorum = self.read_quorum;
         let leader = self.leader;
@@ -120,9 +117,9 @@ impl ReadTracker {
         if read.answers < quorum {
             read.answers += 1;
             read.union.union_with(seen);
-        }
-        if leader == Some(src) {
-            read.leader_seen.get_or_insert_with(|| seen.clone());
+            if leader == Some(src) {
+                read.leader_seen.get_or_insert_with(|| seen.clone());
+            }
         }
     }
 
@@ -130,19 +127,16 @@ impl ReadTracker {
     /// order they were issued.
     pub fn take_ready(&mut self, executed: &DepSet) -> Vec<Command> {
         let quorum = self.read_quorum;
-        let leader = self.leader;
         let ready: Vec<ReadId> = self
             .reads
             .iter_mut()
             .filter(|(_, read)| read.answers >= quorum)
             .filter_map(|(id, read)| {
                 let mut required = read.union.clone();
-                match (leader, read.leader_seen.as_ref()) {
-                    // SwiftPaxos: bound by the leader's view. Waiting for it is what makes
-                    // the bound sound as well as tighter.
-                    (Some(_), Some(leader_seen)) => required.intersect_with(leader_seen),
-                    (Some(_), None) => return None,
-                    (None, _) => {}
+                if let Some(leader_seen) = read.leader_seen.as_ref() {
+                    // The leader was in the first quorum, so its view can safely tighten
+                    // that quorum's union without adding another response to the read path.
+                    required.intersect_with(leader_seen);
                 }
                 let covered = required.is_covered_by(executed);
                 read.report.get_or_insert_with(|| CommitReport {
@@ -209,18 +203,36 @@ mod tests {
     }
 
     #[test]
-    fn swift_paxos_bounds_the_union_by_the_leader_and_waits_for_it() {
+    fn swift_paxos_bounds_the_union_when_the_leader_is_in_the_quorum() {
         let mut tracker = ReadTracker::new(2, Some(LEADER));
         let id = tracker.insert(read(), N);
-        // A quorum of followers, one of which has seen a command the leader has not.
+        // A follower has seen an extra command, but the leader in the first quorum has not.
+        tracker.receive(id, 1, &deps(&[uid(1, 0), uid(1, 3)]));
+        tracker.receive(id, LEADER, &deps(&[uid(1, 0)]));
+        // The leader bounds the union, so the read does not wait for `uid(1, 3)`.
+        assert_eq!(tracker.take_ready(&deps(&[uid(1, 0)])).len(), 1);
+    }
+
+    #[test]
+    fn swift_paxos_uses_the_union_without_a_leader_in_the_quorum() {
+        let mut tracker = ReadTracker::new(2, Some(LEADER));
+        let id = tracker.insert(read(), N);
         tracker.receive(id, 1, &deps(&[uid(1, 0)]));
         tracker.receive(id, 2, &deps(&[uid(1, 3)]));
-        // The leader's answer is missing, so nothing is served even though we executed it.
-        assert!(tracker.take_ready(&deps(&[uid(1, 3)])).is_empty());
-        // The leader has only seen the older one: the union is cut back to it, and the
-        // read no longer waits for `uid(1, 3)`.
+        // The completed follower quorum is enough; there is no wait for the leader.
+        assert_eq!(tracker.take_ready(&deps(&[uid(1, 0), uid(1, 3)])).len(), 1);
+    }
+
+    #[test]
+    fn swift_paxos_ignores_a_leader_arriving_after_the_quorum() {
+        let mut tracker = ReadTracker::new(2, Some(LEADER));
+        let id = tracker.insert(read(), N);
+        tracker.receive(id, 1, &deps(&[uid(1, 0)]));
+        tracker.receive(id, 2, &deps(&[uid(1, 3)]));
+        // A late leader response does not retroactively bound the established union.
         tracker.receive(id, LEADER, &deps(&[uid(1, 0)]));
-        assert_eq!(tracker.take_ready(&deps(&[uid(1, 0)])).len(), 1);
+        assert!(tracker.take_ready(&deps(&[uid(1, 0)])).is_empty());
+        assert_eq!(tracker.take_ready(&deps(&[uid(1, 0), uid(1, 3)])).len(), 1);
     }
 
     #[test]
