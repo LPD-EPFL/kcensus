@@ -1,6 +1,8 @@
 """The exp-5 grid and log access, shared so the two plot scripts cannot disagree on it."""
 import sys
 from dataclasses import dataclass
+from math import ceil
+from statistics import median
 
 from common import ALGORITHMS, args
 from logparser import duration_to_ms, parse
@@ -10,6 +12,7 @@ EXP5_DURATION = "10s"
 EXP5_CDF_DURATION = "10s"
 EXP5_INGRESS = "exponential"
 EXP5_ALGORITHMS = ALGORITHMS
+LOAD_EDGE_FRACTION = 0.1
 
 WRITES = 0.5
 KEYS = 100000
@@ -53,6 +56,8 @@ class Workload:
 class RunStats:
     latencies: list[float]
     sustained: bool
+    failure_reason: str | None = None
+
 
 CDF_WORKLOADS = tuple(
     Workload(skew, KEYS) for skew in SKEWS
@@ -92,13 +97,37 @@ def selected_workloads(candidates):
     return chosen
 
 
-def run_stats(algo, workload, throughput, duration=EXP5_DURATION):
-    """Write latencies and whether every proposer completed, or `None` if logs are absent.
+def _latency_drift_failure(logs, proposer_count):
+    """Why a run's final latency edge has drifted above its initial edge, if it has."""
+    for pid in range(proposer_count):
+        items = logs["executed"].get(pid, [])
+        if not items:
+            return f"proposer {pid} has no measured requests"
+        latencies = [duration_to_ms(item["latency"]) for item in items]
+        edge_size = max(1, ceil(len(latencies) * LOAD_EDGE_FRACTION))
+        initial_median = median(latencies[:edge_size])
+        final_minimum = min(latencies[-edge_size:])
+        if final_minimum > initial_median:
+            return (
+                f"proposer {pid} final 10% minimum {final_minimum:.1f}ms exceeds "
+                f"initial 10% median {initial_median:.1f}ms"
+            )
+    return None
+
+
+def run_stats(
+    algo,
+    workload,
+    throughput,
+    duration=EXP5_DURATION,
+    reject_latency_drift=False,
+):
+    """Write latencies and run-quality status, or `None` if logs are absent.
 
     A proposer emits `client-done` only after every request it scheduled has received a response.
     Requiring that marker from all seven proposers therefore distinguishes a completed run from
-    the partial logs left by a timed-out, unsustained run. Reads are omitted from the latency
-    samples because they are served from a read quorum rather than ordered.
+    the partial logs left by a timed-out, unsustained run. Load plots additionally reject a run
+    when any proposer's final 10% of latencies has drifted entirely above its initial 10%.
     """
     try:
         logs = parse(
@@ -124,5 +153,13 @@ def run_stats(algo, workload, throughput, duration=EXP5_DURATION):
         if log["response"].get("Put") is not None
     ]
     proposer_count = int("".join(char for char in EXP5_CONFIG if char.isdigit()))
-    sustained = all(logs["client-done"].get(pid) for pid in range(proposer_count))
-    return RunStats(latencies, sustained)
+    failure_reason = None
+    if not all(logs["client-done"].get(pid) for pid in range(proposer_count)):
+        failure_reason = "not every proposer completed"
+    elif reject_latency_drift:
+        failure_reason = _latency_drift_failure(logs, proposer_count)
+    return RunStats(
+        latencies,
+        sustained=failure_reason is None,
+        failure_reason=failure_reason,
+    )

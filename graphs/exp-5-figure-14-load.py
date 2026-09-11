@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Figure 14: mean latency against throughput, with one panel per skew.
 
-An incomplete or missing run terminates that algorithm's curve.
+An incomplete, missing, or latency-drifting run terminates that algorithm's curve.
 
   ./exp-5-figure-14-load.py              # all
   ./exp-5-figure-14-load.py --skew 0.99  # one
@@ -38,7 +38,12 @@ for workload in workloads:
             if not sustained:
                 reported_latencies.append("—")
                 continue
-            stats = run_stats(algo=algo, workload=workload, throughput=throughput)
+            stats = run_stats(
+                algo=algo,
+                workload=workload,
+                throughput=throughput,
+                reject_latency_drift=True,
+            )
             if stats is None or not stats.sustained or not stats.latencies:
                 sustained = False
                 # Duplicate the last sustained x-coordinate above the visible range. Its marker
@@ -46,7 +51,8 @@ for workload in workloads:
                 if plot_throughputs:
                     plot_throughputs.append(plot_throughputs[-1])
                     latencies.append(offscreen_latency)
-                reported_latencies.append("unsustained")
+                reason = stats.failure_reason if stats is not None else "missing logs"
+                reported_latencies.append(f"unsustained ({reason})")
             else:
                 mean = sum(stats.latencies) / len(stats.latencies)
                 plot_throughputs.append(throughput)
