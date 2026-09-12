@@ -16,7 +16,7 @@ Ways to reproduce the results:
 - [Run on AWS (§6)](#6-running-experiments-on-aws) to repeat the deployed experiments.
 
 Start with §1 for all three workflows. Running new experiments also requires the build setup in §4.
-Plan some disk space: The logs of one full run of all experiments take from 20 to 30 GB.
+Plan some disk space: The logs of one full run of all experiments take from 15 to 20 GB.
 
 ## 1. Getting Started
 
@@ -68,7 +68,7 @@ No Rust build or AWS setup is needed.
 
 The commands above use the same `logs/` directory and generate the same plot filenames as the AWS runs in §6.
 Running those experiments and plotting their results overwrites the corresponding archived logs
-and figures. Make a copy if you want to keep both, but note the archived logs take 25 GB once unzipped.
+and figures. Make a copy if you want to keep both, but note the archived logs take 18 GB once unzipped.
 
 ## 3. Experiments and Outputs
 
