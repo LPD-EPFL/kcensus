@@ -41,12 +41,12 @@ EXP5_WRITES=0.5
 EXP5_SKEWS=() # No Skews, since EXP5_LOAD_SKEWS lists those and BASELINE_DURATION == DURATION
 # 500 to 100000, in steps that widen as the deployment saturates.
 EXP5_THROUGHPUTS=($(awk 'BEGIN {
-  printf "500 1000 "
-  for (i = 1; i < 10; i++) printf "%d ", 2000 * i
-  for (i = 4; i < 10; i++) printf "%d ", 5000 * i
+  printf "500 1000 2000 3000 "
+  for (i = 2; i < 10; i++) printf "%d ", 2000 * i
+  for (i = 4; i < 9; i++) printf "%d ", 5000 * i
 }'))
 EXP5_CDF_THROUGHPUT=1000
-EXP5_LOAD_SKEWS=(0 0.8 0.99)
+EXP5_LOAD_SKEWS=(0 0.99)
 
 # A failed run is rare, so exhausting the attempts means something is genuinely wrong.
 MAX_ATTEMPTS=5
