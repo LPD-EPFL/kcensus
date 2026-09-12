@@ -81,7 +81,7 @@ The experiments that produce the paper's experimental figures are described belo
 | `exp-1`    | End-to-end latency in four 7-replica deployments: Northern Hemisphere, Europe, North America, and East Asia | 1, 7    | 45min         | 1h          |
 | `exp-2`    | Northern Hemisphere, with every combination of up to 3 crashed replicas                                     | 8       | 1h55min       | 2h40min     |
 | `exp-3`    | Latency and resource scaling from 3 to 31 replicas worldwide, and requirements optimization time            | 9-12    | 2h30min       | 1h30min     |
-| `exp-5`    | Contention and throughput sweep in the 7-replica Northern Hemisphere deployment                          | 13, 14  | AWS only      | 7h30min |
+| `exp-5`    | Contention and throughput sweep in the 7-replica Northern Hemisphere deployment                          | 13, 14  | AWS only      | 6h |
 
 Runtimes are approximate. Experiments 1-3 total about 5 hours for either workflow.
 
