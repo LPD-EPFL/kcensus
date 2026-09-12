@@ -162,7 +162,7 @@ so they do not overwrite AWS results.
 To fit on one machine, throughput is divided by `(f+1)/2`: half rate at 7 replicas, an eighth
 at 31. Log paths record the reduced rate, so plotting requires `--local`.
 Measurement windows are extended so sample counts do not fall with replica count. The
-`aws-random` runs in experiment 3 match the full AWS request count for the compute figure; the
+`aws-random` runs in experiment 3 match the full AWS measured-window request count; the
 latency-only runs use smaller fixed samples.
 
 ### How to read the results
@@ -176,7 +176,7 @@ which leaders and quorums are chosen, and which regions have the lowest latency.
   replica counts (experiment 3), or depending on topology and hardware.
 - **Traffic (Figure 10):** bytes per request are identical across local and AWS runs.
 - **Memory (Figure 11):** usage is almost identical across local and AWS runs.
-- **CPU time and optimization time (Figures 11 and 12):** absolute values depend on hardware.
+- **CPU utilization and optimization time (Figures 11 and 12):** absolute values depend on hardware.
 
 ## 6. Running Experiments on AWS
 

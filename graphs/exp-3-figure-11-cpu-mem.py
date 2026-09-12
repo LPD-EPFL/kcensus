@@ -8,15 +8,30 @@ from prelude import plt
 
 EXPECTED_INITIAL_POOL_SIZE = min(args.shards, 1000)
 
+
+def configured_phase_durations(num_replicas):
+    """Configured warm-up, measured, and sustain durations, in seconds."""
+    measured = float(
+        local_duration(args.duration, num_replicas, 1).removesuffix("s")
+    )
+    sustain = measured / 10 + 1
+    warmup = max(measured * 4 / 10 + 1, sustain)
+    return warmup, measured, sustain
+
+
+def total_duration(num_replicas):
+    return sum(configured_phase_durations(num_replicas))
+
+
 fig, plots = plt.subplots(1, 2, figsize=(3.26, 0.93), tight_layout=True)
 plt.tight_layout(pad=0, w_pad=0, h_pad=0)  # , rect=(0,0,.80,1))
-plots[0].set_title("Average Compute", pad=0)
-plots[0].set_ylabel("CPU time (s)", labelpad=1)
+plots[0].set_title("Average CPU Use", pad=0)
+plots[0].set_ylabel("CPU use (%)", labelpad=1)
 plots[1].set_title("Average Peak Memory", pad=0)
 plots[1].set_ylabel("Memory (MiB)", labelpad=1)
-plots[0].yaxis.set_major_locator(MultipleLocator(2))
+plots[0].yaxis.set_major_locator(MultipleLocator(10))
+plots[0].yaxis.set_minor_locator(MultipleLocator(5))
 plots[1].yaxis.set_major_locator(MultipleLocator(20))
-plots[0].set_ylim(0, 8)
 # for plot in plots:
     # plot.yaxis.set_major_locator(MaxNLocator(nbins=5, min_n_ticks=3))
 for plot in plots:
@@ -30,6 +45,8 @@ for plot in plots:
     plot.xaxis.set_major_locator(MultipleLocator(4, 3))
     # plot.xaxis.set_minor_locator(MultipleLocator(3, 3))
     plot.set_xlim(3, 31)
+
+kcensus_max_cpu = 0
 
 for i, experiment in enumerate(ALGORITHMS):
     if experiment == "weak-replication": continue
@@ -78,12 +95,23 @@ for i, experiment in enumerate(ALGORITHMS):
             f"expected every Rust shard pool to serve {args.shards} logical shards"
         )
 
-        # ProcessTime is process-wide CPU time (user + system), measured over the workload.
-        # `user` is accepted for old logs, where this same value had a misleading field name.
-        cpu = compute_average(
+        client_reports = logs["out"]["client-done"]
+        assert len(client_reports) == num_replicas, (
+            f"{num_replicas - len(client_reports)} out of {num_replicas} replicas did not "
+            "finish their request workload"
+        )
+        requests = sum(log["requests"] for log in client_reports)
+
+        # Conventional process CPU utilization: 100% means one CPU core was busy for the full
+        # configured request-production interval (warm-up + measured + sustain). ProcessTime
+        # includes all process threads, so a sufficiently parallel implementation may
+        # legitimately exceed 100%.
+        cpu_seconds = compute_average(
             logs["out"]["time"],
             lambda log: log["cpu"] if "cpu" in log else log["user"],
         )
+        duration_seconds = total_duration(num_replicas)
+        cpu_percent = 100 * cpu_seconds / duration_seconds
         # GNU time's %M is the directly measured peak resident set size in KiB. Plot the whole
         # process RSS: dividing it by the logical shard count was only valid when every logical
         # shard was physically preallocated, and substantially understates a pooled deployment.
@@ -92,12 +120,14 @@ for i, experiment in enumerate(ALGORITHMS):
         total_initial_pool_size = sum(log["initial_pool_size"] for log in pool_reports)
         average_pool_size = total_pool_size / len(pool_reports)
         xs.append(num_replicas)
-        ys_cpu.append(cpu)
+        ys_cpu.append(cpu_percent)
         ys_mem.append(mem)
         print(
             experiment,
             num_replicas,
-            f"cpu_seconds={ys_cpu[-1]}",
+            f"requests={requests}",
+            f"total_duration_seconds={duration_seconds}",
+            f"cpu_percent={ys_cpu[-1]}",
             f"peak_memory_mib={ys_mem[-1]}",
             f"preallocated_physical_shards={total_initial_pool_size}",
             f"physical_shards={total_pool_size}",
@@ -106,9 +136,13 @@ for i, experiment in enumerate(ALGORITHMS):
         )
     plots[0].plot(xs, ys_cpu, **ALGORITHMS[experiment], markevery=(1, 3), zorder=(2 - i / 100))
     plots[1].plot(xs, ys_mem, **ALGORITHMS[experiment], markevery=(1, 3), zorder=(2 - i / 100))
+    if experiment == "kcensus":
+        kcensus_max_cpu = ys_cpu[-1]
 
 plots[0].set_ylim(0, None)
 plots[1].set_ylim(0, None)
+ymax = kcensus_max_cpu * 1.5
+plots[0].set_ylim(0, 30 if ymax < 30 else ymax)
 fig.subplots_adjust(wspace=0.4, hspace=0)
 
 legends = [Line2D([0], [0], **algo) for (k, algo) in ALGORITHMS.items() if k != "weak-replication"]
