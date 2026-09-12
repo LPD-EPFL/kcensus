@@ -54,11 +54,11 @@ Complete §1 first to clone the repository and install the plotting dependencies
 
 You do not need to rerun the experiments to reproduce the exact experimental figures. The complete logs are
 available in
-the [release tagged "camera-ready"](https://github.com/LPD-EPFL/kcensus/releases/tag/camera-ready).
+the [release tagged "camera-ready-tag"](https://github.com/LPD-EPFL/kcensus/releases/tag/camera-ready-tag).
 From the root of a fresh clone, download them and generate the plots with:
 
 ```bash
-curl -L -o logs.zip https://github.com/LPD-EPFL/kcensus/releases/download/camera-ready/logs.zip
+curl -L -o logs.zip https://github.com/LPD-EPFL/kcensus/releases/download/camera-ready-tag/logs.zip
 unzip logs.zip
 ./plot.sh all
 ```
