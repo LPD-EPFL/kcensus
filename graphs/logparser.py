@@ -1,8 +1,16 @@
 import json
 import re
 from collections import defaultdict
+from pathlib import Path
 
 LOG_DIR = "../logs"
+
+
+def _contains_log(path, name):
+    """Whether a log file contains at least one structured event with this name."""
+    marker = f"[log={name}]".encode()
+    with path.open("rb") as file:
+        return any(marker in line for line in file)
 
 
 def parse(
@@ -20,14 +28,43 @@ def parse(
         shards=100,
         std="out",
         stop_at=0,  # 0 means take all requests
-        conflicts="conflicts=false"
+        conflicts="conflicts=false",
+        log_dir=None,
+        attempt=None,
 ):
     if not pids:
         num_replicas = int("".join([char for char in config if char.isdigit()]))
         pids = list(range(num_replicas))
+    root = Path(LOG_DIR if log_dir is None else log_dir)
+    run_dir = root / (
+        f"c={config}/a={algo}/w={writes:g}/d={duration}/i={ingress}/"
+        f"t={throughput:g}/s={speedup}/f={faults}/k={keys}/skew={skew:g}/"
+        f"shards={shards}/{conflicts}"
+    )
+    if attempt == "latest":
+        attempt_dirs = sorted(
+            (
+                path
+                for path in run_dir.glob("attempt=*")
+                if path.name.removeprefix("attempt=").isdigit()
+                and all((path / f"{pid}.std{std}").is_file() for pid in pids)
+                and any(
+                    _contains_log(path / f"{pid}.std{std}", "executed")
+                    for pid in pids
+                )
+            ),
+            key=lambda path: int(path.name.removeprefix("attempt=")),
+            reverse=True,
+        )
+        if not attempt_dirs:
+            raise FileNotFoundError(run_dir)
+        run_dir = attempt_dirs[0]
+    elif attempt is not None:
+        run_dir /= f"attempt={attempt}"
+
     output = defaultdict(lambda: defaultdict(list))
     for pid in pids:
-        file_path = f"{LOG_DIR}/c={config}/a={algo}/w={writes:g}/d={duration}/i={ingress}/t={throughput:g}/s={speedup}/f={faults}/k={keys}/skew={skew:g}/shards={shards}/{conflicts}/{pid}.std{std}"
+        file_path = run_dir / f"{pid}.std{std}"
         print(file_path)
         with open(file_path) as file:
             for key, items in parse_file(file).items():

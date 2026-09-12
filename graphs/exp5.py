@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from math import ceil
 from statistics import median
 
+import logparser
 from common import ALGORITHMS, args
 from logparser import duration_to_ms, parse
 
@@ -13,15 +14,16 @@ EXP5_CDF_DURATION = "10s"
 EXP5_INGRESS = "exponential"
 EXP5_ALGORITHMS = ALGORITHMS
 LOAD_EDGE_FRACTION = 0.1
+LOAD_DURATION_SECONDS = 10.0
 
 WRITES = 0.5
 KEYS = 100000
 CDF_THROUGHPUT = 1000
-SKEWS = (0.0, 0.8, 0.99)
-LOAD_SKEWS = (0.0, 0.8, 0.99)
+SKEWS = (0.0, 0.99)
+LOAD_SKEWS = (0.0, 0.99)
 # Keep this in sync with EXP5_THROUGHPUTS in lib.sh. Using the configured ladder, rather than
-# discovering only successful runs on disk, lets Figure 14 stop each curve at the first
-# unsustained point.
+# discovering only successful runs on disk, lets Figure 14 estimate achieved throughput for
+# every configured load rung.
 THROUGHPUTS = (
     500,
     1000,
@@ -54,9 +56,18 @@ class Workload:
 
 @dataclass(frozen=True)
 class RunStats:
-    latencies: list[float]
+    put_latencies: list[float]
+    read_latencies: list[float]
     sustained: bool
     failure_reason: str | None = None
+    aborted: bool = False
+    estimated_throughput: float | None = None
+    from_failed_logs: bool = False
+
+    @property
+    def latencies(self) -> list[float]:
+        """Put latencies, retained as the default latency series."""
+        return self.put_latencies
 
 
 CDF_WORKLOADS = tuple(
@@ -97,22 +108,40 @@ def selected_workloads(candidates):
     return chosen
 
 
-def _latency_drift_failure(logs, proposer_count):
-    """Why a run's final latency edge has drifted above its initial edge, if it has."""
+def _estimated_achieved_throughput(logs, proposer_count, target_throughput):
+    """Estimate achieved throughput from measured request count and tail latency growth."""
+    request_counts = []
+    initial_latencies = []
+    final_latencies = []
     for pid in range(proposer_count):
         items = logs["executed"].get(pid, [])
+        request_counts.append(len(items))
         if not items:
-            return f"proposer {pid} has no measured requests"
+            continue
         latencies = [duration_to_ms(item["latency"]) for item in items]
         edge_size = max(1, ceil(len(latencies) * LOAD_EDGE_FRACTION))
-        initial_median = median(latencies[:edge_size])
-        final_minimum = min(latencies[-edge_size:])
-        if final_minimum > initial_median:
-            return (
-                f"proposer {pid} final 10% minimum {final_minimum:.1f}ms exceeds "
-                f"initial 10% median {initial_median:.1f}ms"
-            )
-    return None
+        initial_latencies.extend(latencies[:edge_size])
+        final_latencies.extend(latencies[-edge_size:])
+
+    total_requests = sum(request_counts)
+    if not total_requests or not initial_latencies or target_throughput <= 0:
+        return None
+
+    expected_per_proposer = (
+        target_throughput * LOAD_DURATION_SECONDS / proposer_count
+    )
+    request_ratio = (
+        sum(count / expected_per_proposer for count in request_counts) / proposer_count
+    )
+    latency_delta_seconds = (
+        median(final_latencies) - median(initial_latencies)
+    ) / 1000
+    estimated_duration = (
+        request_ratio * LOAD_DURATION_SECONDS + latency_delta_seconds
+    )
+    if estimated_duration <= 0:
+        return None
+    return total_requests / estimated_duration
 
 
 def run_stats(
@@ -120,46 +149,74 @@ def run_stats(
     workload,
     throughput,
     duration=EXP5_DURATION,
-    reject_latency_drift=False,
+    fallback_to_failed=False,
 ):
-    """Write latencies and run-quality status, or `None` if logs are absent.
+    """Put/read latencies, completion status, and estimated achieved throughput.
 
     A proposer emits `client-done` only after every request it scheduled has received a response.
     Requiring that marker from all seven proposers therefore distinguishes a completed run from
-    the partial logs left by a timed-out, unsustained run. Load plots additionally reject a run
-    when any proposer's final 10% of latencies has drifted entirely above its initial 10%.
+    the partial logs left by a timed-out run. The throughput estimate is available for both.
     """
+    parse_args = {
+        "config": EXP5_CONFIG,
+        "algo": algo,
+        "writes": WRITES,
+        "duration": duration,
+        "ingress": EXP5_INGRESS,
+        "throughput": throughput,
+        "speedup": 1,
+        "faults": "",
+        "keys": workload.keys,
+        "skew": workload.skew,
+        "shards": workload.keys,
+        "conflicts": "conflicts=true",
+    }
+    logs = None
     try:
-        logs = parse(
-            config=EXP5_CONFIG,
-            algo=algo,
-            writes=WRITES,
-            duration=duration,
-            ingress=EXP5_INGRESS,
-            throughput=throughput,
-            speedup=1,
-            faults="",
-            keys=workload.keys,
-            skew=workload.skew,
-            shards=workload.keys,
-            conflicts="conflicts=true",
-        )
+        logs = parse(**parse_args)
     except FileNotFoundError:
+        pass
+
+    from_failed_logs = False
+    has_measured_requests = logs is not None and any(
+        logs.get("executed", {}).values()
+    )
+    if fallback_to_failed and not has_measured_requests:
+        try:
+            logs = parse(
+                **parse_args,
+                log_dir=f"{logparser.LOG_DIR}/failed",
+                attempt="latest",
+            )
+            from_failed_logs = True
+        except FileNotFoundError:
+            pass
+    if logs is None:
         return None
-    latencies = [
+    put_latencies = [
         duration_to_ms(log["latency"])
         for items in logs["executed"].values()
         for log in items
         if log["response"].get("Put") is not None
     ]
+    read_latencies = [
+        duration_to_ms(log["latency"])
+        for items in logs["executed"].values()
+        for log in items
+        if log["response"].get("Get") is not None
+    ]
     proposer_count = int("".join(char for char in EXP5_CONFIG if char.isdigit()))
-    failure_reason = None
-    if not all(logs["client-done"].get(pid) for pid in range(proposer_count)):
-        failure_reason = "not every proposer completed"
-    elif reject_latency_drift:
-        failure_reason = _latency_drift_failure(logs, proposer_count)
+    aborted = not all(logs["client-done"].get(pid) for pid in range(proposer_count))
+    failure_reason = "not every proposer completed" if aborted else None
+    estimated_throughput = _estimated_achieved_throughput(
+        logs, proposer_count, throughput
+    )
     return RunStats(
-        latencies,
+        put_latencies,
+        read_latencies,
         sustained=failure_reason is None,
         failure_reason=failure_reason,
+        aborted=aborted,
+        estimated_throughput=estimated_throughput,
+        from_failed_logs=from_failed_logs,
     )
