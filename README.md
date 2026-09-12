@@ -261,8 +261,8 @@ To run all experiments:
 ./plot.sh all                      # Figures 1 and 7-14
 ```
 
-> **Note**: The experiments take several hours and incur AWS costs - `exp-2` (faults) dominates,
-> and `exp-3` holds 31 instances across every region for its whole duration.
+> **Note**: The experiments take several hours and incur AWS costs - `exp-5` (load) dominates,
+> while `exp-3` holds 31 instances across every region for its whole duration.
 >
 > Each experiment destroys its own resources when it finishes, and attempts to do so if it gives
 > up on a run. **Do not rely on that.** If you interrupt a script, or anything else goes wrong,
