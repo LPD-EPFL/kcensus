@@ -151,17 +151,17 @@ for latency_label, filename_suffix in latency_graphs:
         plot.tick_params(axis="both", which="minor", pad=0.5)
         plot.set_axisbelow(True)
         plot.xaxis.set_major_formatter(ScalarFormatter())
-        plot.xaxis.set_major_locator(MultipleLocator(10000))
-        plot.xaxis.set_minor_locator(MultipleLocator(5000))
+        plot.xaxis.set_major_locator(MultipleLocator(5000))
+        plot.xaxis.set_minor_locator(MultipleLocator(1000))
         plot.yaxis.set_major_locator(MultipleLocator(200))
-        plot.yaxis.set_minor_locator(MultipleLocator(50))
-        plot.set_xlim(0, 35000)
-        plot.set_ylim(0, 450)
+        plot.yaxis.set_minor_locator(MultipleLocator(100))
+        plot.set_xlim(0, 28000)
+        plot.set_ylim(0, 500)
         if index != len(workloads) - 1:
             plot.tick_params(axis="x", which="both", labelbottom=False, length=0)
 
-        for algo, (throughputs, latencies) in series[workload].items():
-            plot.plot(throughputs, latencies, clip_on=True, **ALGORITHMS[algo])
+        for order, (algo, (throughputs, latencies)) in enumerate(series[workload].items()):
+            plot.plot(throughputs, latencies, clip_on=True, **ALGORITHMS[algo], zorder=(2 - order / 100))
 
     fig.supylabel("Mean latency (ms)", x=-0.04)
     fig.supxlabel("Achieved throughput (req/s)", y=-0.05)

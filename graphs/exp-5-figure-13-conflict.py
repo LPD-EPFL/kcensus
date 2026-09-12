@@ -58,10 +58,10 @@ fig, plots = plt.subplots(
     sharey=True,
     squeeze=False,
     tight_layout=True,
-    gridspec_kw={"width_ratios": (1.15, 1)},
+    gridspec_kw={"width_ratios": (1.25, 1)},
 )
 fig.tight_layout(pad=0, w_pad=0, h_pad=0)
-fig.subplots_adjust(wspace=0, hspace=0.04)
+fig.subplots_adjust(wspace=0.02, hspace=0.04)
 drawn = set()
 
 for row, workload in enumerate(workloads):
@@ -106,7 +106,7 @@ for row, workload in enumerate(workloads):
         if column != 0:
             plot.tick_params(axis="y", which="both", left=False, labelleft=False)
 
-        for algo in ALGORITHMS:
+        for order, algo in enumerate(ALGORITHMS):
             stats = run_results[workload][algo]
             samples = (
                 getattr(stats, latency_field)
@@ -123,6 +123,7 @@ for row, workload in enumerate(workloads):
                 [0, 0.0001] + list(range(1, 100)) + [99.9999, 100],
                 **ALGORITHMS[algo],
                 markevery=[2, 26, 51, 76, 100],
+                zorder=(2 - order / 100),
             )
             drawn.add(algo)
 
