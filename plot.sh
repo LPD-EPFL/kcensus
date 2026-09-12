@@ -102,7 +102,7 @@ function exp-4() {
 }
 
 function exp-5() {
-  # Figures 13 (latency under conflicts) and 14 (latency under load).
+  # Figure 13 produces put/read CDFs; Figure 14 plots avg latency under load.
   (
     cd graphs &&
     echo -n 'plotting exp-5 figure 1/2 (Figure 13)... ' &&

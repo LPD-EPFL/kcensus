@@ -37,6 +37,20 @@ for workload in workloads:
             algo=algo, workload=workload, throughput=throughput, duration=duration
         )
 
+
+def print_latency_distribution(algo, samples, percentiles):
+    """Print the average and p01-p99 in compact, human-readable groups."""
+    print(f"  {algo}:")
+    print(f"    average: {sum(samples) / len(samples):.2f} ms")
+    for first in range(1, 100, 10):
+        last = min(first + 10, 100)
+        values = ", ".join(
+            f"p{percentile:02d}: {percentiles[percentile]:.2f} ms"
+            for percentile in range(first, last)
+        )
+        print(f"    {values}")
+
+
 fig, plots = plt.subplots(
     len(workloads),
     len(operations),
@@ -103,10 +117,7 @@ for row, workload in enumerate(workloads):
                 print(f"  {algo}: no sustained data, skipped")
                 continue
             percentiles = compute_percentiles(samples)
-            print(
-                f"  {algo} avg={sum(samples) / len(samples):.2f}ms "
-                f"p50={percentiles[50]:.2f} p99={percentiles[99]:.2f}"
-            )
+            print_latency_distribution(algo, samples, percentiles)
             plot.plot(
                 [-999999] + percentiles + [999999],
                 [0, 0.0001] + list(range(1, 100)) + [99.9999, 100],

@@ -26,10 +26,13 @@ latency_graphs = (("All-request", ""),)
 run_results = {workload: {} for workload in workloads}
 
 
-def mean_latency(stats):
-    """Mean latency over all put and read requests pooled together."""
+def latency_summary(stats):
+    """Average, p50, and p99 over all put and read requests pooled together."""
     samples = stats.put_latencies + stats.read_latencies
-    return sum(samples) / len(samples) if samples else None
+    if not samples:
+        return None
+    percentiles = compute_percentiles(samples)
+    return sum(samples) / len(samples), percentiles[50], percentiles[99]
 
 
 for workload in workloads:
@@ -57,40 +60,53 @@ for latency_label, filename_suffix in latency_graphs:
             previous_throughput = None
             for throughput, stats in zip(plotted_throughputs, run_results[workload][algo]):
                 if stats is None:
-                    reported_latencies.append("missing logs")
+                    reported_latencies.append(
+                        f"input={throughput:g} req/s; status=missing logs"
+                    )
                     continue
-                mean = mean_latency(stats)
-                if mean is None:
-                    reported_latencies.append("no samples")
+                summary = latency_summary(stats)
+                if summary is None:
+                    reported_latencies.append(
+                        f"input={throughput:g} req/s; status=no samples"
+                    )
                     continue
+                mean, p50, p99 = summary
                 achieved_throughput = stats.estimated_throughput
                 if achieved_throughput is None:
-                    reported_latencies.append("no throughput estimate")
+                    reported_latencies.append(
+                        f"input={throughput:g} req/s; average={mean:.2f} ms; "
+                        f"p50={p50:.2f} ms; p99={p99:.2f} ms; "
+                        "status=no throughput estimate"
+                    )
                     continue
+                measurement = (
+                    f"input={throughput:g} req/s; "
+                    f"achieved={achieved_throughput:.2f} req/s; "
+                    f"average={mean:.2f} ms; p50={p50:.2f} ms; p99={p99:.2f} ms"
+                )
                 if (
                     previous_throughput is not None
                     and achieved_throughput < previous_throughput
                 ):
                     reported_latencies.append(
-                        f"dropped@{achieved_throughput:.0f}req/s"
+                        f"{measurement}; status=dropped (below previous plotted throughput)"
                     )
                     continue
                 points.append((achieved_throughput, mean))
                 previous_throughput = achieved_throughput
-                status = "aborted" if stats.aborted else "achieved"
+                details = ["plotted", "aborted" if stats.aborted else "completed"]
                 if stats.from_failed_logs:
-                    status += "[failed/]"
+                    details.append("source=logs/failed")
                 reported_latencies.append(
-                    f"{status}@{achieved_throughput:.0f}req/s->{mean:.1f}ms"
+                    f"{measurement}; status={', '.join(details)}"
                 )
                 drawn.add(algo)
             plot_throughputs = [point[0] for point in points]
             latencies = [point[1] for point in points]
             series[workload][algo] = (plot_throughputs, latencies)
-            print(f"  {algo}: " + ", ".join(
-                f"{throughput:g}->{reported}"
-                for throughput, reported in zip(plotted_throughputs, reported_latencies)
-            ))
+            print(f"  {algo}:")
+            for reported in reported_latencies:
+                print(f"    {reported}")
 
     if not drawn:
         print("nothing to plot, skipping graph")
