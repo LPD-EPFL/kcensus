@@ -32,6 +32,7 @@ plots[1].set_ylabel("Memory (MiB)", labelpad=1)
 plots[0].yaxis.set_major_locator(MultipleLocator(10))
 plots[0].yaxis.set_minor_locator(MultipleLocator(5))
 plots[1].yaxis.set_major_locator(MultipleLocator(10))
+plots[1].yaxis.set_minor_locator(MultipleLocator(5))
 # for plot in plots:
     # plot.yaxis.set_major_locator(MaxNLocator(nbins=5, min_n_ticks=3))
 for plot in plots:
