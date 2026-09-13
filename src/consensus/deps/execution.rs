@@ -1,8 +1,6 @@
-use crate::consensus::deps::dep_set::{uid_step, DepSet};
+use crate::consensus::deps::dep_set::{DepSet, uid_step};
 use crate::consensus::deps::instance::Instance;
-use petgraph::algo::tarjan_scc;
-use petgraph::graph::{DiGraph, NodeIndex};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 /// The lowest un-executed uid of every replica, the only commands that can be next.
 ///
@@ -23,7 +21,8 @@ fn heads(executed: &DepSet) -> impl Iterator<Item = usize> + '_ {
 /// common case and the only case in SwiftPaxos, where every committed dependency set is a
 /// prefix of the leader's arrival order.
 ///
-/// This is what [`executable_order`] would return next, found in `O(n)` integer work with
+/// This is what [`ExecutionScratch::executable_order`] would return next, found in `O(n)`
+/// integer work with
 /// no allocation and no graph: a command is ready exactly when it is committed and every
 /// dependency it names has already been executed — which is what makes an out-of-order
 /// commit wait for its dependencies rather than overtake them. `None` means we are
@@ -40,7 +39,7 @@ pub fn next_executable(instances: &HashMap<usize, Instance>, executed: &DepSet) 
 }
 
 /// Whether a stalled shard might be stalled on a cycle rather than on a missing commit,
-/// i.e. whether [`executable_order`] is worth running at all.
+/// i.e. whether [`ExecutionScratch::executable_order`] is worth running at all.
 ///
 /// A cycle only blocks execution once everything before it is done, and at that point its
 /// members are heads — if a member's replica-predecessor were un-executed it would be a
@@ -62,79 +61,139 @@ pub fn cycle_possible(instances: &HashMap<usize, Instance>, executed: &DepSet) -
     })
 }
 
-/// The order in which committed commands become executable, following EPaxos\* Figure 1.
-///
-/// Returns the uids to execute, in order. The caller applies them and advances its
-/// `executed` watermark.
-///
-/// 1. take the largest set `g` of committed instances that transitively depend only on
-///    committed (or already executed) instances;
-/// 2. split `g` into strongly connected components in topological order;
-/// 3. execute each component in uid order.
-///
-/// Everything here is per shard, because a dependency never leaves its shard, so these
-/// graphs stay small — bounded by the commands outstanding on a single key.
-pub fn executable_order(instances: &HashMap<usize, Instance>, executed: &DepSet) -> Vec<usize> {
-    // Step 1: start from every committed instance and drop the ones that (transitively)
-    // wait on something not committed yet. A dependency that is missing entirely — known
-    // only as a watermark, its `PreAccept` not yet delivered — blocks in exactly the same
-    // way, which is how we wait out a reordering rather than needing a Nop.
-    let mut g: HashSet<usize> = instances
-        .iter()
-        .filter(|(_, instance)| instance.is_committed())
-        .map(|(uid, _)| *uid)
-        .collect();
+/// Reusable state for the rooted, in-place Tarjan traversal used by `executable_order`.
+/// The reference EPaxos executor likewise keeps one stack across attempts rather than
+/// materializing a separate graph.
+#[derive(Default)]
+pub(super) struct ExecutionScratch {
+    stack: Vec<usize>,
+    roots: Vec<usize>,
+    touched: Vec<usize>,
+}
 
-    loop {
-        let mut removed = false;
-        for uid in g.clone() {
-            let deps = &instances[&uid].deps;
-            if deps
-                .pending_over(executed)
-                .any(|dep| dep != uid && !g.contains(&dep))
-            {
-                g.remove(&uid);
-                removed = true;
+impl ExecutionScratch {
+    /// The order in which committed commands become executable, following EPaxos\* Figure 1.
+    ///
+    /// Traverse dependencies directly from each committed instance, aborting a root as soon
+    /// as its closure reaches a missing or uncommitted command. Completed dependency SCCs are
+    /// retained even if a later branch blocks the root, just as in the reference executor.
+    /// SCCs are emitted dependencies-first and commands within one SCC are ordered by uid.
+    pub fn executable_order(
+        &mut self,
+        instances: &mut HashMap<usize, Instance>,
+        executed: &DepSet,
+    ) -> Vec<usize> {
+        debug_assert!(self.stack.is_empty());
+        debug_assert!(self.roots.is_empty());
+        debug_assert!(self.touched.is_empty());
+
+        // The reference gets deterministic roots from its replica/instance arrays. Our
+        // instances live in a HashMap, so sort their ids before starting the same traversal.
+        self.roots.extend(
+            instances
+                .iter()
+                .filter(|(_, instance)| instance.is_committed())
+                .map(|(uid, _)| *uid),
+        );
+        self.roots.sort_unstable();
+
+        let mut next_index = 1;
+        let mut order = Vec::with_capacity(self.roots.len());
+        for root_index in 0..self.roots.len() {
+            let root = self.roots[root_index];
+            if instances[&root].execution_index != 0 {
+                continue;
+            }
+            if !self.strongconnect(root, instances, executed, &mut next_index, &mut order) {
+                // A missing/uncommitted dependency leaves precisely the unfinished DFS path
+                // on the stack. Forget it so another root can explore it independently.
+                for uid in self.stack.drain(..) {
+                    let instance = instances.get_mut(&uid).expect("visited instance exists");
+                    instance.execution_index = 0;
+                    instance.execution_lowlink = 0;
+                }
             }
         }
-        if !removed {
-            break;
+        debug_assert!(self.stack.is_empty());
+
+        // Successful nodes are executed and removed by the caller, but clear their scratch
+        // too so this function remains repeatable for tests and for any future caller.
+        for uid in self.touched.drain(..) {
+            let instance = instances.get_mut(&uid).expect("visited instance exists");
+            instance.execution_index = 0;
+            instance.execution_lowlink = 0;
         }
+        self.roots.clear();
+        order
     }
 
-    if g.is_empty() {
-        return Vec::new();
-    }
+    fn strongconnect(
+        &mut self,
+        uid: usize,
+        instances: &mut HashMap<usize, Instance>,
+        executed: &DepSet,
+        next_index: &mut usize,
+        order: &mut Vec<usize>,
+    ) -> bool {
+        let index = *next_index;
+        *next_index += 1;
+        let instance = instances.get_mut(&uid).expect("visited instance exists");
+        instance.execution_index = index;
+        instance.execution_lowlink = index;
+        self.stack.push(uid);
+        self.touched.push(uid);
 
-    // Step 2: build the graph over `g`, with an edge from a command to each dependency it
-    // still has to wait for, and take the strongly connected components. `tarjan_scc`
-    // returns them in reverse topological order, i.e. dependencies first, which is the
-    // order we want to execute in.
-    // Nodes are added in uid order so that the result depends only on the graph and not
-    // on hash iteration order: every process must produce the same sequence.
-    let mut ordered: Vec<usize> = g.iter().copied().collect();
-    ordered.sort_unstable();
-    let mut graph = DiGraph::<usize, ()>::new();
-    let mut nodes: HashMap<usize, NodeIndex> = HashMap::with_capacity(g.len());
-    for uid in &ordered {
-        nodes.insert(*uid, graph.add_node(*uid));
-    }
-    for uid in &ordered {
-        for dep in instances[uid].deps.pending_over(executed) {
-            if dep != *uid && g.contains(&dep) {
-                graph.add_edge(nodes[uid], nodes[&dep], ());
+        // Enumerate the same per-replica dependency prefixes as `pending_over`, one mark at
+        // a time, so no borrow of `uid` and no copied dependency set survives the recursion.
+        let step = uid_step(executed.process_count());
+        for replica in 0..executed.process_count() {
+            let Some(mark) = instances[&uid].deps.get(replica) else {
+                continue;
+            };
+            let first = executed
+                .get(replica)
+                .map_or(2 * replica, |done| done + step);
+            if first > mark {
+                continue;
+            }
+            for dep in (first..=mark).step_by(step) {
+                if dep == uid {
+                    continue;
+                }
+                let Some(dependency) = instances.get(&dep) else {
+                    return false;
+                };
+                if !dependency.is_committed() {
+                    return false;
+                }
+
+                if dependency.execution_index == 0 {
+                    if !self.strongconnect(dep, instances, executed, next_index, order) {
+                        return false;
+                    }
+                    let dependency_lowlink = instances[&dep].execution_lowlink;
+                    let instance = instances.get_mut(&uid).expect("visited instance exists");
+                    instance.execution_lowlink = instance.execution_lowlink.min(dependency_lowlink);
+                } else if self.stack.contains(&dep) {
+                    let dependency_index = dependency.execution_index;
+                    let instance = instances.get_mut(&uid).expect("visited instance exists");
+                    instance.execution_lowlink = instance.execution_lowlink.min(dependency_index);
+                }
             }
         }
-    }
 
-    // Step 3: uid order inside a component, which every process computes identically.
-    let mut order = Vec::with_capacity(g.len());
-    for component in tarjan_scc(&graph) {
-        let mut component: Vec<usize> = component.into_iter().map(|node| graph[node]).collect();
-        component.sort_unstable();
-        order.extend(component);
+        if instances[&uid].execution_lowlink == index {
+            let component_start = self
+                .stack
+                .iter()
+                .rposition(|candidate| *candidate == uid)
+                .expect("an active Tarjan root is on the stack");
+            let mut component = self.stack.split_off(component_start);
+            component.sort_unstable();
+            order.extend(component);
+        }
+        true
     }
-    order
 }
 
 #[cfg(test)]
@@ -142,6 +201,9 @@ mod tests {
     use super::*;
     use crate::consensus::command::Command;
     use crate::consensus::deps::instance::Instance;
+    use petgraph::algo::tarjan_scc;
+    use petgraph::graph::{DiGraph, NodeIndex};
+    use std::collections::HashSet;
 
     const N: usize = 3;
 
@@ -175,6 +237,61 @@ mod tests {
         Instance::new(0, 0, command(), DepSet::new(N), N)
     }
 
+    fn executable_order(instances: &mut HashMap<usize, Instance>, executed: &DepSet) -> Vec<usize> {
+        ExecutionScratch::default().executable_order(instances, executed)
+    }
+
+    /// The materialized-graph implementation retained only as an equivalence oracle.
+    fn previous_executable_order(
+        instances: &HashMap<usize, Instance>,
+        executed: &DepSet,
+    ) -> Vec<usize> {
+        let mut closed: HashSet<usize> = instances
+            .iter()
+            .filter(|(_, instance)| instance.is_committed())
+            .map(|(uid, _)| *uid)
+            .collect();
+        loop {
+            let mut removed = false;
+            for uid in closed.clone() {
+                if instances[&uid]
+                    .deps
+                    .pending_over(executed)
+                    .any(|dep| dep != uid && !closed.contains(&dep))
+                {
+                    closed.remove(&uid);
+                    removed = true;
+                }
+            }
+            if !removed {
+                break;
+            }
+        }
+
+        let mut ordered: Vec<usize> = closed.iter().copied().collect();
+        ordered.sort_unstable();
+        let mut graph = DiGraph::<usize, ()>::new();
+        let mut nodes: HashMap<usize, NodeIndex> = HashMap::with_capacity(closed.len());
+        for uid in &ordered {
+            nodes.insert(*uid, graph.add_node(*uid));
+        }
+        for uid in &ordered {
+            for dep in instances[uid].deps.pending_over(executed) {
+                if dep != *uid && closed.contains(&dep) {
+                    graph.add_edge(nodes[uid], nodes[&dep], ());
+                }
+            }
+        }
+
+        let mut order = Vec::with_capacity(closed.len());
+        for component in tarjan_scc(&graph) {
+            let mut component: Vec<usize> = component.into_iter().map(|node| graph[node]).collect();
+            component.sort_unstable();
+            order.extend(component);
+        }
+        order
+    }
+
     /// The shard's drain, with the graph forced rather than gated on [`cycle_possible`], so
     /// that the graph-free path can be compared against the graph command for command.
     fn drain(instances: &mut HashMap<usize, Instance>, executed: &mut DepSet) -> Vec<usize> {
@@ -202,7 +319,7 @@ mod tests {
         let mut instances = HashMap::new();
         instances.insert(uid(1, 0), committed(&[]));
         instances.insert(uid(0, 0), committed(&[]));
-        let order = executable_order(&instances, &DepSet::new(N));
+        let order = executable_order(&mut instances, &DepSet::new(N));
         assert_eq!(order, vec![uid(0, 0), uid(1, 0)]);
     }
 
@@ -211,7 +328,7 @@ mod tests {
         let mut instances = HashMap::new();
         instances.insert(uid(0, 0), committed(&[]));
         instances.insert(uid(1, 0), committed(&[uid(0, 0)]));
-        let order = executable_order(&instances, &DepSet::new(N));
+        let order = executable_order(&mut instances, &DepSet::new(N));
         assert_eq!(order, vec![uid(0, 0), uid(1, 0)]);
     }
 
@@ -221,7 +338,38 @@ mod tests {
         instances.insert(uid(0, 0), uncommitted());
         instances.insert(uid(1, 0), committed(&[uid(0, 0)]));
         instances.insert(uid(2, 0), committed(&[uid(1, 0)]));
-        assert!(executable_order(&instances, &DepSet::new(N)).is_empty());
+        assert!(executable_order(&mut instances, &DepSet::new(N)).is_empty());
+    }
+
+    #[test]
+    fn an_aborted_traversal_leaves_reusable_scratch_clean() {
+        let dependency = uid(0, 0);
+        let dependent = uid(1, 0);
+        let mut instances = HashMap::new();
+        instances.insert(dependency, uncommitted());
+        instances.insert(dependent, committed(&[dependency]));
+        let executed = DepSet::new(N);
+        let mut scratch = ExecutionScratch::default();
+
+        assert!(
+            scratch
+                .executable_order(&mut instances, &executed)
+                .is_empty()
+        );
+        assert!(
+            scratch
+                .executable_order(&mut instances, &executed)
+                .is_empty()
+        );
+
+        instances
+            .get_mut(&dependency)
+            .expect("dependency exists")
+            .commit(DepSet::new(N));
+        assert_eq!(
+            scratch.executable_order(&mut instances, &executed),
+            vec![dependency, dependent]
+        );
     }
 
     #[test]
@@ -229,7 +377,7 @@ mod tests {
         // uid(0, 0) is named by a watermark but no instance exists for it yet.
         let mut instances = HashMap::new();
         instances.insert(uid(1, 0), committed(&[uid(0, 0)]));
-        assert!(executable_order(&instances, &DepSet::new(N)).is_empty());
+        assert!(executable_order(&mut instances, &DepSet::new(N)).is_empty());
     }
 
     #[test]
@@ -238,7 +386,7 @@ mod tests {
         executed.insert(uid(0, 0));
         let mut instances = HashMap::new();
         instances.insert(uid(1, 0), committed(&[uid(0, 0)]));
-        assert_eq!(executable_order(&instances, &executed), vec![uid(1, 0)]);
+        assert_eq!(executable_order(&mut instances, &executed), vec![uid(1, 0)]);
     }
 
     #[test]
@@ -248,7 +396,7 @@ mod tests {
         let mut instances = HashMap::new();
         instances.insert(uid(1, 0), committed(&[uid(0, 0)]));
         instances.insert(uid(0, 0), committed(&[uid(1, 0)]));
-        let order = executable_order(&instances, &DepSet::new(N));
+        let order = executable_order(&mut instances, &DepSet::new(N));
         assert_eq!(order, vec![uid(0, 0), uid(1, 0)]);
     }
 
@@ -258,7 +406,7 @@ mod tests {
         instances.insert(uid(2, 0), committed(&[]));
         instances.insert(uid(1, 0), committed(&[uid(0, 0), uid(2, 0)]));
         instances.insert(uid(0, 0), committed(&[uid(1, 0)]));
-        let order = executable_order(&instances, &DepSet::new(N));
+        let order = executable_order(&mut instances, &DepSet::new(N));
         assert_eq!(order, vec![uid(2, 0), uid(0, 0), uid(1, 0)]);
     }
     #[test]
@@ -284,11 +432,65 @@ mod tests {
             ],
         ];
         for scenario in scenarios {
-            let instances: HashMap<usize, Instance> = scenario.into_iter().collect();
-            let expected = executable_order(&instances, &DepSet::new(N));
-            let mut instances = instances;
+            let mut instances: HashMap<usize, Instance> = scenario.into_iter().collect();
+            let expected = executable_order(&mut instances, &DepSet::new(N));
             let mut executed = DepSet::new(N);
             assert_eq!(drain(&mut instances, &mut executed), expected);
+        }
+    }
+
+    #[test]
+    fn rooted_tarjan_matches_the_previous_graph_implementation() {
+        let uids = [uid(0, 0), uid(1, 0), uid(2, 0)];
+        // Every directed graph over three instances, under every combination of committed
+        // and uncommitted phases. Self edges are included because watermarks can contain them.
+        for edges in 0usize..(1 << (N * N)) {
+            for committed_mask in 0usize..(1 << N) {
+                let mut instances = HashMap::new();
+                for (from, uid) in uids.iter().copied().enumerate() {
+                    let mut deps = DepSet::new(N);
+                    for (to, dependency) in uids.iter().copied().enumerate() {
+                        if edges & (1 << (from * N + to)) != 0 {
+                            deps.insert(dependency);
+                        }
+                    }
+                    let mut instance = Instance::new(0, 0, command(), deps.clone(), N);
+                    if committed_mask & (1 << from) != 0 {
+                        instance.commit(deps);
+                    }
+                    instances.insert(uid, instance);
+                }
+
+                let executed = DepSet::new(N);
+                let previous = previous_executable_order(&instances, &executed);
+                let order = executable_order(&mut instances, &executed);
+                let mut ordered_set = order.clone();
+                let mut previous_set = previous.clone();
+                ordered_set.sort_unstable();
+                previous_set.sort_unstable();
+                assert_eq!(
+                    ordered_set, previous_set,
+                    "edges={edges:#011b}, committed={committed_mask:#05b}"
+                );
+
+                // With an edge in at least one direction between every pair, SCCs form a
+                // total order. That is our one-write-key workload, and there the complete
+                // execution order must remain identical. Incomparable SCCs in other graphs
+                // commute, so the reference-style traversal may visit them in a different
+                // valid order than petgraph's reverse adjacency iteration.
+                let all_conflict = (0..N).all(|left| {
+                    (left + 1..N).all(|right| {
+                        edges & (1 << (left * N + right)) != 0
+                            || edges & (1 << (right * N + left)) != 0
+                    })
+                });
+                if all_conflict {
+                    assert_eq!(
+                        order, previous,
+                        "edges={edges:#011b}, committed={committed_mask:#05b}"
+                    );
+                }
+            }
         }
     }
 
