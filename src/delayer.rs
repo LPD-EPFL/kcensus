@@ -17,7 +17,7 @@ pub struct Delayer {
 
 impl Delayer {
     pub fn new() -> (Self, Receiver<MsgWithSource>) {
-        let (delayed_msg_tx, delayed_msg_rx) = mpsc::channel(1);
+        let (delayed_msg_tx, delayed_msg_rx) = mpsc::channel(128);
         (Self { delayed_msg_tx }, delayed_msg_rx)
     }
 
@@ -110,14 +110,12 @@ impl Delayer {
                     let now = Instant::now();
                     trace!("Overslept by {:?}. {} queued messages. Consuming...", now.duration_since(delay.deadline()), queues.iter()
                         .map(|q| q.len()).sum::<usize>());
-                    for q in queues.iter_mut() {
-                        if let Some(m) = q.front() {
-                            if m.deadline < now {
-                                let msg = q.pop_front().unwrap().msg;
-                                if self.delayed_msg_tx.send(msg).await.is_err() {
-                                    consumer_gone = true;
-                                    break;
-                                }
+                    'release: for q in queues.iter_mut() {
+                        while q.front().is_some_and(|m| m.deadline < now) {
+                            let msg = q.pop_front().unwrap().msg;
+                            if self.delayed_msg_tx.send(msg).await.is_err() {
+                                consumer_gone = true;
+                                break 'release;
                             }
                         }
                     }

@@ -16,7 +16,8 @@ pub enum Phase {
     Committed,
 }
 
-/// One consensus instance: a single command and the dependency set being agreed for it.
+/// One consensus instance: the commands it carries and the dependency set being agreed
+/// for them.
 ///
 /// This is the unit that replaces the slot. A shard holds one of these per unfinished
 /// command instead of a single round state.
@@ -33,7 +34,8 @@ pub struct Instance {
     pub coordinator_pid: usize,
     /// The payload. Always present: an instance is not created until it arrives, because
     /// a command we do not hold conflicts with nothing (`cmd[id] = ⊥` in both papers).
-    pub command: Command,
+    /// More than one only when the coordinator batched them into this instance.
+    pub commands: Vec<Command>,
     /// The one process that sends `Accept` for this instance: SwiftPaxos' designated
     /// leader, or — EPaxos\* having none — the coordinator, which plays the part on the
     /// ballot-0 slow path. Its pre-accept is what a fast commit agrees on: `dep_init` in
@@ -74,13 +76,13 @@ impl Instance {
     pub fn new(
         coordinator_pid: usize,
         leader: usize,
-        command: Command,
+        commands: Vec<Command>,
         deps: DepSet,
         process_count: usize,
     ) -> Self {
         Self {
             coordinator_pid,
-            command,
+            commands,
             leader,
             deps,
             phase: Phase::PreAccepted,
@@ -268,7 +270,7 @@ mod tests {
             arrival_slot: 0,
             report: None,
         };
-        Instance::new(0, LEADER, command, DepSet::new(N), N)
+        Instance::new(0, LEADER, vec![command], DepSet::new(N), N)
     }
 
     /// The ordinary order: the leader's pre-accept first, then the answers to it.

@@ -34,7 +34,15 @@ pub struct ReadId(pub usize);
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum CommandBatch {
     Single(Command),
-    Batch { slot: usize, vs: Vec<usize> },
+    Batch {
+        slot: usize,
+        vs: Vec<usize>,
+    },
+    /// The commands of one dependency-layer instance. The slot layer never builds one:
+    /// there a batch names the uids already competing for a slot, while here the commands
+    /// travel together from the start, as EPaxos' `handlePropose` drains its propose queue
+    /// into a single instance.
+    Commands(Vec<Command>),
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

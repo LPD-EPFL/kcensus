@@ -72,6 +72,29 @@ pub enum DepMsg {
     ReadResponse { id: ReadId, seen: DepSet },
 }
 
+/// SwiftPaxos' `MAcks`: the acks one process formed for one shard, carried together.
+///
+/// The reference batches them on a goroutine of its own, emitting a single `MAcks` for
+/// whatever its `fastAcks`/`lightSlowAcks` channels hold (`swift/batcher.go`). Ours are
+/// collected while the run loop drains its inbox and flushed before it waits again.
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct ShardAcks {
+    /// `PreAcceptOk`, with the deps it reported. `None` echoes the coordinator's.
+    pub fast: Vec<(usize, Option<DepSet>)>,
+    /// `AcceptOk`, which carries nothing but its id.
+    pub slow: Vec<usize>,
+}
+
+impl ShardAcks {
+    /// The messages this stands for, in the order they were formed.
+    pub fn into_messages(self) -> impl Iterator<Item = DepMsg> {
+        self.fast
+            .into_iter()
+            .map(|(id, deps)| DepMsg::PreAcceptOk { id, deps })
+            .chain(self.slow.into_iter().map(|id| DepMsg::AcceptOk { id }))
+    }
+}
+
 impl DepMsg {
     /// The instance this message is about. `None` for `Forward`, which carries a command
     /// that has not been given an id yet — the coordinating replica allocates one.

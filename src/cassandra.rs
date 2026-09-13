@@ -98,7 +98,7 @@ impl ParallelCassandraExecutor {
         let first_request_time = Arc::new(std::sync::Mutex::new(None));
         // Create per-shard channels and spawn workers
         for _shard_id in 0..shards {
-            let (tx, mut rx) = mpsc::channel::<ShardWork>(32);
+            let (tx, mut rx) = mpsc::channel::<ShardWork>(128);
             shard_senders.push(tx);
 
             // Clone necessary resources for the worker
@@ -318,8 +318,8 @@ pub struct Client {
 
 impl Client {
     pub fn new(my_pid: usize, speedup: u32) -> (Self, Receiver<Command>, Sender<ClientResponse>) {
-        let (client_request_tx, client_request_rx) = mpsc::channel(100);
-        let (client_response_tx, client_response_rx) = mpsc::channel(100);
+        let (client_request_tx, client_request_rx) = mpsc::channel(128);
+        let (client_response_tx, client_response_rx) = mpsc::channel(128);
         let client = Self {
             my_pid,
             speedup,
@@ -537,7 +537,7 @@ impl App {
         };
 
         let (client, client_request_rx, client_response_tx) = Client::new(my_pid, speedup);
-        let (committed_request_tx, committed_request_rx) = mpsc::channel::<Command>(100);
+        let (committed_request_tx, committed_request_rx) = mpsc::channel::<Command>(128);
         let app = Self {
             my_pid,
             parallel_executor,

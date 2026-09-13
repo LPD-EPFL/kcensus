@@ -38,6 +38,10 @@ pub(crate) const TIMEOUT_REPORT_LIMIT: usize = 10;
 /// that served a hot key does not carry its tables into the cold keys that reuse it.
 const IDLE_CAPACITY: usize = 3;
 
+/// `CommandBatch::Commands` belongs to the dependency layer, which runs its own consensus
+/// object: it can never reach a slot-layer shard.
+const DEP_LAYER_VALUE: &str = "a slot never holds a dependency-layer value";
+
 pub(crate) struct ConsensusShard<AlgoSettings, AlgoRoundState> {
     // Settings
     process_count: usize,
@@ -504,6 +508,7 @@ where
                         assert_eq!(*slot, self.slot);
                         vs.iter().all(|v| self.queued_commands.contains_key(v))
                     }
+                    Some(CommandBatch::Commands(_)) => unreachable!("{DEP_LAYER_VALUE}"),
                 },
             };
             value_ready
@@ -617,6 +622,7 @@ where
                 CommandBatch::Single(command) => {
                     commit(command).await;
                 }
+                CommandBatch::Commands(_) => unreachable!("{DEP_LAYER_VALUE}"),
                 CommandBatch::Batch { vs, .. } => {
                     for v in vs {
                         let command = self.remove_command(v);
@@ -706,6 +712,7 @@ where
         self.queued_commands.retain(|_, value| match value {
             CommandBatch::Single(_) => true,
             CommandBatch::Batch { slot, .. } => commited_slot < *slot,
+            CommandBatch::Commands(_) => unreachable!("{DEP_LAYER_VALUE}"),
         });
     }
 

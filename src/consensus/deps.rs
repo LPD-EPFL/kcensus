@@ -16,7 +16,7 @@ use crate::consensus::shard_pool::{PooledShard, ShardPool};
 use crate::consensus::TIMEOUT_REPORT_LIMIT;
 use crate::eval;
 use crate::message::Message::{ConsensusM, Done};
-use crate::message::MsgWithSource;
+use crate::message::{Message, MsgWithSource};
 use crate::multi_sink::{MultiSink, ShardMultiSink};
 use crate::topology::Topology;
 use bit_set::BitSet;
@@ -24,7 +24,9 @@ use log::{debug, trace};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
+use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::Mutex;
 use tokio::{pin, select};
@@ -128,10 +130,19 @@ pub(crate) struct DepShard {
     /// Reused by the uncommon cyclic execution path, matching the reference EPaxos
     /// executor's retained Tarjan stack.
     execution_scratch: ExecutionScratch,
+    /// Hold acks back for the run loop to send as one message, as SwiftPaxos' batcher
+    /// goroutine does. EPaxos unicasts its acks to one coordinator and has no batcher.
+    batch_acks: bool,
 }
 
 impl DepShard {
-    pub fn new(topology: &Topology, my_pid: usize, sinks: ShardMultiSink, mode: DepMode) -> Self {
+    pub fn new(
+        topology: &Topology,
+        my_pid: usize,
+        sinks: ShardMultiSink,
+        mode: DepMode,
+        batch_acks: bool,
+    ) -> Self {
         let process_count = topology.nb_processes;
         let replica_count = topology.nb_replicas;
         assert!(my_pid < process_count);
@@ -170,6 +181,7 @@ impl DepShard {
             parked_accepts: HashSet::new(),
             ready: Vec::new(),
             execution_scratch: ExecutionScratch::default(),
+            batch_acks,
         }
     }
 
@@ -260,16 +272,23 @@ impl DepShard {
     /// Unlike the slot layer there is no contention path — a new command never waits for
     /// another to finish, it just starts its own instance. That parallelism is the whole
     /// point of dependency ordering.
-    pub async fn submit(&mut self, command: Command) -> io::Result<()> {
-        debug_assert!(!command.read_only, "a read is submitted by `submit_read`");
+    pub async fn submit(&mut self, commands: Vec<Command>) -> io::Result<()> {
+        debug_assert!(
+            !commands.is_empty(),
+            "an instance carries at least one command"
+        );
+        debug_assert!(
+            commands.iter().all(|c| !c.read_only),
+            "a read is submitted by `submit_read`"
+        );
         if let DepMode::EPaxos { coordinator } = self.mode
             && coordinator != self.my_pid
         {
-            // Not a replica: hand the command over
+            // Not a replica: hand the commands over
             return self
                 .send_with_value(
                     DepMsg::Forward,
-                    Some(CommandBatch::Single(command)),
+                    Some(CommandBatch::Commands(commands)),
                     coordinator,
                 )
                 .await;
@@ -280,11 +299,11 @@ impl DepShard {
         let init_deps = self.seen.clone();
         self.seen.insert(id);
 
-        let value = CommandBatch::Single(command.clone());
+        let value = CommandBatch::Commands(commands.clone());
         let mut instance = Instance::new(
             self.my_pid,
             self.leader(self.my_pid),
-            command,
+            commands,
             init_deps.clone(),
             self.process_count,
         );
@@ -376,13 +395,13 @@ impl DepShard {
     ///
     /// The coordinator is derived from the uid rather than from whoever sent the message:
     /// a `Proposal` or a `Commit` about a command says nothing about who submitted it.
-    fn create_instance(&mut self, id: usize, command: Command) {
+    fn create_instance(&mut self, id: usize, commands: Vec<Command>) {
         debug_assert!(
             !self.executed.contains(id),
             "an executed instance must never be recreated"
         );
-        // Only now does the command count as one of ours: until the payload is here it
-        // conflicts with nothing, which is `cmd[id] = ⊥` in both papers.
+        // Only now do the commands count as ours: until the payload is here they
+        // conflict with nothing, which is `cmd[id] = ⊥` in both papers.
         self.seen.insert(id);
         let coordinator_pid = requester_of(id, self.process_count);
         self.instances.insert(
@@ -390,7 +409,7 @@ impl DepShard {
             Instance::new(
                 coordinator_pid,
                 self.leader(coordinator_pid),
-                command,
+                commands,
                 DepSet::new(self.process_count),
                 self.process_count,
             ),
@@ -445,25 +464,25 @@ impl DepShard {
         }
         let Some(id) = msg.id() else {
             // A forwarded request: it *is* the command, and has no instance yet.
-            let Some(CommandBatch::Single(command)) = value else {
-                panic!("a forwarded request must carry its command");
+            let Some(CommandBatch::Commands(commands)) = value else {
+                panic!("a forwarded request must carry its commands");
             };
             debug_assert!(
                 self.is_replica(self.my_pid),
                 "only a replica is ever forwarded to"
             );
-            return self.submit(command).await;
+            return self.submit(commands).await;
         };
         // Nothing about an already-executed command can change anything.
         if self.executed.contains(id) {
             return Ok(());
         }
         if !self.instances.contains_key(&id) {
-            let Some(CommandBatch::Single(command)) = value else {
+            let Some(CommandBatch::Commands(commands)) = value else {
                 self.defer(id, src, msg);
                 return Ok(());
             };
-            self.create_instance(id, command);
+            self.create_instance(id, commands);
         }
         self.deliver(src, msg).await
     }
@@ -642,6 +661,11 @@ impl DepShard {
                 // fast route for itself and commits at two message delays, instead of waiting
                 // out the leader's Commit at four. A non-voting proposer decides too, so it is
                 // served first.
+                DepMode::SwiftPaxos { .. } if self.batch_acks => {
+                    self.sinks
+                        .queue_fast_ack(id, acked, self.requester_of(id))
+                        .await
+                }
                 DepMode::SwiftPaxos { .. } => {
                     self.priority_broadcast(
                         DepMsg::PreAcceptOk { id, deps: acked },
@@ -788,6 +812,9 @@ impl DepShard {
             // majorities, so every replica belongs to one and the second disjunct always
             // holds. The reference says so outright — its `SQ` is a `Majority`, whose
             // `Contains` is `true` for everyone (`swift.go:157`, `replica/quorum.go:26`).
+            DepMode::SwiftPaxos { .. } if self.batch_acks => {
+                self.sinks.queue_slow_ack(id, self.requester_of(id)).await
+            }
             DepMode::SwiftPaxos { .. } => {
                 self.priority_broadcast(DepMsg::AcceptOk { id }, None, self.requester_of(id))
                     .await?
@@ -834,8 +861,7 @@ impl DepShard {
         let mut report = None;
         if let Some(instance) = self.instances.get(&id)
             && !instance.is_committed()
-            && instance.command.requester == self.my_pid
-            && !instance.command.read_only
+            && instance.commands.iter().any(|c| c.requester == self.my_pid)
         {
             report = Some(CommitReport {
                 fast: instance.on_fast_path(),
@@ -850,8 +876,13 @@ impl DepShard {
             return;
         }
         instance.commit(deps);
-        if report.is_some() {
-            instance.command.report = report;
+        if let Some(report) = report {
+            let my_pid = instance.coordinator_pid;
+            for command in &mut instance.commands {
+                if command.requester == my_pid && !command.read_only {
+                    command.report = Some(report);
+                }
+            }
         }
         self.execute_ready();
     }
@@ -885,13 +916,13 @@ impl DepShard {
 
     /// Hands one committed command over to the application and advances the watermark.
     fn execute(&mut self, uid: usize) {
-        let command = self
+        let commands = self
             .instances
             .remove(&uid)
             .expect("ordered instance exists")
-            .command;
+            .commands;
         self.executed.insert(uid);
-        self.ready.push(command);
+        self.ready.extend(commands);
     }
 
     /// Commands executed since the last call, to be handed to the application.
@@ -1085,10 +1116,37 @@ impl PooledShard for DepShard {
     }
 }
 
+/// Which grouping the dependency layer applies. Command grouping works in either
+/// protocol; ack grouping applies only to SwiftPaxos, the one that broadcasts its acks.
+#[derive(Clone, Copy)]
+pub(crate) struct Batching {
+    pub commands: bool,
+    pub acks: bool,
+}
+
+/// How many messages one drain takes, and so roughly how many acks a bundle carries:
+/// the reference batcher's channel size (`NewBatcher(r, 16, ..)`).
+const ACK_BATCH_LIMIT: usize = 16;
+
+/// How many client commands one instance-batching drain takes, and so how many instances
+/// one pass through the loop may create.
+const COMMAND_BATCH_LIMIT: usize = 1024;
+
 pub(crate) struct DepConsensus {
     process_count: usize,
     pool: ShardPool<DepShard>,
     sinks: Arc<Mutex<MultiSink>>,
+    /// Drain the client queue into one instance per shard, as EPaxos' `handlePropose`
+    /// drains its propose queue (`epaxos.go:727`).
+    batch_commands: bool,
+    /// Collect acks and send them as one message, as SwiftPaxos' batcher goroutine does
+    /// (`swift/batcher.go`). EPaxos sends each ack to one coordinator, so it has none.
+    batch_acks: bool,
+    /// Reused by [`DepConsensus::submit_client_commands`] so that draining the client
+    /// queue allocates nothing of its own.
+    batch_buffer: Vec<Command>,
+    /// How many acks `sinks` is holding, readable without taking its lock.
+    pending_acks: Arc<AtomicUsize>,
 }
 
 impl DepConsensus {
@@ -1099,8 +1157,14 @@ impl DepConsensus {
         mode: DepMode,
         shard_count: usize,
         shard_pool_size: usize,
+        batching: Batching,
     ) -> Self {
+        let Batching {
+            commands: batch_commands,
+            acks: batch_acks,
+        } = batching;
         let process_count = topology.nb_processes;
+        let pending_acks = sinks.pending_acks_handle();
         let sinks = Arc::new(Mutex::new(sinks));
         let shard_sinks = sinks.clone();
         let topology = topology.clone();
@@ -1115,6 +1179,7 @@ impl DepConsensus {
                     multi_sink: shard_sinks.clone(),
                 },
                 mode,
+                batch_acks,
             )
         });
         Self {
@@ -1126,6 +1191,143 @@ impl DepConsensus {
                 new_shard,
             ),
             sinks,
+            batch_commands,
+            batch_acks,
+            batch_buffer: Vec::new(),
+            pending_acks,
+        }
+    }
+
+    /// Applies one message from a peer, recording the shards it touched.
+    async fn apply_message(&mut self, msg: Message, touched: &mut Vec<usize>) -> io::Result<bool> {
+        match msg {
+            ConsensusM {
+                shard: shard_id,
+                msg,
+                value,
+            } => {
+                let ConsensusMessage { msg, src, .. } = msg;
+                let ConsensusMsg::DepM(msg) = msg else {
+                    panic!("Unexpected message type in dependency mode: {msg:?}");
+                };
+                self.apply_dep_msg(shard_id, src, msg, value, touched)
+                    .await?;
+            }
+            Message::DepAcks { src, shards } => {
+                for (shard_id, acks) in shards {
+                    for msg in acks.into_messages() {
+                        self.apply_dep_msg(shard_id, src, msg, None, touched)
+                            .await?;
+                    }
+                }
+            }
+            Done => return Ok(true),
+            other => panic!("Unexpected message type: {other:?}"),
+        }
+        Ok(false)
+    }
+
+    async fn apply_dep_msg(
+        &mut self,
+        shard_id: usize,
+        src: usize,
+        msg: DepMsg,
+        value: Option<CommandBatch>,
+        touched: &mut Vec<usize>,
+    ) -> io::Result<()> {
+        let noop = !self.pool.is_active(shard_id)
+            && msg.id().is_some_and(|id| {
+                DepShard::is_noop_when_asleep(self.pool.sleeping_state(shard_id), id)
+            });
+        if noop {
+            return Ok(());
+        }
+        self.pool.wake(shard_id).handle(src, msg, value).await?;
+        touched.push(shard_id);
+        Ok(())
+    }
+
+    /// Takes one client command and, when batching, everything queued behind it.
+    ///
+    /// The drain is bounded by `COMMAND_BATCH_LIMIT`, mirroring EPaxos'
+    /// `batchSize := len(r.ProposeChan) + 1`: it groups what is queued now and leaves
+    /// whatever arrives later to the next instance. A batch cannot span shards, because a
+    /// dependency never leaves one.
+    async fn submit_client_commands(
+        &mut self,
+        first: Command,
+        rx: &mut Receiver<Command>,
+        touched: &mut Vec<usize>,
+    ) -> io::Result<()> {
+        if !self.batch_commands {
+            return self.submit_one(first, touched).await;
+        }
+        let mut batch = std::mem::take(&mut self.batch_buffer);
+        debug_assert!(batch.is_empty());
+        batch.push(first);
+        let mut yielded = false;
+        while batch.len() < COMMAND_BATCH_LIMIT {
+            match rx.try_recv() {
+                Ok(next) => {
+                    yielded = false;
+                    batch.push(next);
+                }
+                // Empty only because the client task has not run. Give it a turn, and
+                // keep alternating for as long as a turn produces something.
+                Err(TryRecvError::Empty) if !yielded => {
+                    yielded = true;
+                    tokio::task::yield_now().await;
+                }
+                Err(_) => break,
+            }
+        }
+        let result = self.submit_batch(&mut batch, touched).await;
+        batch.clear();
+        self.batch_buffer = batch;
+        result
+    }
+
+    /// One instance per shard represented in `batch`, and each read on its own.
+    ///
+    /// Sorting puts a shard's writes next to each other, so the grouping is one pass over
+    /// at most `COMMAND_BATCH_LIMIT` commands and allocates only the vectors the instances
+    /// take ownership of. `read_only` leads the key, which leaves the reads in one run at
+    /// the end.
+    async fn submit_batch(
+        &mut self,
+        batch: &mut Vec<Command>,
+        touched: &mut Vec<usize>,
+    ) -> io::Result<()> {
+        if batch.len() == 1 {
+            return self
+                .submit_one(batch.pop().expect("checked"), touched)
+                .await;
+        }
+        batch.sort_unstable_by_key(|command| (command.read_only, command.shard));
+        while batch.first().is_some_and(|command| !command.read_only) {
+            let shard_id = batch[0].shard;
+            let run = batch
+                .iter()
+                .take_while(|command| !command.read_only && command.shard == shard_id)
+                .count();
+            let commands: Vec<Command> = batch.drain(..run).collect();
+            touched.push(shard_id);
+            self.pool.wake(shard_id).submit(commands).await?;
+        }
+        while let Some(command) = batch.pop() {
+            self.submit_one(command, touched).await?;
+        }
+        Ok(())
+    }
+
+    async fn submit_one(&mut self, command: Command, touched: &mut Vec<usize>) -> io::Result<()> {
+        let shard_id = command.shard;
+        touched.push(shard_id);
+        let shard = self.pool.wake(shard_id);
+        if command.read_only {
+            shard.submit_read(command).await
+        } else {
+            shard.submit(vec![command]).await
         }
     }
 
@@ -1143,8 +1345,14 @@ impl DepConsensus {
             Delay::new(Instant::now() + experiment_timeout).expect("should init timer");
         pin!(experiment_timeout);
 
-        'main_loop: while count_done < self.process_count {
-            let touched: Option<usize> = select! {
+        // Reused across iterations: the shards to drain and to put back to sleep. More than
+        // one only when a batched submission spread over several shards.
+        let mut touched: Vec<usize> = Vec::new();
+        let mut first_command: Option<Command> = None;
+
+        while count_done < self.process_count {
+            touched.clear();
+            select! {
                 res = &mut experiment_timeout => {
                     res.expect("should wait until experiment_timeout");
                     eprintln!("Experiment ran longer than it should! This can be due to saturation, desync (a late starting process), or deadlocks! Checking all active shards...");
@@ -1186,64 +1394,66 @@ impl DepConsensus {
                 command = new_client_commands_rx.recv(), if !done => {
                     match command {
                         Some(command) => {
-                            let shard_id = command.shard;
-                            let shard = self.pool.wake(shard_id);
-                            if command.read_only {
-                                shard.submit_read(command).await?;
-                            } else {
-                                shard.submit(command).await?;
-                            }
-                            Some(shard_id)
+                            first_command = Some(command);
                         }
                         None => {
                             done = true;
                             self.sinks.lock().await.broadcast(Done, None).await?;
                             count_done += 1;
-                            None
                         }
                     }
                 }
                 opt_msg = msg_rx.recv() => {
-                    let msg = opt_msg.unwrap();
-                    match msg.msg {
-                        ConsensusM { shard: shard_id, msg, value } => {
-                            let ConsensusMessage { msg, src, .. } = msg;
-                            let ConsensusMsg::DepM(msg) = msg else {
-                                panic!("Unexpected message type in dependency mode: {msg:?}");
-                            };
-                            if !self.pool.is_active(shard_id)
-                                && msg.id().is_some_and(|id| {
-                                    DepShard::is_noop_when_asleep(
-                                        self.pool.sleeping_state(shard_id),
-                                        id,
-                                    )
-                                })
-                            {
-                                continue 'main_loop;
+                    count_done += self.apply_message(opt_msg.unwrap().msg, &mut touched).await? as usize;
+                    // Drain what arrived with it, so the acks they produce leave together.
+                    // The reference gets the same effect from a batcher goroutine that its
+                    // main loop keeps feeding while it runs (`swift/batcher.go`).
+                    if self.batch_acks {
+                        let mut drained = 0usize;
+                        let mut yielded = false;
+                        while drained < ACK_BATCH_LIMIT {
+                            match msg_rx.try_recv() {
+                                Ok(next) => {
+                                    drained += 1;
+                                    yielded = false;
+                                    count_done +=
+                                        self.apply_message(next.msg, &mut touched).await? as usize;
+                                }
+                                // Empty only because the tasks feeding the channel have not
+                                // run. The reference batcher finds a filled channel for the
+                                // mirror-image reason: it is a goroutine of its own,
+                                // scheduled after the loop that fills it.
+                                Err(TryRecvError::Empty) if !yielded => {
+                                    yielded = true;
+                                    tokio::task::yield_now().await;
+                                }
+                                Err(_) => break,
                             }
-                            self.pool.wake(shard_id).handle(src, msg, value).await?;
-                            Some(shard_id)
                         }
-                        Done => {
-                            count_done += 1;
-                            None
-                        }
-                        _ => panic!("Unexpected message type"),
                     }
                 },
             };
 
-            let Some(shard_id) = touched else {
-                continue 'main_loop;
-            };
-
-            for command in self.pool.active_shard(shard_id).drain_ready() {
-                committed_commands_tx
-                    .send(command)
-                    .await
-                    .expect("Sending committed value");
+            if let Some(command) = first_command.take() {
+                self.submit_client_commands(command, &mut new_client_commands_rx, &mut touched)
+                    .await?;
             }
-            self.pool.try_sleep(shard_id);
+
+            if self.batch_acks && self.pending_acks.load(Ordering::Relaxed) > 0 {
+                self.sinks.lock().await.flush_acks().await?;
+            }
+
+            for &shard_id in &touched {
+                for command in self.pool.active_shard(shard_id).drain_ready() {
+                    committed_commands_tx
+                        .send(command)
+                        .await
+                        .expect("Sending committed value");
+                }
+            }
+            for &shard_id in &touched {
+                self.pool.try_sleep(shard_id);
+            }
         }
 
         self.pool.report();

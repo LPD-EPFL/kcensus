@@ -228,13 +228,13 @@ mod tests {
         for dep in deps {
             dep_set.insert(*dep);
         }
-        let mut instance = Instance::new(0, 0, command(), dep_set.clone(), N);
+        let mut instance = Instance::new(0, 0, vec![command()], dep_set.clone(), N);
         instance.commit(dep_set);
         instance
     }
 
     fn uncommitted() -> Instance {
-        Instance::new(0, 0, command(), DepSet::new(N), N)
+        Instance::new(0, 0, vec![command()], DepSet::new(N), N)
     }
 
     fn executable_order(instances: &mut HashMap<usize, Instance>, executed: &DepSet) -> Vec<usize> {
@@ -454,7 +454,7 @@ mod tests {
                             deps.insert(dependency);
                         }
                     }
-                    let mut instance = Instance::new(0, 0, command(), deps.clone(), N);
+                    let mut instance = Instance::new(0, 0, vec![command()], deps.clone(), N);
                     if committed_mask & (1 << from) != 0 {
                         instance.commit(deps);
                     }

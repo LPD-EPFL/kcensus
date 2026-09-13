@@ -1,5 +1,5 @@
 use crate::consensus::command::Command;
-use crate::consensus::deps::{DepConsensus, DepMode};
+use crate::consensus::deps::{Batching, DepConsensus, DepMode};
 use crate::consensus::kcensus::propagation::{
     epaxos_plan, kcensus_plan, min_effort_plan, multi_paxos_3p_plan, multi_paxos_plan,
     pando_plan, paxos_plan, swift_paxos_plan, LatencyTables,
@@ -86,6 +86,20 @@ struct Args {
         help = "Avoids conflicts by partitioning the keyspace between requesters"
     )]
     conflicts: Option<bool>,
+    #[arg(
+        long,
+        help = "Groups commands into one instance and acks into one message per \
+                destination. Defaults to on for epaxos and swift-paxos with conflicts \
+                enabled."
+    )]
+    batching: Option<bool>,
+    #[arg(long, help = "Command grouping alone. Defaults to --batching.")]
+    batch_commands: Option<bool>,
+    #[arg(
+        long,
+        help = "Ack grouping alone (swift-paxos). Defaults to --batching."
+    )]
+    batch_acks: Option<bool>,
 }
 
 #[derive(clap::ValueEnum, Copy, Clone, Debug, PartialEq)]
@@ -223,6 +237,13 @@ pub async fn run() -> io::Result<()> {
     ));
 
     let no_conflicts = !args.conflicts.unwrap_or(false);
+    let batching = args
+        .batching
+        .unwrap_or(!no_conflicts && matches!(algo, Algo::EPaxos | Algo::SwiftPaxos));
+    let batching = Batching {
+        commands: args.batch_commands.unwrap_or(batching),
+        acks: args.batch_acks.unwrap_or(batching),
+    };
     let duration = args.duration;
     let warmup = args
         .warmup
@@ -401,6 +422,7 @@ pub async fn run() -> io::Result<()> {
                 mode,
                 shards,
                 shard_pool,
+                batching,
             );
             (
                 Box::pin(async move {
