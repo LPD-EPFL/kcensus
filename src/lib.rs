@@ -103,8 +103,8 @@ struct Args {
     #[arg(
         long,
         help = "Let one instance carry commands for several keys, as EPaxos does. Runs \
-                the dependency layer as a single shard with per-key conflicts. Off by \
-                default: it replaces the per-shard dependency scoping."
+                the dependency layer as a single shard with per-key conflicts. epaxos \
+                only. Off by default: it replaces the per-shard dependency scoping."
     )]
     cross_shard_batching: bool,
 }
@@ -193,6 +193,15 @@ pub async fn run() -> io::Result<()> {
         }
         x => x,
     };
+    // Checked before `connect_all`, so a misconfigured run fails instead of hanging on the
+    // barrier. SwiftPaxos names its dependencies one conflicting command at a time, per key
+    // (`swift/key.go`), so a shard already is its conflict domain: pooling every key into
+    // one would replace the most precise dependency set the protocol can have with the
+    // least precise one.
+    assert!(
+        !(args.cross_shard_batching && algo == Algo::SwiftPaxos),
+        "--cross-shard-batching applies to epaxos only"
+    );
     debug!("Loaded topology:{topology}");
     // The latency matrix decides the leaders and quorums, and on AWS it is measured fresh at
     // deploy time, so record it in the log. Pid 0 only: every process holds the same matrix, and
