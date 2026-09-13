@@ -88,9 +88,9 @@ struct Args {
     conflicts: Option<bool>,
     #[arg(
         long,
-        help = "Groups commands into one instance and acks into one message per \
-                destination. Defaults to on for epaxos and swift-paxos with conflicts \
-                enabled."
+        help = "Turns on whichever grouping the algorithm's reference uses: commands into \
+                one instance for epaxos, acks into one message for swift-paxos. On by \
+                default for those two."
     )]
     batching: Option<bool>,
     #[arg(long, help = "Command grouping alone. Defaults to --batching.")]
@@ -255,9 +255,16 @@ pub async fn run() -> io::Result<()> {
     let no_conflicts = !args.conflicts.unwrap_or(false);
     let batching = args
         .batching
-        .unwrap_or(!no_conflicts && matches!(algo, Algo::EPaxos | Algo::SwiftPaxos));
+        .unwrap_or(matches!(algo, Algo::EPaxos | Algo::SwiftPaxos));
     let batching = Batching {
-        commands: args.batch_commands.unwrap_or(batching),
+        // Each protocol gets the grouping its reference does: EPaxos drains its propose
+        // queue into one instance and has no ack batcher, SwiftPaxos keeps one command per
+        // `commandDesc` and batches acks instead. Command grouping is available to
+        // SwiftPaxos through `--batch-commands`, but it measured neutral at best and worse
+        // above 30k req/s.
+        commands: args
+            .batch_commands
+            .unwrap_or(batching && algo != Algo::SwiftPaxos),
         acks: args.batch_acks.unwrap_or(batching),
         cross_shard: args.cross_shard_batching,
     };
