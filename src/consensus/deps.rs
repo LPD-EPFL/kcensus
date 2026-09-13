@@ -150,10 +150,11 @@ impl DepShard {
         my_pid: usize,
         sinks: ShardMultiSink,
         mode: DepMode,
-        batch_acks: bool,
-        per_key_deps: bool,
+        batching: Batching,
         key_count: usize,
     ) -> Self {
+        let batch_acks = batching.acks && matches!(mode, DepMode::SwiftPaxos { .. });
+        let per_key_deps = batching.cross_shard;
         let process_count = topology.nb_processes;
         let replica_count = topology.nb_replicas;
         assert!(my_pid < process_count);
@@ -1250,8 +1251,7 @@ impl DepConsensus {
                     multi_sink: shard_sinks.clone(),
                 },
                 mode,
-                batch_acks,
-                per_key_deps,
+                batching,
                 shard_count,
             )
         });
