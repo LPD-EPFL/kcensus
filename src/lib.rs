@@ -1,10 +1,10 @@
 use crate::consensus::command::Command;
 use crate::consensus::deps::{Batching, DepConsensus, DepMode};
-use crate::consensus::kcensus::propagation::{
-    epaxos_plan, kcensus_plan, min_effort_plan, multi_paxos_3p_plan, multi_paxos_plan,
-    pando_plan, paxos_plan, swift_paxos_plan, LatencyTables,
-};
 use crate::consensus::kcensus::KCensus;
+use crate::consensus::kcensus::propagation::{
+    LatencyTables, epaxos_plan, kcensus_plan, min_effort_plan, multi_paxos_3p_plan,
+    multi_paxos_plan, pando_plan, paxos_plan, swift_paxos_plan,
+};
 use crate::consensus::paxos_family::{PFModeSetting, PaxosFamily};
 use crate::delayer::Delayer;
 use crate::topology::Topology;
@@ -100,6 +100,13 @@ struct Args {
         help = "Ack grouping alone (swift-paxos). Defaults to --batching."
     )]
     batch_acks: Option<bool>,
+    #[arg(
+        long,
+        help = "Let one instance carry commands for several keys, as EPaxos does. Runs \
+                the dependency layer as a single shard with per-key conflicts. Off by \
+                default: it replaces the per-shard dependency scoping."
+    )]
+    cross_shard_batching: bool,
 }
 
 #[derive(clap::ValueEnum, Copy, Clone, Debug, PartialEq)]
@@ -243,17 +250,19 @@ pub async fn run() -> io::Result<()> {
     let batching = Batching {
         commands: args.batch_commands.unwrap_or(batching),
         acks: args.batch_acks.unwrap_or(batching),
+        cross_shard: args.cross_shard_batching,
     };
     let duration = args.duration;
     let warmup = args
         .warmup
         .unwrap_or(args.duration * 4 / 10 + Duration::from_secs(1));
-    let sustain = args
-        .sustain
-        .unwrap_or(args.duration / 10 + Duration::from_secs(match (algo, no_conflicts) {
-            (Algo::EPaxos, false) => 4, // To let EPaxos resolve dependency chains
-            _ => 1
-        }));
+    let sustain = args.sustain.unwrap_or(
+        args.duration / 10
+            + Duration::from_secs(match (algo, no_conflicts) {
+                (Algo::EPaxos, false) => 4, // To let EPaxos resolve dependency chains
+                _ => 1,
+            }),
+    );
     let warmup = warmup.max(sustain);
     let exp_length = warmup + duration + sustain;
     // If an experiment is longer than exp_length + sustain, one process might be desynchronized

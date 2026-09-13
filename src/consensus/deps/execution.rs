@@ -1,19 +1,33 @@
-use crate::consensus::deps::dep_set::{DepSet, uid_step};
+use crate::consensus::deps::dep_set::{Executed, uid_step};
 use crate::consensus::deps::instance::Instance;
-use std::collections::HashMap;
+use crate::consensus::deps::instance_table::InstanceTable;
 
-/// The lowest un-executed uid of every replica, the only commands that can be next.
+/// The committed commands that could run next: each replica's log from its watermark up to
+/// the first uid that has not committed, with the ones already executed skipped.
 ///
-/// Within a shard a command always depends on its own replica's previous command there —
-/// a coordinator's `seen` covers everything it proposed before, and FIFO links carry that
-/// to the leader in the same order — so execution follows each replica's uid order, and
-/// anything ready is one of these `n` uids.
-fn heads(executed: &DepSet) -> impl Iterator<Item = usize> + '_ {
-    let step = uid_step(executed.process_count());
-    (0..executed.process_count()).map(move |replica| {
-        executed
-            .get(replica)
-            .map_or(2 * replica, |done| done + step)
+/// A per-key dependency set does not order two commands of one replica on different keys,
+/// so the next to run need not be the lowest — the reference scan stops only at an
+/// uncommitted instance and steps over the executed ones (`epaxos.go:397`).
+fn candidates<'a>(
+    instances: &'a InstanceTable,
+    executed: &'a Executed,
+) -> impl Iterator<Item = usize> + 'a {
+    let process_count = executed.process_count();
+    let step = uid_step(process_count);
+    (0..process_count).flat_map(move |replica| {
+        let mut uid = executed.next_unexecuted(replica);
+        std::iter::from_fn(move || {
+            while executed.contains(uid) {
+                uid += step;
+            }
+            let instance = instances.get(uid)?;
+            if !instance.is_committed() {
+                return None;
+            }
+            let ready = uid;
+            uid += step;
+            Some(ready)
+        })
     })
 }
 
@@ -27,13 +41,13 @@ fn heads(executed: &DepSet) -> impl Iterator<Item = usize> + '_ {
 /// dependency it names has already been executed — which is what makes an out-of-order
 /// commit wait for its dependencies rather than overtake them. `None` means we are
 /// waiting on a commit, or that what is left forms a cycle; see [`cycle_possible`].
-pub fn next_executable(instances: &HashMap<usize, Instance>, executed: &DepSet) -> Option<usize> {
-    heads(executed)
+pub fn next_executable(instances: &InstanceTable, executed: &Executed) -> Option<usize> {
+    candidates(instances, executed)
         .filter(|uid| {
-            instances.get(uid).is_some_and(|instance| {
-                instance.is_committed()
-                    && instance.deps.pending_over(executed).all(|dep| dep == *uid)
-            })
+            instances[*uid]
+                .deps
+                .pending_over(executed)
+                .all(|dep| dep == *uid)
         })
         .min()
 }
@@ -50,14 +64,12 @@ pub fn next_executable(instances: &HashMap<usize, Instance>, executed: &DepSet) 
 ///
 /// It has to be asked on every stall, not only when a commit arrived: the fast path
 /// executes as it goes, and an execution can close a set just as a commit can.
-pub fn cycle_possible(instances: &HashMap<usize, Instance>, executed: &DepSet) -> bool {
-    heads(executed).any(|uid| {
-        instances.get(&uid).is_some_and(|instance| {
-            instance.is_committed()
-                && instance.deps.pending_over(executed).all(|dep| {
-                    dep == uid || instances.get(&dep).is_some_and(Instance::is_committed)
-                })
-        })
+pub fn cycle_possible(instances: &InstanceTable, executed: &Executed) -> bool {
+    candidates(instances, executed).any(|uid| {
+        instances[uid]
+            .deps
+            .pending_over(executed)
+            .all(|dep| dep == uid || instances.get(dep).is_some_and(Instance::is_committed))
     })
 }
 
@@ -80,20 +92,20 @@ impl ExecutionScratch {
     /// SCCs are emitted dependencies-first and commands within one SCC are ordered by uid.
     pub fn executable_order(
         &mut self,
-        instances: &mut HashMap<usize, Instance>,
-        executed: &DepSet,
+        instances: &mut InstanceTable,
+        executed: &Executed,
     ) -> Vec<usize> {
         debug_assert!(self.stack.is_empty());
         debug_assert!(self.roots.is_empty());
         debug_assert!(self.touched.is_empty());
 
         // The reference gets deterministic roots from its replica/instance arrays. Our
-        // instances live in a HashMap, so sort their ids before starting the same traversal.
+        // instances are indexed per replica, so sort their ids before the same traversal.
         self.roots.extend(
             instances
                 .iter()
                 .filter(|(_, instance)| instance.is_committed())
-                .map(|(uid, _)| *uid),
+                .map(|(uid, _)| uid),
         );
         self.roots.sort_unstable();
 
@@ -101,14 +113,14 @@ impl ExecutionScratch {
         let mut order = Vec::with_capacity(self.roots.len());
         for root_index in 0..self.roots.len() {
             let root = self.roots[root_index];
-            if instances[&root].execution_index != 0 {
+            if instances[root].execution_index != 0 {
                 continue;
             }
             if !self.strongconnect(root, instances, executed, &mut next_index, &mut order) {
                 // A missing/uncommitted dependency leaves precisely the unfinished DFS path
                 // on the stack. Forget it so another root can explore it independently.
                 for uid in self.stack.drain(..) {
-                    let instance = instances.get_mut(&uid).expect("visited instance exists");
+                    let instance = instances.get_mut(uid).expect("visited instance exists");
                     instance.execution_index = 0;
                     instance.execution_lowlink = 0;
                 }
@@ -119,7 +131,7 @@ impl ExecutionScratch {
         // Successful nodes are executed and removed by the caller, but clear their scratch
         // too so this function remains repeatable for tests and for any future caller.
         for uid in self.touched.drain(..) {
-            let instance = instances.get_mut(&uid).expect("visited instance exists");
+            let instance = instances.get_mut(uid).expect("visited instance exists");
             instance.execution_index = 0;
             instance.execution_lowlink = 0;
         }
@@ -130,14 +142,14 @@ impl ExecutionScratch {
     fn strongconnect(
         &mut self,
         uid: usize,
-        instances: &mut HashMap<usize, Instance>,
-        executed: &DepSet,
+        instances: &mut InstanceTable,
+        executed: &Executed,
         next_index: &mut usize,
         order: &mut Vec<usize>,
     ) -> bool {
         let index = *next_index;
         *next_index += 1;
-        let instance = instances.get_mut(&uid).expect("visited instance exists");
+        let instance = instances.get_mut(uid).expect("visited instance exists");
         instance.execution_index = index;
         instance.execution_lowlink = index;
         self.stack.push(uid);
@@ -147,20 +159,18 @@ impl ExecutionScratch {
         // a time, so no borrow of `uid` and no copied dependency set survives the recursion.
         let step = uid_step(executed.process_count());
         for replica in 0..executed.process_count() {
-            let Some(mark) = instances[&uid].deps.get(replica) else {
+            let Some(mark) = instances[uid].deps.get(replica) else {
                 continue;
             };
-            let first = executed
-                .get(replica)
-                .map_or(2 * replica, |done| done + step);
+            let first = executed.next_unexecuted(replica);
             if first > mark {
                 continue;
             }
             for dep in (first..=mark).step_by(step) {
-                if dep == uid {
+                if dep == uid || executed.contains(dep) {
                     continue;
                 }
-                let Some(dependency) = instances.get(&dep) else {
+                let Some(dependency) = instances.get(dep) else {
                     return false;
                 };
                 if !dependency.is_committed() {
@@ -171,18 +181,18 @@ impl ExecutionScratch {
                     if !self.strongconnect(dep, instances, executed, next_index, order) {
                         return false;
                     }
-                    let dependency_lowlink = instances[&dep].execution_lowlink;
-                    let instance = instances.get_mut(&uid).expect("visited instance exists");
+                    let dependency_lowlink = instances[dep].execution_lowlink;
+                    let instance = instances.get_mut(uid).expect("visited instance exists");
                     instance.execution_lowlink = instance.execution_lowlink.min(dependency_lowlink);
                 } else if self.stack.contains(&dep) {
                     let dependency_index = dependency.execution_index;
-                    let instance = instances.get_mut(&uid).expect("visited instance exists");
+                    let instance = instances.get_mut(uid).expect("visited instance exists");
                     instance.execution_lowlink = instance.execution_lowlink.min(dependency_index);
                 }
             }
         }
 
-        if instances[&uid].execution_lowlink == index {
+        if instances[uid].execution_lowlink == index {
             let component_start = self
                 .stack
                 .iter()
@@ -200,9 +210,11 @@ impl ExecutionScratch {
 mod tests {
     use super::*;
     use crate::consensus::command::Command;
+    use crate::consensus::deps::dep_set::DepSet;
     use crate::consensus::deps::instance::Instance;
     use petgraph::algo::tarjan_scc;
     use petgraph::graph::{DiGraph, NodeIndex};
+    use std::collections::HashMap;
     use std::collections::HashSet;
 
     const N: usize = 3;
@@ -237,24 +249,21 @@ mod tests {
         Instance::new(0, 0, vec![command()], DepSet::new(N), N)
     }
 
-    fn executable_order(instances: &mut HashMap<usize, Instance>, executed: &DepSet) -> Vec<usize> {
+    fn executable_order(instances: &mut InstanceTable, executed: &Executed) -> Vec<usize> {
         ExecutionScratch::default().executable_order(instances, executed)
     }
 
     /// The materialized-graph implementation retained only as an equivalence oracle.
-    fn previous_executable_order(
-        instances: &HashMap<usize, Instance>,
-        executed: &DepSet,
-    ) -> Vec<usize> {
+    fn previous_executable_order(instances: &InstanceTable, executed: &Executed) -> Vec<usize> {
         let mut closed: HashSet<usize> = instances
             .iter()
             .filter(|(_, instance)| instance.is_committed())
-            .map(|(uid, _)| *uid)
+            .map(|(uid, _)| uid)
             .collect();
         loop {
             let mut removed = false;
             for uid in closed.clone() {
-                if instances[&uid]
+                if instances[uid]
                     .deps
                     .pending_over(executed)
                     .any(|dep| dep != uid && !closed.contains(&dep))
@@ -276,7 +285,7 @@ mod tests {
             nodes.insert(*uid, graph.add_node(*uid));
         }
         for uid in &ordered {
-            for dep in instances[uid].deps.pending_over(executed) {
+            for dep in instances[*uid].deps.pending_over(executed) {
                 if dep != *uid && closed.contains(&dep) {
                     graph.add_edge(nodes[uid], nodes[&dep], ());
                 }
@@ -294,13 +303,13 @@ mod tests {
 
     /// The shard's drain, with the graph forced rather than gated on [`cycle_possible`], so
     /// that the graph-free path can be compared against the graph command for command.
-    fn drain(instances: &mut HashMap<usize, Instance>, executed: &mut DepSet) -> Vec<usize> {
+    fn drain(instances: &mut InstanceTable, executed: &mut Executed) -> Vec<usize> {
         let mut order = Vec::new();
-        let execute = |instances: &mut HashMap<usize, Instance>,
-                       executed: &mut DepSet,
+        let execute = |instances: &mut InstanceTable,
+                       executed: &mut Executed,
                        order: &mut Vec<usize>,
                        uid: usize| {
-            instances.remove(&uid);
+            instances.remove(uid);
             executed.insert(uid);
             order.push(uid);
         };
@@ -316,39 +325,39 @@ mod tests {
 
     #[test]
     fn independent_commands_execute_in_uid_order() {
-        let mut instances = HashMap::new();
+        let mut instances = InstanceTable::new(N);
         instances.insert(uid(1, 0), committed(&[]));
         instances.insert(uid(0, 0), committed(&[]));
-        let order = executable_order(&mut instances, &DepSet::new(N));
+        let order = executable_order(&mut instances, &Executed::new(N));
         assert_eq!(order, vec![uid(0, 0), uid(1, 0)]);
     }
 
     #[test]
     fn a_dependency_executes_before_its_dependent() {
-        let mut instances = HashMap::new();
+        let mut instances = InstanceTable::new(N);
         instances.insert(uid(0, 0), committed(&[]));
         instances.insert(uid(1, 0), committed(&[uid(0, 0)]));
-        let order = executable_order(&mut instances, &DepSet::new(N));
+        let order = executable_order(&mut instances, &Executed::new(N));
         assert_eq!(order, vec![uid(0, 0), uid(1, 0)]);
     }
 
     #[test]
     fn an_uncommitted_dependency_blocks_the_whole_chain() {
-        let mut instances = HashMap::new();
+        let mut instances = InstanceTable::new(N);
         instances.insert(uid(0, 0), uncommitted());
         instances.insert(uid(1, 0), committed(&[uid(0, 0)]));
         instances.insert(uid(2, 0), committed(&[uid(1, 0)]));
-        assert!(executable_order(&mut instances, &DepSet::new(N)).is_empty());
+        assert!(executable_order(&mut instances, &Executed::new(N)).is_empty());
     }
 
     #[test]
     fn an_aborted_traversal_leaves_reusable_scratch_clean() {
         let dependency = uid(0, 0);
         let dependent = uid(1, 0);
-        let mut instances = HashMap::new();
+        let mut instances = InstanceTable::new(N);
         instances.insert(dependency, uncommitted());
         instances.insert(dependent, committed(&[dependency]));
-        let executed = DepSet::new(N);
+        let executed = Executed::new(N);
         let mut scratch = ExecutionScratch::default();
 
         assert!(
@@ -363,7 +372,7 @@ mod tests {
         );
 
         instances
-            .get_mut(&dependency)
+            .get_mut(dependency)
             .expect("dependency exists")
             .commit(DepSet::new(N));
         assert_eq!(
@@ -375,16 +384,16 @@ mod tests {
     #[test]
     fn a_missing_dependency_blocks_too() {
         // uid(0, 0) is named by a watermark but no instance exists for it yet.
-        let mut instances = HashMap::new();
+        let mut instances = InstanceTable::new(N);
         instances.insert(uid(1, 0), committed(&[uid(0, 0)]));
-        assert!(executable_order(&mut instances, &DepSet::new(N)).is_empty());
+        assert!(executable_order(&mut instances, &Executed::new(N)).is_empty());
     }
 
     #[test]
     fn an_already_executed_dependency_does_not_block() {
-        let mut executed = DepSet::new(N);
+        let mut executed = Executed::new(N);
         executed.insert(uid(0, 0));
-        let mut instances = HashMap::new();
+        let mut instances = InstanceTable::new(N);
         instances.insert(uid(1, 0), committed(&[uid(0, 0)]));
         assert_eq!(executable_order(&mut instances, &executed), vec![uid(1, 0)]);
     }
@@ -393,20 +402,20 @@ mod tests {
     fn a_cycle_becomes_one_component_ordered_by_uid() {
         // Visibility only requires one direction; when both hold, the two commands form a
         // component and every process breaks the tie the same way.
-        let mut instances = HashMap::new();
+        let mut instances = InstanceTable::new(N);
         instances.insert(uid(1, 0), committed(&[uid(0, 0)]));
         instances.insert(uid(0, 0), committed(&[uid(1, 0)]));
-        let order = executable_order(&mut instances, &DepSet::new(N));
+        let order = executable_order(&mut instances, &Executed::new(N));
         assert_eq!(order, vec![uid(0, 0), uid(1, 0)]);
     }
 
     #[test]
     fn a_component_still_waits_for_what_precedes_it() {
-        let mut instances = HashMap::new();
+        let mut instances = InstanceTable::new(N);
         instances.insert(uid(2, 0), committed(&[]));
         instances.insert(uid(1, 0), committed(&[uid(0, 0), uid(2, 0)]));
         instances.insert(uid(0, 0), committed(&[uid(1, 0)]));
-        let order = executable_order(&mut instances, &DepSet::new(N));
+        let order = executable_order(&mut instances, &Executed::new(N));
         assert_eq!(order, vec![uid(2, 0), uid(0, 0), uid(1, 0)]);
     }
     #[test]
@@ -432,9 +441,12 @@ mod tests {
             ],
         ];
         for scenario in scenarios {
-            let mut instances: HashMap<usize, Instance> = scenario.into_iter().collect();
-            let expected = executable_order(&mut instances, &DepSet::new(N));
-            let mut executed = DepSet::new(N);
+            let mut instances = InstanceTable::new(N);
+            for (uid, instance) in scenario {
+                instances.insert(uid, instance);
+            }
+            let expected = executable_order(&mut instances, &Executed::new(N));
+            let mut executed = Executed::new(N);
             assert_eq!(drain(&mut instances, &mut executed), expected);
         }
     }
@@ -446,7 +458,7 @@ mod tests {
         // and uncommitted phases. Self edges are included because watermarks can contain them.
         for edges in 0usize..(1 << (N * N)) {
             for committed_mask in 0usize..(1 << N) {
-                let mut instances = HashMap::new();
+                let mut instances = InstanceTable::new(N);
                 for (from, uid) in uids.iter().copied().enumerate() {
                     let mut deps = DepSet::new(N);
                     for (to, dependency) in uids.iter().copied().enumerate() {
@@ -461,7 +473,7 @@ mod tests {
                     instances.insert(uid, instance);
                 }
 
-                let executed = DepSet::new(N);
+                let executed = Executed::new(N);
                 let previous = previous_executable_order(&instances, &executed);
                 let order = executable_order(&mut instances, &executed);
                 let mut ordered_set = order.clone();
@@ -496,10 +508,10 @@ mod tests {
 
     #[test]
     fn a_cycle_is_broken_by_the_graph() {
-        let mut instances = HashMap::new();
+        let mut instances = InstanceTable::new(N);
         instances.insert(uid(1, 0), committed(&[uid(0, 0)]));
         instances.insert(uid(0, 0), committed(&[uid(1, 0)]));
-        let mut executed = DepSet::new(N);
+        let mut executed = Executed::new(N);
         assert_eq!(next_executable(&instances, &executed), None);
         assert!(cycle_possible(&instances, &executed));
         assert_eq!(
@@ -514,14 +526,14 @@ mod tests {
         // in the same call, and only then is the cycle blocked by nothing but itself — so
         // the trigger has to look at the shard's state after that execution, not at the
         // command that was just committed, which by then is gone.
-        let mut instances = HashMap::new();
+        let mut instances = InstanceTable::new(N);
         instances.insert(uid(0, 0), committed(&[]));
         instances.insert(uid(1, 0), committed(&[uid(0, 0), uid(2, 0)]));
         instances.insert(uid(2, 0), committed(&[uid(0, 0), uid(1, 0)]));
-        let mut executed = DepSet::new(N);
+        let mut executed = Executed::new(N);
 
         assert_eq!(next_executable(&instances, &executed), Some(uid(0, 0)));
-        instances.remove(&uid(0, 0));
+        instances.remove(uid(0, 0));
         executed.insert(uid(0, 0));
 
         assert_eq!(next_executable(&instances, &executed), None);
@@ -536,23 +548,23 @@ mod tests {
     fn waiting_for_a_commit_never_builds_the_graph() {
         // The common stall: a dependency we have not committed yet. Nothing to break, so
         // the expensive path must stay untouched.
-        let mut instances = HashMap::new();
+        let mut instances = InstanceTable::new(N);
         instances.insert(uid(0, 0), uncommitted());
         instances.insert(uid(1, 0), committed(&[uid(0, 0)]));
-        assert!(!cycle_possible(&instances, &DepSet::new(N)));
+        assert!(!cycle_possible(&instances, &Executed::new(N)));
         // Nor when the dependency is not even known here.
-        let mut instances = HashMap::new();
+        let mut instances = InstanceTable::new(N);
         instances.insert(uid(1, 0), committed(&[uid(0, 0)]));
-        assert!(!cycle_possible(&instances, &DepSet::new(N)));
+        assert!(!cycle_possible(&instances, &Executed::new(N)));
     }
 
     #[test]
     fn a_self_dependency_does_not_block() {
         // A watermark cannot say "all of this replica but me", so a set can name the
         // command it belongs to. Execution ignores that, on both paths.
-        let mut instances = HashMap::new();
+        let mut instances = InstanceTable::new(N);
         instances.insert(uid(0, 0), committed(&[uid(0, 0)]));
-        let mut executed = DepSet::new(N);
+        let mut executed = Executed::new(N);
         assert_eq!(next_executable(&instances, &executed), Some(uid(0, 0)));
         assert_eq!(drain(&mut instances, &mut executed), vec![uid(0, 0)]);
     }
@@ -560,10 +572,10 @@ mod tests {
     #[test]
     fn only_the_lowest_uid_of_a_replica_is_a_candidate() {
         // Later commands of a replica wait for its earlier ones, so they are not heads.
-        let mut instances = HashMap::new();
+        let mut instances = InstanceTable::new(N);
         instances.insert(uid(0, 1), committed(&[]));
-        assert_eq!(next_executable(&instances, &DepSet::new(N)), None);
-        let mut executed = DepSet::new(N);
+        assert_eq!(next_executable(&instances, &Executed::new(N)), None);
+        let mut executed = Executed::new(N);
         executed.insert(uid(0, 0));
         assert_eq!(next_executable(&instances, &executed), Some(uid(0, 1)));
     }

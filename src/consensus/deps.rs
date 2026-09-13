@@ -5,15 +5,16 @@
 //! replacing it: the two share the shard pool, the sinks, the command types and the eval
 //! logging, but nothing of their instance state or their commit-to-execution path.
 
+use crate::consensus::TIMEOUT_REPORT_LIMIT;
 use crate::consensus::command::{Command, CommitReport};
-use crate::consensus::deps::dep_set::{requester_of, DepSet};
-use crate::consensus::deps::execution::{cycle_possible, next_executable, ExecutionScratch};
+use crate::consensus::deps::dep_set::{DepSet, Executed, requester_of};
+use crate::consensus::deps::execution::{ExecutionScratch, cycle_possible, next_executable};
 use crate::consensus::deps::instance::{Instance, Phase};
+use crate::consensus::deps::instance_table::InstanceTable;
 use crate::consensus::deps::message::DepMsg;
 use crate::consensus::deps::read_tracker::ReadTracker;
 use crate::consensus::message::{CommandBatch, ConsensusMessage, ConsensusMsg};
 use crate::consensus::shard_pool::{PooledShard, ShardPool};
-use crate::consensus::TIMEOUT_REPORT_LIMIT;
 use crate::eval;
 use crate::message::Message::{ConsensusM, Done};
 use crate::message::{Message, MsgWithSource};
@@ -26,15 +27,16 @@ use std::io;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
+use tokio::sync::Mutex;
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::{Receiver, Sender};
-use tokio::sync::Mutex;
 use tokio::{pin, select};
 use tokio_timerfd::Delay;
 
 pub(crate) mod dep_set;
 pub(crate) mod execution;
 pub(crate) mod instance;
+pub(crate) mod instance_table;
 pub(crate) mod message;
 pub(crate) mod read_tracker;
 
@@ -109,10 +111,10 @@ pub(crate) struct DepShard {
     seen: DepSet,
     /// Every command of this shard we have executed. A dependency at or below this needs
     /// no waiting, which is what keeps the execution graph bounded by unfinished work.
-    executed: DepSet,
+    executed: Executed,
     /// One entry per unfinished command whose payload we hold. Executed instances are
     /// removed, so an empty table is (with `deferred`) the condition for the shard to sleep.
-    instances: HashMap<usize, Instance>,
+    instances: InstanceTable,
     /// Messages held back, keyed by what they are waiting for and in arrival order.
     /// A message waits either for the command it is about — nothing can be acted on before
     /// the payload — or for a dependency the leader named to be accepted here. See
@@ -133,6 +135,13 @@ pub(crate) struct DepShard {
     /// Hold acks back for the run loop to send as one message, as SwiftPaxos' batcher
     /// goroutine does. EPaxos unicasts its acks to one coordinator and has no batcher.
     batch_acks: bool,
+    /// Derive dependencies per key rather than from everything the shard has seen. Needed
+    /// once one instance carries commands for several keys, which is how the reference
+    /// batches (`updateAttributes`/`updateConflicts`, `epaxos.go:629`).
+    per_key_deps: bool,
+    /// Last instance to touch each key, per replica, indexed by key. Only filled when
+    /// `per_key_deps`; keys are dense, so this is a slot each rather than a lookup.
+    conflicts: Vec<Option<DepSet>>,
 }
 
 impl DepShard {
@@ -142,6 +151,8 @@ impl DepShard {
         sinks: ShardMultiSink,
         mode: DepMode,
         batch_acks: bool,
+        per_key_deps: bool,
+        key_count: usize,
     ) -> Self {
         let process_count = topology.nb_processes;
         let replica_count = topology.nb_replicas;
@@ -174,15 +185,50 @@ impl DepShard {
             sinks,
             next_uid: 2 * my_pid,
             seen: DepSet::new(process_count),
-            executed: DepSet::new(process_count),
-            instances: HashMap::new(),
+            executed: Executed::new(process_count),
+            instances: InstanceTable::new(process_count),
             reads: ReadTracker::new(slow_quorum, read_leader),
             deferred: HashMap::new(),
             parked_accepts: HashSet::new(),
             ready: Vec::new(),
             execution_scratch: ExecutionScratch::default(),
             batch_acks,
+            per_key_deps,
+            conflicts: vec![None; if per_key_deps { key_count } else { 0 }],
         }
+    }
+
+    /// What a command touching `keys` depends on: everything already seen on those keys.
+    /// Without `per_key_deps` a shard holds one key, so its whole view is the answer.
+    fn deps_for(&self, keys: &[usize]) -> DepSet {
+        if !self.per_key_deps {
+            return self.seen.clone();
+        }
+        let mut deps = DepSet::new(self.process_count);
+        for key in keys {
+            if let Some(seen) = &self.conflicts[*key] {
+                deps.union_with(seen);
+            }
+        }
+        deps
+    }
+
+    /// Records that `id` touched `keys`, so later commands on them depend on it.
+    fn note_seen(&mut self, id: usize, keys: &[usize]) {
+        self.seen.insert(id);
+        if !self.per_key_deps {
+            return;
+        }
+        let process_count = self.process_count;
+        for key in keys {
+            self.conflicts[*key]
+                .get_or_insert_with(|| DepSet::new(process_count))
+                .insert(id);
+        }
+    }
+
+    fn keys_of(commands: &[Command]) -> Vec<usize> {
+        commands.iter().map(|command| command.shard).collect()
     }
 
     /// The instance's leader: the one process that sends `Accept` for it, and so the one
@@ -296,8 +342,9 @@ impl DepShard {
         let id = self.next_uid();
         // Dependencies are computed before the command is added to `seen`, so a command
         // never depends on itself.
-        let init_deps = self.seen.clone();
-        self.seen.insert(id);
+        let keys = Self::keys_of(&commands);
+        let init_deps = self.deps_for(&keys);
+        self.note_seen(id, &keys);
 
         let value = CommandBatch::Commands(commands.clone());
         let mut instance = Instance::new(
@@ -363,13 +410,15 @@ impl DepShard {
     /// like this one.
     pub async fn submit_read(&mut self, command: Command) -> io::Result<()> {
         debug_assert!(command.read_only);
+        let key = command.shard;
         let id = self.reads.insert(command, self.process_count);
         if self.is_replica(self.my_pid) {
             // "Self-addressed messages are delivered immediately."
-            let seen = self.seen.clone();
+            let seen = self.deps_for(&[key]);
             self.reads.receive(id, self.my_pid, &seen);
         }
-        self.broadcast(DepMsg::ReadRequest { id }, None).await?;
+        self.broadcast(DepMsg::ReadRequest { id, key }, None)
+            .await?;
         self.serve_ready_reads();
         Ok(())
     }
@@ -387,7 +436,7 @@ impl DepShard {
     /// payload arrives and holds every earlier message back until it does.
     fn instance_mut(&mut self, id: usize) -> &mut Instance {
         self.instances
-            .get_mut(&id)
+            .get_mut(id)
             .expect("an instance exists once its payload has arrived")
     }
 
@@ -402,7 +451,7 @@ impl DepShard {
         );
         // Only now do the commands count as ours: until the payload is here they
         // conflict with nothing, which is `cmd[id] = ⊥` in both papers.
-        self.seen.insert(id);
+        self.note_seen(id, &Self::keys_of(&commands));
         let coordinator_pid = requester_of(id, self.process_count);
         self.instances.insert(
             id,
@@ -443,13 +492,14 @@ impl DepShard {
             self.sinks.shard_id
         );
         match msg {
-            DepMsg::ReadRequest { id } => {
-                // Whatever we have seen, which is what the reader has to catch up to.
+            DepMsg::ReadRequest { id, key } => {
+                // What we have seen on that key, which is what the reader has to catch up
+                // to. Without `per_key_deps` a shard holds one key and this is its view.
                 return self
                     .send(
                         DepMsg::ReadResponse {
                             id,
-                            seen: self.seen.clone(),
+                            seen: self.deps_for(&[key]),
                         },
                         src,
                     )
@@ -477,7 +527,7 @@ impl DepShard {
         if self.executed.contains(id) {
             return Ok(());
         }
-        if !self.instances.contains_key(&id) {
+        if !self.instances.contains_key(id) {
             let Some(CommandBatch::Commands(commands)) = value else {
                 self.defer(id, src, msg);
                 return Ok(());
@@ -571,9 +621,9 @@ impl DepShard {
             return None;
         };
         let id = *id;
-        let blocking = deps
-            .pending_over(&self.executed)
-            .find(|dep| *dep != id && !self.instances.get(dep).is_some_and(Instance::is_settled))?;
+        let blocking = deps.pending_over(&self.executed).find(|dep| {
+            *dep != id && !self.instances.get(*dep).is_some_and(Instance::is_settled)
+        })?;
         debug_assert!(
             self.parked_accepts.contains(&blocking),
             "the leader's order reaches us over a FIFO link, so a dependency we have not \
@@ -604,6 +654,9 @@ impl DepShard {
     /// we have already seen ends up in one of the two dependency sets.
     async fn on_pre_accept(&mut self, src: usize, id: usize, deps: DepSet) -> io::Result<()> {
         let coordinator_deps = deps;
+        // The instance's own keys: what it conflicts on, and so what our proposal is drawn
+        // from. `create_instance` has already run, so its commands are here.
+        let keys = Self::keys_of(&self.instances[id].commands);
         // Our own proposal. EPaxos\* Fig. 3 line 16 completes the coordinator's set with
         // everything else we have seen; SwiftPaxos Fig. 4 line 11 is purely local, because
         // there the client's `Propagate` carries no dependencies at all. Unioning the
@@ -612,10 +665,16 @@ impl DepShard {
         let mut my_deps = match self.mode {
             DepMode::EPaxos { .. } => {
                 let mut deps = coordinator_deps.clone();
-                deps.union_with(&self.seen);
+                let mut mine = self.deps_for(&keys);
+                // The coordinator's own slot is its to fill: it orders its instances itself,
+                // so a later one we happened to hear of first would only close a cycle with
+                // this one. `updateAttributes` skips that slot for the same reason
+                // (`epaxos.go:659`).
+                mine.clear_replica(requester_of(id, self.process_count));
+                deps.union_with(&mine);
                 deps
             }
-            DepMode::SwiftPaxos { .. } => self.seen.clone(),
+            DepMode::SwiftPaxos { .. } => self.deps_for(&keys),
         };
         // Another replica's ack may have told us this command exists before its own
         // PreAccept arrived, which would otherwise make us propose it as its own
@@ -725,10 +784,7 @@ impl DepShard {
         let reachable = self.reachable();
         let my_pid = self.my_pid;
 
-        let instance = self
-            .instances
-            .get_mut(&id)
-            .expect("decided instance exists");
+        let instance = self.instances.get_mut(id).expect("decided instance exists");
         if instance.coordinator_pid != my_pid {
             return Ok(());
         }
@@ -798,7 +854,7 @@ impl DepShard {
             return self.try_commit(id).await;
         }
         self.instances
-            .get_mut(&id)
+            .get_mut(id)
             .expect("created above")
             .accept_acked
             .insert(my_pid);
@@ -837,7 +893,7 @@ impl DepShard {
         let my_pid = self.my_pid;
         let instance = self
             .instances
-            .get_mut(&id)
+            .get_mut(id)
             .expect("accepted instance exists");
         if instance.coordinator_pid != my_pid
             || instance.phase != Phase::Accepted
@@ -859,7 +915,7 @@ impl DepShard {
         // Computed before the mutable borrow, off `deps` and `self.executed`, so the hot path
         // does not have to copy a `DepSet`.
         let mut report = None;
-        if let Some(instance) = self.instances.get(&id)
+        if let Some(instance) = self.instances.get(id)
             && !instance.is_committed()
             && instance.commands.iter().any(|c| c.requester == self.my_pid)
         {
@@ -918,7 +974,7 @@ impl DepShard {
     fn execute(&mut self, uid: usize) {
         let commands = self
             .instances
-            .remove(&uid)
+            .remove(uid)
             .expect("ordered instance exists")
             .commands;
         self.executed.insert(uid);
@@ -950,7 +1006,7 @@ impl DepShard {
     /// payload yet waits for the proposer's `PreAccept` (`afterPropagate`, `swift.go:418`).
     async fn swift_leader_accept(&mut self, id: usize, my_deps: DepSet) -> io::Result<()> {
         let my_pid = self.my_pid;
-        let instance = self.instances.get_mut(&id).expect("instance exists");
+        let instance = self.instances.get_mut(id).expect("instance exists");
         // The leader accepts its own value, and that accept doubles as its own proposal and
         // its own acknowledgement — the paper sends it as a `FastAck` — so it counts on
         // both routes without a separate message.
@@ -985,7 +1041,7 @@ impl DepShard {
     async fn swift_try_commit(&mut self, id: usize) -> io::Result<()> {
         let slow_quorum = self.slow_quorum;
         let my_pid = self.my_pid;
-        let Some(instance) = self.instances.get(&id) else {
+        let Some(instance) = self.instances.get(id) else {
             return Ok(());
         };
         if instance.is_committed() {
@@ -1055,7 +1111,7 @@ impl DepShard {
     /// and it learns every other decision from the `Commit`.
     fn deps_are_settled(&self, id: usize, deps: &DepSet) -> bool {
         deps.pending_over(&self.executed)
-            .all(|dep| dep == id || self.instances.get(&dep).is_some_and(Instance::is_settled))
+            .all(|dep| dep == id || self.instances.get(dep).is_some_and(Instance::is_settled))
     }
 
     /// True if a message about `id` cannot change anything at a sleeping shard, i.e. the
@@ -1080,18 +1136,20 @@ impl PooledShard for DepShard {
         self.next_uid = state.next_uid;
         self.reads.set_next_id(state.next_read_id);
         self.seen = state.watermark.clone();
-        self.executed = state.watermark;
+        self.executed.set_watermark(state.watermark);
     }
 
     fn fall_asleep(&mut self) -> SleepingDepShard {
         debug_assert!(self.can_sleep());
         debug_assert_eq!(
-            self.seen, self.executed,
+            &self.seen,
+            self.executed.watermark(),
             "an idle shard has executed everything it has seen"
         );
-        let watermark = std::mem::replace(&mut self.executed, DepSet::new(self.process_count));
+        let watermark = std::mem::replace(&mut self.executed, Executed::new(self.process_count))
+            .into_watermark();
         self.seen = DepSet::new(self.process_count);
-        self.instances.shrink_to(IDLE_CAPACITY);
+        self.instances.reset();
         self.deferred.shrink_to(IDLE_CAPACITY);
         self.parked_accepts.shrink_to(IDLE_CAPACITY);
         SleepingDepShard {
@@ -1104,6 +1162,11 @@ impl PooledShard for DepShard {
     /// Nothing unfinished is left: every instance has been executed and handed over, and
     /// nothing is waiting for a payload or for a dependency — sleeping would drop it.
     fn can_sleep(&self) -> bool {
+        // The per-key conflict table is not part of the sleeping state, and with one shard
+        // there is nothing to hand the slot to anyway.
+        if self.per_key_deps {
+            return false;
+        }
         let idle = self.instances.is_empty()
             && self.deferred.is_empty()
             && self.reads.is_empty()
@@ -1122,6 +1185,10 @@ impl PooledShard for DepShard {
 pub(crate) struct Batching {
     pub commands: bool,
     pub acks: bool,
+    /// Let one instance carry commands for several keys, as the reference does. Costs the
+    /// per-shard dependency scoping: the layer runs as a single shard with per-key
+    /// conflicts instead.
+    pub cross_shard: bool,
 }
 
 /// How many messages one drain takes, and so roughly how many acks a bundle carries:
@@ -1147,6 +1214,9 @@ pub(crate) struct DepConsensus {
     batch_buffer: Vec<Command>,
     /// How many acks `sinks` is holding, readable without taking its lock.
     pending_acks: Arc<AtomicUsize>,
+    /// Every command goes to one shard, whose dependencies are per key. An instance may
+    /// then carry commands for any keys at all.
+    cross_shard: bool,
 }
 
 impl DepConsensus {
@@ -1162,6 +1232,7 @@ impl DepConsensus {
         let Batching {
             commands: batch_commands,
             acks: batch_acks,
+            cross_shard: per_key_deps,
         } = batching;
         let process_count = topology.nb_processes;
         let pending_acks = sinks.pending_acks_handle();
@@ -1180,13 +1251,15 @@ impl DepConsensus {
                 },
                 mode,
                 batch_acks,
+                per_key_deps,
+                shard_count,
             )
         });
         Self {
             process_count,
             pool: ShardPool::new(
-                shard_count,
-                shard_pool_size,
+                if per_key_deps { 1 } else { shard_count },
+                if per_key_deps { 1 } else { shard_pool_size },
                 SleepingDepShard::new(my_pid, process_count),
                 new_shard,
             ),
@@ -1195,7 +1268,14 @@ impl DepConsensus {
             batch_acks,
             batch_buffer: Vec::new(),
             pending_acks,
+            cross_shard: per_key_deps,
         }
+    }
+
+    /// The shard a command is ordered in: its key's, or the only one there is.
+    #[inline]
+    fn route(&self, key: usize) -> usize {
+        if self.cross_shard { 0 } else { key }
     }
 
     /// Applies one message from a peer, recording the shards it touched.
@@ -1304,6 +1384,15 @@ impl DepConsensus {
                 .await;
         }
         batch.sort_unstable_by_key(|command| (command.read_only, command.shard));
+        if self.cross_shard {
+            // One instance for every write drained, whatever keys they touch.
+            let writes = batch.iter().take_while(|c| !c.read_only).count();
+            if writes > 0 {
+                let commands: Vec<Command> = batch.drain(..writes).collect();
+                touched.push(0);
+                self.pool.wake(0).submit(commands).await?;
+            }
+        }
         while batch.first().is_some_and(|command| !command.read_only) {
             let shard_id = batch[0].shard;
             let run = batch
@@ -1321,7 +1410,7 @@ impl DepConsensus {
     }
 
     async fn submit_one(&mut self, command: Command, touched: &mut Vec<usize>) -> io::Result<()> {
-        let shard_id = command.shard;
+        let shard_id = self.route(command.shard);
         touched.push(shard_id);
         let shard = self.pool.wake(shard_id);
         if command.read_only {

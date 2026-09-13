@@ -1,5 +1,5 @@
 use crate::consensus::command::{Command, CommitReport};
-use crate::consensus::deps::dep_set::DepSet;
+use crate::consensus::deps::dep_set::{DepSet, Executed};
 use crate::consensus::message::ReadId;
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
@@ -125,7 +125,7 @@ impl ReadTracker {
 
     /// The reads whose quorum is complete and whose answers `executed` now covers, in the
     /// order they were issued.
-    pub fn take_ready(&mut self, executed: &DepSet) -> Vec<Command> {
+    pub fn take_ready(&mut self, executed: &Executed) -> Vec<Command> {
         let quorum = self.read_quorum;
         let ready: Vec<ReadId> = self
             .reads
@@ -138,7 +138,7 @@ impl ReadTracker {
                     // that quorum's union without adding another response to the read path.
                     required.intersect_with(leader_seen);
                 }
-                let covered = required.is_covered_by(executed);
+                let covered = required.pending_over(executed).next().is_none();
                 read.report.get_or_insert_with(|| CommitReport {
                     fast: covered,
                     waited_for: required.pending_over(executed).count(),
@@ -177,6 +177,14 @@ mod tests {
         set
     }
 
+    /// `Executed` whose prefix is exactly `deps(uids)`, matching what the tests mean by
+    /// "this much has run".
+    fn executed_of(uids: &[usize]) -> Executed {
+        let mut executed = Executed::new(N);
+        executed.set_watermark(deps(uids));
+        executed
+    }
+
     fn read() -> Command {
         Command {
             requester: 0,
@@ -194,11 +202,16 @@ mod tests {
         let id = tracker.insert(read(), N);
         tracker.receive(id, 0, &deps(&[uid(0, 0)]));
         // One answer is not a quorum, however much has been executed.
-        assert!(tracker.take_ready(&deps(&[uid(0, 5)])).is_empty());
+        assert!(tracker.take_ready(&executed_of(&[uid(0, 5)])).is_empty());
         tracker.receive(id, 1, &deps(&[uid(1, 1)]));
         // Now a quorum, but the union is not executed here yet.
-        assert!(tracker.take_ready(&deps(&[uid(0, 0)])).is_empty());
-        assert_eq!(tracker.take_ready(&deps(&[uid(0, 0), uid(1, 1)])).len(), 1);
+        assert!(tracker.take_ready(&executed_of(&[uid(0, 0)])).is_empty());
+        assert_eq!(
+            tracker
+                .take_ready(&executed_of(&[uid(0, 0), uid(1, 1)]))
+                .len(),
+            1
+        );
         assert!(tracker.is_empty());
     }
 
@@ -210,7 +223,7 @@ mod tests {
         tracker.receive(id, 1, &deps(&[uid(1, 0), uid(1, 3)]));
         tracker.receive(id, LEADER, &deps(&[uid(1, 0)]));
         // The leader bounds the union, so the read does not wait for `uid(1, 3)`.
-        assert_eq!(tracker.take_ready(&deps(&[uid(1, 0)])).len(), 1);
+        assert_eq!(tracker.take_ready(&executed_of(&[uid(1, 0)])).len(), 1);
     }
 
     #[test]
@@ -220,7 +233,12 @@ mod tests {
         tracker.receive(id, 1, &deps(&[uid(1, 0)]));
         tracker.receive(id, 2, &deps(&[uid(1, 3)]));
         // The completed follower quorum is enough; there is no wait for the leader.
-        assert_eq!(tracker.take_ready(&deps(&[uid(1, 0), uid(1, 3)])).len(), 1);
+        assert_eq!(
+            tracker
+                .take_ready(&executed_of(&[uid(1, 0), uid(1, 3)]))
+                .len(),
+            1
+        );
     }
 
     #[test]
@@ -231,8 +249,13 @@ mod tests {
         tracker.receive(id, 2, &deps(&[uid(1, 3)]));
         // A late leader response does not retroactively bound the established union.
         tracker.receive(id, LEADER, &deps(&[uid(1, 0)]));
-        assert!(tracker.take_ready(&deps(&[uid(1, 0)])).is_empty());
-        assert_eq!(tracker.take_ready(&deps(&[uid(1, 0), uid(1, 3)])).len(), 1);
+        assert!(tracker.take_ready(&executed_of(&[uid(1, 0)])).is_empty());
+        assert_eq!(
+            tracker
+                .take_ready(&executed_of(&[uid(1, 0), uid(1, 3)]))
+                .len(),
+            1
+        );
     }
 
     #[test]
@@ -244,7 +267,12 @@ mod tests {
         // A third replica has seen more, but the quorum is already settled: the read is
         // free to miss it, and waiting for it would be waiting for nothing.
         tracker.receive(id, 2, &deps(&[uid(2, 7)]));
-        assert_eq!(tracker.take_ready(&deps(&[uid(0, 0), uid(1, 0)])).len(), 1);
+        assert_eq!(
+            tracker
+                .take_ready(&executed_of(&[uid(0, 0), uid(1, 0)]))
+                .len(),
+            1
+        );
     }
 
     #[test]
@@ -252,7 +280,7 @@ mod tests {
         let mut tracker = ReadTracker::new(1, None);
         let id = tracker.insert(read(), N);
         tracker.receive(id, 0, &DepSet::new(N));
-        assert_eq!(tracker.take_ready(&DepSet::new(N)).len(), 1);
+        assert_eq!(tracker.take_ready(&Executed::new(N)).len(), 1);
         tracker.receive(id, 1, &deps(&[uid(1, 9)]));
         assert!(tracker.is_empty());
     }

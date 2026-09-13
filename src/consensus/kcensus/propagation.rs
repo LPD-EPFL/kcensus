@@ -1,5 +1,5 @@
 use crate::consensus::kcensus::node_state::{Knowledge, NodeState};
-use crate::topology::{Topology, FAULTY_LATENCY};
+use crate::topology::{FAULTY_LATENCY, Topology};
 use bit_set::BitSet;
 use log::{debug, info, trace};
 use petgraph::algo::bellman_ford;

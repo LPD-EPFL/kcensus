@@ -65,7 +65,7 @@ pub enum DepMsg {
 
     /// A read asking every replica what it has seen. Read-only commands take no instance
     /// and no dependency set of their own; see `DepShard::submit_read`.
-    ReadRequest { id: ReadId },
+    ReadRequest { id: ReadId, key: usize },
 
     /// What the answering replica had seen when the request reached it. The reader waits
     /// until it has executed the union of a majority of these.
