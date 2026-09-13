@@ -30,6 +30,14 @@
 
     # `failed_when: false` keeps every host in the play whatever kcensus returns, so the save
     # tasks below always run. The play is failed explicitly at the end instead.
+    #
+    # Output goes to files on the instance rather than back through Ansible's stdout capture.
+    # `println!` writes a line at a time through Rust's `LineWriter`, so every logged request
+    # was a blocking write into the SSH channel, on the same thread the consensus loop runs on
+    # (the runtime is `current_thread`). Whenever the controller stopped draining -- it buffers
+    # and templates tens of megabytes per run, for every host at once -- every replica blocked
+    # in `write` simultaneously, which showed up as a synchronised multi-second latency spike
+    # with no CPU consumed. A local file is absorbed by the page cache and cannot block.
     - name: Run kcensus
       ansible.builtin.shell:
         cmd: >
@@ -49,20 +57,31 @@
           {{ "-v " + nonvoting if nonvoting else "" }}
           {{ "-f " + faults if faults else "" }}
           {{ "--conflicts=" + conflicts if conflicts else "" }}
+          > run.out 2> run.err
         chdir: /home/ec2-user/kcensus_app
       register: job_result
       failed_when: false
 
-    - name: Save output from each server
-      delegate_to: localhost
-      ansible.builtin.copy:
-        dest: "{{ result_path }}/server_{{ sub_exp_id }}.log"
-        content: |
-          STDOUT:
-          {{ job_result.stdout | default('NO STDOUT CAPTURED') }}
+    # Assembled on the instance, in the shape the parsers already read, so that the fetch below
+    # moves one file per host and the controller never sits between a replica and its own log.
+    - name: Assemble this server's output
+      ansible.builtin.shell:
+        cmd: |
+          {
+            echo "STDOUT:"
+            cat run.out
+            echo
+            echo "STDERR:"
+            cat run.err
+          } > run.log
+        chdir: /home/ec2-user/kcensus_app
+      changed_when: true
 
-          STDERR:
-          {{ job_result.stderr | default('NO STDERR CAPTURED') }}
+    - name: Save output from each server
+      ansible.builtin.fetch:
+        src: /home/ec2-user/kcensus_app/run.log
+        dest: "{{ result_path }}/server_{{ sub_exp_id }}.log"
+        flat: yes
 
     # `copy` does not create its destination directory. `result_path` is made by the runner
     # before the play; `failed_path` is not, because it only applies to runs that fail -- so
@@ -79,6 +98,9 @@
         state: directory
         mode: "0755"
 
+    # Copied from what was just fetched rather than fetched again: the file can be megabytes,
+    # and reading it back through the controller to template an exit code onto it would undo
+    # the point of writing it to a file in the first place. The code goes in a sidecar instead.
     - name: Keep every server's output when any server failed
       delegate_to: localhost
       when:
@@ -86,15 +108,21 @@
         - ansible_play_hosts | map('extract', hostvars, 'job_result')
           | map(attribute='rc') | reject('equalto', 0) | list | length > 0
       ansible.builtin.copy:
+        # `remote_src` because the delegate is localhost and the source is a path there, not
+        # something to look up in the playbook's files.
+        remote_src: yes
+        src: "{{ result_path }}/server_{{ sub_exp_id }}.log"
         dest: "{{ failed_path }}/server_{{ sub_exp_id }}.log"
-        content: |
-          EXIT CODE: {{ job_result.rc | default('unknown') }}
 
-          STDOUT:
-          {{ job_result.stdout | default('NO STDOUT CAPTURED') }}
-
-          STDERR:
-          {{ job_result.stderr | default('NO STDERR CAPTURED') }}
+    - name: Record why each server failed
+      delegate_to: localhost
+      when:
+        - failed_path | length > 0
+        - ansible_play_hosts | map('extract', hostvars, 'job_result')
+          | map(attribute='rc') | reject('equalto', 0) | list | length > 0
+      ansible.builtin.copy:
+        dest: "{{ failed_path }}/server_{{ sub_exp_id }}.exit"
+        content: "EXIT CODE: {{ job_result.rc | default('unknown') }}\n"
 
     - name: Fail if this server's run failed
       ansible.builtin.fail:
