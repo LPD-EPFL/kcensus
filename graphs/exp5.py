@@ -1,6 +1,7 @@
 """The exp-5 grid and log access, shared so the two plot scripts cannot disagree on it."""
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 from math import ceil
 from statistics import median
 
@@ -21,15 +22,23 @@ KEYS = 100000
 CDF_THROUGHPUT = 1000
 SKEWS = (0.0, 0.99)
 LOAD_SKEWS = (0.0, 0.99)
-# Keep this in sync with EXP5_THROUGHPUTS in lib.sh. Using the configured ladder, rather than
-# discovering only successful runs on disk, lets Figure 14 estimate achieved throughput for
-# every configured load rung.
-THROUGHPUTS = (
-    500,
-    1000,
-    *range(2000, 20000, 2000),
-    *range(20000, 50000, 5000),
-)
+def load_throughputs():
+    """The rungs the sweep actually ran, read off the log tree.
+
+    `exp-5-ladder` doubles the offered rate until one cannot be sustained and then refines
+    around the last that could, so the rungs depend on where each algorithm turns over and
+    are not known ahead of the run. The failed tree is included so that a rung past the wall
+    still contributes its achieved throughput to Figure 14.
+    """
+    pattern = f"c={EXP5_CONFIG}/a=*/w={WRITES:g}/d={EXP5_DURATION}/i={EXP5_INGRESS}/t=*"
+    rungs = set()
+    for root in (logparser.LOG_DIR, f"{logparser.LOG_DIR}/failed"):
+        for path in Path(root).glob(pattern):
+            try:
+                rungs.add(int(path.name.removeprefix("t=")))
+            except ValueError:
+                continue
+    return tuple(sorted(rungs))
 
 
 @dataclass(frozen=True)

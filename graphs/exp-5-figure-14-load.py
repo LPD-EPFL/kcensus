@@ -13,7 +13,7 @@ from common import PLOT_PREFIX, args
 from exp5 import (
     EXP5_ALGORITHMS as ALGORITHMS,
     LOAD_WORKLOADS,
-    THROUGHPUTS,
+    load_throughputs,
     run_stats,
     selected_workloads,
 )
@@ -21,7 +21,7 @@ from logparser import *
 from prelude import plt
 
 workloads = selected_workloads(LOAD_WORKLOADS)
-plotted_throughputs = tuple(throughput for throughput in THROUGHPUTS if throughput <= 35000)
+plotted_throughputs = tuple(t for t in load_throughputs() if t <= 35000)
 latency_graphs = (("All-request", ""),)
 run_results = {workload: {} for workload in workloads}
 

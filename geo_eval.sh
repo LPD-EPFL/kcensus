@@ -303,35 +303,135 @@ function exp-5() {
   local EXPERIMENT_ID; EXPERIMENT_ID="$(experiment_id "exp-5")"
   local varFile="${CONFIGS[$configName]}"
 
-  # The ladder runs past what the deployment sustains, so failures at the top are expected.
+  # The ladder walks past what the deployment sustains, so failures at the top are expected
+  # and a rung is only believed unsustainable once every attempt has failed.
   # `local` is dynamically scoped in bash, so `run` sees this.
   local MAX_ATTEMPTS=2
 
   provision "$varFile" "$EXPERIMENT_ID"
   deploy "$EXPERIMENT_ID"
 
-  local throughput algo skew keys
-  for throughput in "${EXP5_THROUGHPUTS[@]}"; do
+  local algo skew
+  # The CDF point: one rate, every skew, at the longer baseline duration.
+  for skew in "${EXP5_SKEWS[@]}"; do
     for algo in "${ALGOS[@]}"; do
-      if [ "$throughput" -eq "$EXP5_CDF_THROUGHPUT" ]; then
-        for skew in "${EXP5_SKEWS[@]}"; do
-          exp-5-run "$EXPERIMENT_ID" "$configName" "$algo" "$throughput" "$skew" "$BASELINE_DURATION"
-        done
-      fi
-      for skew in "${EXP5_LOAD_SKEWS[@]}"; do
-        exp-5-run "$EXPERIMENT_ID" "$configName" "$algo" "$throughput" "$skew" "$DURATION"
-      done
+      exp-5-run "$EXPERIMENT_ID" "$configName" "$algo" "$EXP5_CDF_THROUGHPUT" "$skew" \
+        "$BASELINE_DURATION"
     done
-    # multi-paxos again, this time with pipelining, one skew, at every rung.
-    exp-5-run "$EXPERIMENT_ID" "$configName" "multi-paxos" "$throughput" 0 "$DURATION" "false"
   done
+
+  # One series per line of the load figure: every algorithm at every load skew, and
+  # multi-paxos once more with pipelining.
+  local series=()
+  for skew in "${EXP5_LOAD_SKEWS[@]}"; do
+    for algo in "${ALGOS[@]}"; do
+      series+=("${algo}|${skew}|true")
+    done
+  done
+  series+=("multi-paxos|0|false")
+  exp-5-ladder "$EXPERIMENT_ID" "$configName" "${series[@]}"
 
   destroy "$varFile" "$EXPERIMENT_ID"
 
   echo "--- Finished Experiment 5 ---"
 }
 
-# One exp-5 run, skipped rather than fatal when it exhausts its attempts.
+# Runs one `algo|skew|conflicts` series at one offered rate.
+function exp-5-series-run() {
+  local expId="$1" configName="$2" entry="$3" throughput="$4"
+  local algo skew conflicts
+  IFS='|' read -r algo skew conflicts <<< "$entry"
+  exp-5-run "$expId" "$configName" "$algo" "$throughput" "$skew" "$DURATION" "$conflicts"
+}
+
+# Walks the load ladder for every series at once.
+#
+# Runs are ordered by offered rate rather than by series: the figure compares algorithms at a
+# rate, and a sweep this long outlives the network conditions it started in, so two series
+# measured at one rate are measured minutes apart rather than hours.
+#
+# Phase 1 doubles. Doubling finds the wall in a logarithmic number of runs wherever it is,
+# which is what lets one ladder definition serve algorithms whose walls are two decades apart.
+#
+# A rate that fails is retried once, at the same rate, in the next round -- a rate lost to a
+# slow instance or a retried deployment would otherwise anchor the refinement a full factor of
+# two below the real wall, and the retry lands after the rest of the deployment has moved on.
+# The retry comes first in that round, so the series is back at the shared rate before the
+# round ends and stays comparable with the others. Failing the same rate twice ends the series.
+function exp-5-ladder() {
+  local expId="$1" configName="$2"; shift 2
+  local active=("$@") survivors=()
+  local -A sustained=() pending=()
+  local entry throughput="$EXP5_LADDER_START"
+
+  while [ "$throughput" -le "$EXP5_LADDER_END" ] && [ "${#active[@]}" -gt 0 ]; do
+    survivors=()
+    for entry in "${active[@]}"; do
+      if [ -n "${pending[$entry]:-}" ]; then
+        if ! exp-5-series-run "$expId" "$configName" "$entry" "${pending[$entry]}"; then
+          continue
+        fi
+        sustained["$entry"]="${pending[$entry]}"
+        unset "pending[$entry]"
+      fi
+      if exp-5-series-run "$expId" "$configName" "$entry" "$throughput"; then
+        sustained["$entry"]="$throughput"
+      else
+        pending["$entry"]="$throughput"
+      fi
+      survivors+=("$entry")
+    done
+    active=("${survivors[@]}")
+    throughput=$((throughput * 2))
+  done
+
+  # Phase 2, one group per distinct last-sustained rate, so the series refined together are
+  # the ones whose rungs coincide.
+  local -A groups=()
+  for entry in "${!sustained[@]}"; do
+    groups["${sustained[$entry]}"]+="${entry} "
+  done
+  local rate
+  for rate in $(printf '%s\n' "${!groups[@]}" | sort -n); do
+    exp-5-refine "$expId" "$configName" "$rate" ${groups[$rate]}
+  done
+}
+
+# Spreads `EXP5_LADDER_REFINE` around the rate a group of series last sustained.
+#
+# Failures are handled as in phase 1: a rate that fails is retried once at the same rate, at
+# the start of the next round, so the series is back on the shared rate before that round ends
+# and the figure keeps comparing algorithms measured minutes apart. Failing one rate twice
+# ends the series -- one failure is as likely to be a slow instance as a real wall.
+function exp-5-refine() {
+  local expId="$1" configName="$2" sustained="$3"; shift 3
+  local active=("$@") survivors=()
+  local -A pending=()
+  local factor rung entry
+
+  echo "--> refining around ${sustained} req/s: ${active[*]}"
+  for factor in "${EXP5_LADDER_REFINE[@]}"; do
+    if [ "${#active[@]}" -eq 0 ]; then
+      break
+    fi
+    rung="$(awk -v s="$sustained" -v f="$factor" 'BEGIN { printf "%d", s * f + 0.5 }')"
+    survivors=()
+    for entry in "${active[@]}"; do
+      if [ -n "${pending[$entry]:-}" ]; then
+        if ! exp-5-series-run "$expId" "$configName" "$entry" "${pending[$entry]}"; then
+          continue
+        fi
+        unset "pending[$entry]"
+      fi
+      if ! exp-5-series-run "$expId" "$configName" "$entry" "$rung"; then
+        pending["$entry"]="$rung"
+      fi
+      survivors+=("$entry")
+    done
+    active=("${survivors[@]}")
+  done
+}
+
 function exp-5-run() {
   local expId="$1" configName="$2" algo="$3" throughput="$4" skew="$5" duration="$6"
   local conflicts="${7:-true}"
@@ -340,6 +440,7 @@ function exp-5-run() {
          "$throughput" "" "$keys" "$skew" "$keys" "$conflicts"; then
     echo "--> SKIPPED (not sustainable?): ${algo} t=${throughput} skew=${skew} k=${keys}" \
       "conflicts=${conflicts}" >&2
+    return 1
   fi
 }
 

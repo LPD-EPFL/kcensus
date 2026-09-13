@@ -39,12 +39,14 @@ EXP5_WRITES=0.5
 # Zipf exponent. 0.99 is YCSB's default constant and the usual "skewed"
 # point in the literature; 0 is uniform.
 EXP5_SKEWS=() # No Skews, since EXP5_LOAD_SKEWS lists those and BASELINE_DURATION == DURATION
-# 500 to 100000, in steps that widen as the deployment saturates.
-EXP5_THROUGHPUTS=($(awk 'BEGIN {
-  printf "500 1000 2000 3000 "
-  for (i = 2; i < 10; i++) printf "%d ", 2000 * i
-  for (i = 4; i < 9; i++) printf "%d ", 5000 * i
-}'))
+# The load ladder doubles until a rung cannot be sustained, then refines around the last one
+# that could. Walked per algorithm and per skew: they meet their walls decades apart, so a
+# shared ladder spends most of its runs on rates one algorithm cannot reach and another
+# passed long ago.
+EXP5_LADDER_START=500
+EXP5_LADDER_END=128000
+# Multiples of the last sustained rung, once the wall is found.
+EXP5_LADDER_REFINE=(0.75 1.25 1.5 1.75 2 2.5 3)
 EXP5_CDF_THROUGHPUT=1000
 EXP5_LOAD_SKEWS=(0 0.99)
 
