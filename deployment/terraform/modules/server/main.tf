@@ -139,6 +139,19 @@ resource "aws_instance" "server" {
   subnet_id              = data.aws_subnet.pinned.id
   vpc_security_group_ids = [aws_security_group.kcensus_sg.id]
 
+  # T-family instances are burstable. Left unset, their credit mode comes from the account's
+  # per-region default, which is `unlimited` out of the box but can be changed account-wide:
+  # under `standard` an instance is throttled to its 20% baseline once its credits run out.
+  # swift-paxos draws 0.6-0.7 vCPU per replica at 31 replicas, above the 0.40 vCPU that
+  # a t3.medium's baseline covers. Non-burstable types reject the option, so it is only set
+  # where it applies.
+  dynamic "credit_specification" {
+    for_each = can(regex("^t[0-9]", var.instance_type)) ? [1] : []
+    content {
+      cpu_credits = "unlimited"
+    }
+  }
+
   tags = {
     Name         = "kcensus-${var.experiment_id}-${var.region}"
     ExperimentID = var.experiment_id
