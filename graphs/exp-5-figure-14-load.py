@@ -21,7 +21,7 @@ from logparser import *
 from prelude import plt
 
 workloads = selected_workloads(LOAD_WORKLOADS)
-plotted_throughputs = tuple(t for t in load_throughputs() if t <= 35000)
+plotted_throughputs = tuple(t for t in load_throughputs())
 latency_graphs = (("All-request", ""),)
 run_results = {workload: {} for workload in workloads}
 
@@ -151,11 +151,11 @@ for latency_label, filename_suffix in latency_graphs:
         plot.tick_params(axis="both", which="minor", pad=0.5)
         plot.set_axisbelow(True)
         plot.xaxis.set_major_formatter(ScalarFormatter())
-        plot.xaxis.set_major_locator(MultipleLocator(5000))
-        plot.xaxis.set_minor_locator(MultipleLocator(1000))
+        plot.xaxis.set_major_locator(MultipleLocator(8000))
+        plot.xaxis.set_minor_locator(MultipleLocator(2000))
         plot.yaxis.set_major_locator(MultipleLocator(200))
         plot.yaxis.set_minor_locator(MultipleLocator(100))
-        plot.set_xlim(0, 28000)
+        plot.set_xlim(0, 42000)
         plot.set_ylim(0, 500)
         if index != len(workloads) - 1:
             plot.tick_params(axis="x", which="both", labelbottom=False, length=0)
