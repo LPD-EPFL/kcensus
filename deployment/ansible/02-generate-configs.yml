@@ -3,7 +3,6 @@
   hosts: kcensus_nodes
   gather_facts: no
   strategy: free
-  any_errors_fatal: true
   tasks:
     - name: Generate dynamic region list
       run_once: true
