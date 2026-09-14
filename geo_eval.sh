@@ -373,21 +373,157 @@ function exp-5() {
     done
   done
 
-  local series=(); mapfile -t series < <(exp-5-series)
-  exp-5-ladder "${series[@]}"
+  # One series per line of the load figure: every algorithm at every load skew, and
+  # multi-paxos once more with pipelining.
+  local series=()
+  for skew in "${EXP5_LOAD_SKEWS[@]}"; do
+    for algo in "${ALGOS[@]}"; do
+      series+=("${algo}|${skew}|true")
+    done
+  done
+  series+=("multi-paxos|0|false")
+  exp-5-ladder "$EXPERIMENT_ID" "$configName" "${series[@]}"
 
   destroy "$varFile" "$EXPERIMENT_ID"
 
   echo "--- Finished Experiment 5 ---"
 }
 
-# The ladder's per-run hook (see lib.sh). `EXPERIMENT_ID` and `configName` are `exp-5`'s
-# locals, which bash's dynamic scoping puts in reach here.
+# Runs one `algo|skew|conflicts` series at one offered rate.
 function exp-5-series-run() {
-  local entry="$1" throughput="$2"
+  local expId="$1" configName="$2" entry="$3" throughput="$4"
   local algo skew conflicts
   IFS='|' read -r algo skew conflicts <<< "$entry"
-  exp-5-run "$EXPERIMENT_ID" "$configName" "$algo" "$throughput" "$skew" "$DURATION" "$conflicts"
+  exp-5-run "$expId" "$configName" "$algo" "$throughput" "$skew" "$DURATION" "$conflicts"
+}
+
+# Walks the load ladder for every series at once.
+#
+# Runs are ordered by offered rate rather than by series: the figure compares algorithms at a
+# rate, and a sweep this long outlives the network conditions it started in, so two series
+# measured at one rate are measured minutes apart rather than hours.
+#
+# Phase 1 doubles. Doubling finds the wall in a logarithmic number of runs wherever it is,
+# which is what lets one ladder definition serve algorithms whose walls are two decades apart.
+#
+# A rate that fails is retried once, at the same rate, in the next round -- a rate lost to a
+# slow instance or a retried deployment would otherwise anchor the refinement a full factor of
+# two below the real wall, and the retry lands after the rest of the deployment has moved on.
+# The retry comes first in that round, so the series is back at the shared rate before the
+# round ends and stays comparable with the others. Failing the same rate twice ends the series.
+function exp-5-ladder() {
+  local expId="$1" configName="$2"; shift 2
+  local active=("$@") survivors=()
+  local -A sustained=() pending=()
+  local entry throughput="$EXP5_LADDER_START"
+
+  while [ "$throughput" -le "$EXP5_LADDER_END" ] && [ "${#active[@]}" -gt 0 ]; do
+    survivors=()
+    for entry in "${active[@]}"; do
+      if [ -n "${pending[$entry]:-}" ]; then
+        if ! exp-5-series-run "$expId" "$configName" "$entry" "${pending[$entry]}"; then
+          continue
+        fi
+        sustained["$entry"]="${pending[$entry]}"
+        unset "pending[$entry]"
+      fi
+      if exp-5-series-run "$expId" "$configName" "$entry" "$throughput"; then
+        sustained["$entry"]="$throughput"
+      else
+        pending["$entry"]="$throughput"
+      fi
+      survivors+=("$entry")
+    done
+    active=("${survivors[@]}")
+    throughput=$((throughput * 2))
+  done
+
+  # Phase 2, one group per distinct last-sustained rate, so the series refined together are
+  # the ones whose rungs coincide.
+  local -A groups=()
+  for entry in "${!sustained[@]}"; do
+    groups["${sustained[$entry]}"]+="${entry} "
+  done
+  local rate
+  for rate in $(printf '%s\n' "${!groups[@]}" | sort -n); do
+    exp-5-refine "$expId" "$configName" "$rate" ${groups[$rate]}
+  done
+}
+
+# Walks from three quarters of the rate a group of series last sustained up to twice it, which
+# is where phase 1's doubling puts the wall.
+#
+# The rungs are one step apart -- a quarter of the sustained rate, capped at
+# `EXP5_REFINE_STEP_CAP` -- so the spacing stays bounded as the rates grow instead of widening
+# with them. The sustained rate itself is skipped, phase 1 having already measured it, and the
+# walk stops short of twice it, which phase 1 found unsustainable.
+#
+# Failures are handled as in phase 1: a rate that fails is retried once at the same rate, at
+# the start of the next round, so the series is back on the shared rate before that round ends
+# and the figure keeps comparing algorithms measured minutes apart. Failing one rate twice
+# ends the series -- one failure is as likely to be a slow instance as a real wall.
+#
+# That second failure is the series' wall, and it is then measured half a step and three halves
+# of a step below it, placing two points inside the step the wall falls in. Groups that
+# sustained less than `EXP5_PROBE_MIN_SUSTAINED` skip those two runs.
+function exp-5-refine() {
+  local expId="$1" configName="$2" sustained="$3"; shift 3
+  local active=("$@") survivors=()
+  local -A pending=() wall=() probes=()
+  local rung entry step half first
+  local -a rungs=()
+
+  step="$(awk -v s="$sustained" -v cap="$EXP5_REFINE_STEP_CAP" \
+    'BEGIN { q = int(s / 4); printf "%d", (q < cap ? q : cap) }')"
+  [ "${step}" -gt 0 ] || step=1
+
+  first="$(awk -v s="$sustained" 'BEGIN { printf "%d", s * 0.75 + 0.5 }')"
+  for ((rung = first; rung < 4 * sustained; rung += step)); do
+    if [ "${rung}" -ne "${sustained}" ]; then
+      rungs+=("${rung}")
+    fi
+  done
+
+  echo "--> refining around ${sustained} req/s in steps of ${step}: ${active[*]}"
+  for rung in "${rungs[@]}"; do
+    if [ "${#active[@]}" -eq 0 ]; then
+      break
+    fi
+    survivors=()
+    for entry in "${active[@]}"; do
+      if [ -n "${pending[$entry]:-}" ]; then
+        if ! exp-5-series-run "$expId" "$configName" "$entry" "${pending[$entry]}"; then
+          wall["$entry"]="${pending[$entry]}"
+          continue
+        fi
+        unset "pending[$entry]"
+      fi
+      if ! exp-5-series-run "$expId" "$configName" "$entry" "$rung"; then
+        pending["$entry"]="$rung"
+      fi
+      survivors+=("$entry")
+    done
+    active=("${survivors[@]}")
+  done
+
+  if [ "${sustained}" -lt "${EXP5_PROBE_MIN_SUSTAINED}" ]; then
+    return 0
+  fi
+
+  # Half-step probes, rate-major like every other round.
+  for entry in "${!wall[@]}"; do
+    for half_steps in 3 1; do
+      rung=$(( ${wall[$entry]} - half_steps * step / 2 ))
+      if [ "${rung}" -gt 0 ]; then
+        probes["$rung"]+="${entry} "
+      fi
+    done
+  done
+  for rung in $(printf '%s\n' "${!probes[@]}" | sort -n); do
+    for entry in ${probes[$rung]}; do
+      exp-5-series-run "$expId" "$configName" "$entry" "$rung" || true
+    done
+  done
 }
 
 function exp-5-run() {

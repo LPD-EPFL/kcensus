@@ -141,7 +141,8 @@ function run_all_plots() {
   exp-1
   exp-2
   exp-3
-  exp-5
+  # Experiment 5 is AWS-only, so local `all` stops after Figure 12.
+  if [ -z "$LOCAL_FLAG" ]; then exp-5; fi
 }
 
 function main() {

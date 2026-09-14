@@ -8,9 +8,7 @@
 #   * the log root is ./local-logs, never ./logs, so a local run can never overwrite AWS results;
 #   * throughput is divided by (f+1)/2, because one machine cannot sustain the wide-area rate.
 #     The path records the real reduced value (t=500 for 7 replicas, t=125 for 31), so `plot.sh
-#     --local` has to apply the same arithmetic to find it. exp-5 is the exception: its whole
-#     subject is the rate at which a deployment turns over, so it offers the wide-area rungs
-#     unreduced and its plots read the rungs straight off the log tree.
+#     --local` has to apply the same arithmetic to find it.
 
 set -e
 
@@ -37,7 +35,7 @@ function run_one() {
   local shards="${11:-${SHARDS}}" conflicts="${12:-}" shard_pool="${13:-}"
 
   local nb; nb="$(digits "$configName")"
-  local throughput; throughput="${RUN_THROUGHPUT:-$(local_throughput "$nb")}"
+  local throughput; throughput="$(local_throughput "$nb")"
   local per_proposer; per_proposer="$(per_proposer_rate "$throughput" "$nb")"
   local timeout_s=$(( 30 + 3 * ${duration%s} ))
 
@@ -79,9 +77,6 @@ function run_one() {
     echo "--> Attempt ${attempt}/${MAX_ATTEMPTS} failed: ${algo} on ${configName}; output kept in ${failedDir}" >&2
     if [ "$attempt" -eq "${MAX_ATTEMPTS}" ]; then
       echo "--> FAILED after ${MAX_ATTEMPTS} attempts: ${title}" >&2
-      if [ -n "${RUN_SOFT_FAIL:-}" ]; then
-        return 1
-      fi
       exit 1
     fi
   done
@@ -166,40 +161,6 @@ function exp-4() {
   echo "--- Finished Experiment 4 ---"
 }
 
-# --- Experiment 5: contention and load (Figures 13 and 14) ---
-function exp-5() {
-  echo "--- Experiment 5: contention + load (local) ---"
-
-  # The ladder walks past what this machine sustains, so failures at the top are expected: a
-  # rung is only believed unsustainable once every attempt has failed, and it ends that series
-  # rather than the run. `local` is dynamically scoped in bash, so `run_one` sees both.
-  local MAX_ATTEMPTS=2 RUN_SOFT_FAIL=1
-
-  local algo skew
-  for skew in "${EXP5_SKEWS[@]}"; do
-    for algo in "${ALGOS[@]}"; do
-      exp-5-series-run "${algo}|${skew}|true" "$EXP5_CDF_THROUGHPUT"
-    done
-  done
-
-  local series=(); mapfile -t series < <(exp-5-series)
-  exp-5-ladder "${series[@]}"
-
-  echo "--- Finished Experiment 5 ---"
-}
-
-# The ladder's per-run hook (see lib.sh). The offered rate comes from the ladder rather than
-# from `local_throughput`, so the rungs match the AWS run and the binary's ramp-up sees the
-# same deployment-wide rate.
-function exp-5-series-run() {
-  local entry="$1" throughput="$2"
-  local algo skew conflicts
-  IFS='|' read -r algo skew conflicts <<< "$entry"
-  local RUN_THROUGHPUT="$throughput"
-  run_one "$EXP5_CONFIG" "${EXP5_CONFIG}.toml" "$algo" "$EXP5_WRITES" "$DURATION" exponential \
-    "$SPEEDUP" "" "$KEYS" "$skew" "$KEYS" "$conflicts"
-}
-
 function main() {
   if [[ $# -eq 0 ]]; then show_help; exit 0; fi
 
@@ -215,8 +176,7 @@ function main() {
     "exp-2") exp-2 ;;
     "exp-3") exp-3 ;;
     "exp-4") exp-4 ;;
-    "exp-5") exp-5 ;;
-    "all")   exp-1; exp-2; exp-3; exp-5 ;;
+    "all")   exp-1; exp-2; exp-3 ;;
     "help"|"-h"|"--help") show_help ;;
     *) echo "Error: Unknown command '$1'"; echo; show_help; exit 1 ;;
   esac
