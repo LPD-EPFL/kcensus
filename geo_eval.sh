@@ -112,24 +112,36 @@ function teardown_on_abort() {
 # quality failure is retryable, except on the final attempt: keeping that result is preferable to
 # failing an entire deployment after exhausting the available samples. Checker errors are never
 # ignored.
+# Exit codes of graphs/check_expected_latency.py.
+CHECK_LATENCY_VIOLATION=1
+CHECK_STALL=3
+# A run the quality checker rejects is worth more attempts than the default: whatever it
+# caught -- a stall, or latency simply above what the deployment should produce -- says the
+# measurement was disturbed rather than that the rung is past capacity, so another attempt has
+# a real chance of coming back clean. `run` raises its budget to this, keeping `MAX_ATTEMPTS`
+# when that is already larger. A run killed by its own deadline earns the same only when its
+# partial logs show a stall; otherwise it really is over capacity and retrying will not help.
+QUALITY_MAX_ATTEMPTS=4
+# Set by `latency_quality_passes` and `run_stalled` for the retry loop to read.
+LAST_RUN_STALLED=0
+
 function latency_quality_passes() {
   local resultPath="$1"
   local failedPath="$2"
-  local attempt="$3"
-  local maxAttempts="$4"
   local checkerStatus=0
 
   python3 "$(dirname "$0")/graphs/check_expected_latency.py" "${resultPath}" || checkerStatus=$?
+  LAST_RUN_STALLED=0
+  if [ "${checkerStatus}" -eq "${CHECK_STALL}" ]; then
+    LAST_RUN_STALLED=1
+  fi
   if [ "${checkerStatus}" -eq 0 ]; then
     return 0
   fi
-  if [ "${checkerStatus}" -ne 1 ]; then
+  if [ "${checkerStatus}" -ne "${CHECK_LATENCY_VIOLATION}" ] \
+      && [ "${checkerStatus}" -ne "${CHECK_STALL}" ]; then
     echo "--> ERROR: latency quality checker exited ${checkerStatus}." >&2
     return "${checkerStatus}"
-  fi
-  if [ "${attempt}" -eq "${maxAttempts}" ]; then
-    echo "--> WARNING: final attempt failed latency quality checks; keeping it anyway." >&2
-    return 0
   fi
 
   if ! mkdir -p "${failedPath}" || ! cp -a "${resultPath}/." "${failedPath}/"; then
@@ -138,6 +150,21 @@ function latency_quality_passes() {
   fi
   echo "--> Latency quality checks failed; output kept in ${failedPath}." >&2
   return 1
+}
+
+# Whether the partial logs of a run that never finished show a stall.
+#
+# A run killed by its own deadline still wrote everything it executed before it stalled, so the
+# profile is there to read. Without this a stall that pushed a rung over its deadline would be
+# indistinguishable from that rung simply being past the deployment's capacity.
+function run_stalled() {
+  local resultPath="$1" checkerStatus=0
+  python3 "$(dirname "$0")/graphs/check_expected_latency.py" "${resultPath}" \
+    > /dev/null 2>&1 || checkerStatus=$?
+  LAST_RUN_STALLED=0
+  if [ "${checkerStatus}" -eq "${CHECK_STALL}" ]; then
+    LAST_RUN_STALLED=1
+  fi
 }
 
 function run() {
@@ -165,8 +192,11 @@ function run() {
   local proposer_count="$(digits "$configName")"
   local per_proposer_throughput; per_proposer_throughput="$(per_proposer_rate "$throughput" "$proposer_count")"
 
-  local attempt
-  for attempt in $(seq 1 "${MAX_ATTEMPTS}"); do
+  # The budget starts at `MAX_ATTEMPTS` and is raised the first time a run looks disturbed
+  # rather than over capacity, so such a run gets `max(MAX_ATTEMPTS, QUALITY_MAX_ATTEMPTS)`
+  # chances to come back clean.
+  local attempt=1 limit="${MAX_ATTEMPTS}"
+  while [ "${attempt}" -le "${limit}" ]; do
     local failedPath="${ABSOLUTE_BASE_LOG_DIR}/failed/${title}/attempt=${attempt}"
     if (
       cd deployment/ansible
@@ -185,19 +215,40 @@ function run() {
         -e "result_path=${resultPath}" \
         -e "failed_path=${failedPath}"
     ); then
-      if latency_quality_passes "${resultPath}" "${failedPath}" "${attempt}" "${MAX_ATTEMPTS}"; then
+      if latency_quality_passes "${resultPath}" "${failedPath}"; then
         break
       fi
+      local quality_failure=1 disturbed=1
+      local disturbed_reason="Failed the quality checks"
+    else
+      # The run never finished -- its own deadline, or a crash. It still logged everything it
+      # executed first, so a stall that caused the deadline is visible in what is there.
+      run_stalled "${resultPath}"
+      local quality_failure=0 disturbed="${LAST_RUN_STALLED}"
+      local disturbed_reason="Stalled mid-run rather than saturated"
     fi
-    echo "--> Attempt ${attempt}/${MAX_ATTEMPTS} failed: ${algo} on ${configName} (faults=${faults})" >&2
-    if [ "${attempt}" -eq "${MAX_ATTEMPTS}" ]; then
-      echo "--> FAILED after ${MAX_ATTEMPTS} attempts: ${title}" >&2
+
+    if [ "${disturbed}" -eq 1 ] && [ "${limit}" -lt "${QUALITY_MAX_ATTEMPTS}" ]; then
+      limit="${QUALITY_MAX_ATTEMPTS}"
+      echo "--> ${disturbed_reason}; allowing up to ${limit} attempts." >&2
+    fi
+
+    echo "--> Attempt ${attempt}/${limit} failed: ${algo} on ${configName} (faults=${faults})" >&2
+    if [ "${attempt}" -ge "${limit}" ]; then
+      # A quality failure on the last attempt is kept rather than discarded: it is a measured
+      # run, only a worse one than expected. A run that never finished is a failure outright.
+      if [ "${quality_failure}" -eq 1 ]; then
+        echo "--> WARNING: final attempt failed the quality checks; keeping it anyway." >&2
+        break
+      fi
+      echo "--> FAILED after ${limit} attempts: ${title}" >&2
       return 1
     fi
     # A crashed run can leave a kcensus process alive. Cleanup does not return until all such
     # processes are gone and port 8000 is no longer listening.
     cleanup_processes "${expId}"
     retry_backoff "${attempt}"
+    attempt=$((attempt + 1))
   done
   echo "--> COMPLETED. Logs are in ${resultPath}"
 }

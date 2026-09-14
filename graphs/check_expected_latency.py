@@ -44,6 +44,9 @@ UNIT_TO_MS = {
 # Neither recovery nor duration is required and no window is excluded: a stall in the last
 # twentieth of a run is as good a reason to discard it as one in the middle, and requiring a
 # return to baseline would systematically miss exactly those.
+# Kept distinct from the 1 that a latency-expectation violation exits with, and from the 2
+# the runner treats as "the checker itself broke".
+STALL_EXIT_CODE = 3
 STALL_WINDOWS = 20
 STALL_WINDOW_QUANTILE = 5
 STALL_NEIGHBOUR_QUANTILE = 40
@@ -272,7 +275,13 @@ def main() -> int:
         f"found {len(violations)} experiments with violations and {len(stalls)} with a "
         f"mid-run stall; skipped {incomplete} incomplete process logs."
     )
-    return 1 if violations or stalls else 0
+    # A stall is an artifact of the measurement rather than a property of the run, so the
+    # runner distinguishes it: it is worth more attempts than a run that is merely slower
+    # than it should be. Reported even when there are also latency violations, since the
+    # stall is the one that says another attempt is likely to look different.
+    if stalls:
+        return STALL_EXIT_CODE
+    return 1 if violations else 0
 
 
 if __name__ == "__main__":
