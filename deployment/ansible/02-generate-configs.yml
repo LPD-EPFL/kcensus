@@ -3,6 +3,7 @@
   hosts: kcensus_nodes
   gather_facts: no
   strategy: free
+  any_errors_fatal: true
   tasks:
     - name: Generate dynamic region list
       run_once: true
@@ -103,6 +104,21 @@
   vars:
     master_config_path: "/tmp/master-config.json"
   tasks:
+    # A host whose ping task failed keeps its place in `groups['kcensus_nodes']` but has no
+    # `latencies`, and the matrix template below renders nothing for it rather than raising:
+    # its row comes out as `[0.0]`, and the ragged matrix surfaces much later as an IndexError
+    # in generate_sub_config.py.
+    - name: Fail if any node produced no latency measurements
+      run_once: true
+      delegate_to: localhost
+      vars:
+        silent_nodes: "{{ groups['kcensus_nodes'] | difference(ansible_play_hosts) }}"
+      ansible.builtin.fail:
+        msg: >-
+          No latency measurements from {{ silent_nodes | join(', ') }};
+          the latency matrix would be ragged.
+      when: silent_nodes | length > 0
+
     - name: Assemble master configuration on the control node
       run_once: true
       delegate_to: localhost
