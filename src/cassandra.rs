@@ -266,7 +266,8 @@ impl RequestInterval {
         }
     }
 
-    fn next(&mut self, last: &Instant) -> Instant {
+    /// The next arrival after `last`, at `rate_scale` times the target rate.
+    fn next(&mut self, last: &Instant, rate_scale: f32) -> Instant {
         let secs = match self {
             RequestInterval::Exponential { distribution } => distribution.sample(&mut rand::rng()),
             RequestInterval::Constant { reqs_per_second } => {
@@ -277,11 +278,41 @@ impl RequestInterval {
                 }
             }
         };
+        let secs = secs / rate_scale;
         if secs.is_infinite() || secs.is_nan() {
             return *last + Duration::from_secs(1 << 30);
         }
         *last + Duration::from_secs_f32(secs)
     }
+}
+
+/// Where the ramp opens, in requests per second across the deployment. A run at or below this
+/// rate is not ramped at all: it is the rate every experiment but the load ladder offers, and
+/// the deployments take it from a standing start.
+pub const RAMP_START_THROUGHPUT: f32 = 1000.;
+
+/// The arrival schedule is absolute: `next` advances from the previous *scheduled* time, so a
+/// client that cannot keep up never forgives the deficit, and repays it at the rate the
+/// deployment has to spare. Near the knee that is a small margin, which is why a stumble in the
+/// first moments of a run -- cold page tables, an unfilled shard pool, TCP still in slow start --
+/// shows up as seconds of latency that decay across the whole measurement window. Opening at
+/// `ramp_start` of the target rate and reaching the full rate over the first half of the warmup
+/// keeps the deficit from forming, so what remains of a rising profile is saturation rather than
+/// a cold start.
+fn rate_scale(
+    scheduled_time: Instant,
+    warmup_start: Instant,
+    ramp_end: Instant,
+    ramp_start: f32,
+) -> f32 {
+    if ramp_end <= warmup_start || ramp_end <= scheduled_time || 1. <= ramp_start {
+        return 1.;
+    }
+    let progress = scheduled_time
+        .saturating_duration_since(warmup_start)
+        .as_secs_f32()
+        / ramp_end.duration_since(warmup_start).as_secs_f32();
+    ramp_start + (1. - ramp_start) * progress
 }
 
 pub struct Workload {
@@ -290,6 +321,8 @@ pub struct Workload {
     pub sustain: Duration,
     pub rw_ratio: f32, // 0 = 100% reads, 1 = 100 %writes
     pub interval: RequestInterval,
+    /// The share of the target rate the run opens at; 1 offers the full rate from the start.
+    pub ramp_start: f32,
     pub key_distribution: rand_distr::Zipf<f64>,
     pub shards: usize,
     pub no_conflicts: bool,
@@ -384,6 +417,7 @@ impl Client {
 
     pub async fn run(mut self, mut workload: Workload) {
         let warmup_start = Instant::now();
+        let ramp_end = warmup_start + workload.warmup / 2;
         let warmup_end = warmup_start + workload.warmup;
         let sustain_start = warmup_end + workload.duration;
         let sustain_end = sustain_start + workload.sustain;
@@ -404,7 +438,10 @@ impl Client {
         let mut total_latency = Duration::ZERO;
 
         // Set initial delay for first request
-        scheduled_time = workload.interval.next(&scheduled_time);
+        scheduled_time = workload.interval.next(
+            &scheduled_time,
+            rate_scale(scheduled_time, warmup_start, ramp_end, workload.ramp_start),
+        );
         if sustain_end < scheduled_time {
             next_request = None;
         } else {
@@ -438,7 +475,10 @@ impl Client {
                         next_request = Some(
                             self.generate_request(&mut workload, current_request_id as u64)
                         );
-                        scheduled_time = workload.interval.next(&scheduled_time);
+                        scheduled_time = workload.interval.next(
+                            &scheduled_time,
+                            rate_scale(scheduled_time, warmup_start, ramp_end, workload.ramp_start),
+                        );
                         if sustain_end < scheduled_time {
                             next_request = None;
                         } else {

@@ -296,9 +296,19 @@ pub async fn run() -> io::Result<()> {
         0
     };
 
+    // `-t` is one proposer's share, so the ramp's floor is compared against what the whole
+    // deployment offers.
+    let offered_throughput = args.throughput * process_count as f32;
+    let ramp_start = if offered_throughput > cassandra::RAMP_START_THROUGHPUT {
+        cassandra::RAMP_START_THROUGHPUT / offered_throughput
+    } else {
+        1.
+    };
+
     let workload = cassandra::Workload {
         key_distribution: rand_distr::Zipf::new(args.keys as f64, args.skew)
             .expect("Incorrect skew"),
+        ramp_start,
         shards,
         duration,
         warmup,

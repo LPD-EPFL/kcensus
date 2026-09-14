@@ -9,7 +9,8 @@
 # Not shared: how a run is executed (Ansible on EC2 vs local processes) and the AWS-only
 # provisioning, retry-backoff and teardown machinery.
 
-# This order is intentionnal: it makes sure paxos (unplotted) serves as warmup for the switch caches.
+# This order is intentionnal: it makes sure paxos (unplotted) serves as warmup for the switch caches,
+# and keeps the most important baselines (epaxos and swiftpaxos) close to kcensus in run order.
 REPLICATED_ALGOS=(paxos "multi-paxos" pando epaxos kcensus "swift-paxos")
 ALGOS=("${REPLICATED_ALGOS[@]}")
 
@@ -43,10 +44,10 @@ EXP5_SKEWS=() # No Skews, since EXP5_LOAD_SKEWS lists those and BASELINE_DURATIO
 # that could. Walked per algorithm and per skew: they meet their walls decades apart, so a
 # shared ladder spends most of its runs on rates one algorithm cannot reach and another
 # passed long ago.
-EXP5_LADDER_START=500
-EXP5_LADDER_END=128000
-# Multiples of the last sustained rung, once the wall is found.
-EXP5_LADDER_REFINE=(0.75 1.25 1.5 1.75 2 2.5 3)
+EXP5_LADDER_START=500 # Just to have a point bellow 1000
+EXP5_LADDER_END=1024000 # Way too large, just in case (likely to stop before 64k anyway)
+# Multiples of the last sustained rung, once the wall is found. (Also going too far, just in case)
+EXP5_LADDER_REFINE=(0.75 1.25 1.5 1.75 2 2.5 3 3.5 4 5 6 8 12 16 32)
 EXP5_CDF_THROUGHPUT=1000
 EXP5_LOAD_SKEWS=(0 0.99)
 

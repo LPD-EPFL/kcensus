@@ -352,7 +352,9 @@ function exp-5() {
 
   local configName="${EXP5_CONFIG}"
   local EXPERIMENT_ID; EXPERIMENT_ID="$(experiment_id "exp-5")"
-  local varFile="${CONFIGS[$configName]}"
+  # The ladder is the only experiment whose offered rate can outruns t3.medium's CPU-credit
+  # baseline, so it takes the same region set on a non-burstable instance type.
+  local varFile="deployment/terraform/regions/ring-7-load.tfvars"
 
   # The ladder walks past what the deployment sustains, so failures at the top are expected
   # and a rung is only believed unsustainable once every attempt has failed.

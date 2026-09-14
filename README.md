@@ -310,6 +310,12 @@ Choose `<tfvars-path>` from the region set in `<experiment-id>`:
 | `aws-north-america-7` | `north-america-7.tfvars` |
 | `aws-east-asia-7`     | `east-asia-7.tfvars`     |
 
+> **Note**: `exp-5` also deploys into the `aws-ring-7` region set, but from
+> `ring-7-load.tfvars`, which asks for `c6i.large` instead of the `t3.medium` every other
+> experiment uses. `exp-5` is the only experiment whose offered rate exceeds a `t3.medium`'s
+> CPU-credit baseline, where the burstable instance's variable clock shows up as run-to-run
+> noise. Destroying `exp-5` therefore takes `ring-7-load.tfvars`, as shown below.
+
 This single command tears down every instance in one region set:
 
 ```bash
@@ -322,7 +328,7 @@ your own:
 ```bash
 ./eval.sh destroy deployment/terraform/regions/ring-7.tfvars exp-2-reviewer-a  # exp-2 (faults)
 ./eval.sh destroy deployment/terraform/regions/aws-31.tfvars exp-3-reviewer-a  # exp-3 (scalability/resources)
-./eval.sh destroy deployment/terraform/regions/ring-7.tfvars exp-5-reviewer-a  # exp-5 (contention/load)
+./eval.sh destroy deployment/terraform/regions/ring-7-load.tfvars exp-5-reviewer-a  # exp-5 (contention/load)
 ```
 
 Rerun `check-aws-cleanup.sh --run-id reviewer-a` after manual cleanup to verify that all instances are terminated.
