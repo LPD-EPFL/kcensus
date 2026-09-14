@@ -450,28 +450,50 @@ function exp-5-ladder() {
   done
 }
 
-# Spreads `EXP5_LADDER_REFINE` around the rate a group of series last sustained.
+# Walks from three quarters of the rate a group of series last sustained up to twice it, which
+# is where phase 1's doubling puts the wall.
+#
+# The rungs are one step apart -- a quarter of the sustained rate, capped at
+# `EXP5_REFINE_STEP_CAP` -- so the spacing stays bounded as the rates grow instead of widening
+# with them. The sustained rate itself is skipped, phase 1 having already measured it, and the
+# walk stops short of twice it, which phase 1 found unsustainable.
 #
 # Failures are handled as in phase 1: a rate that fails is retried once at the same rate, at
 # the start of the next round, so the series is back on the shared rate before that round ends
 # and the figure keeps comparing algorithms measured minutes apart. Failing one rate twice
 # ends the series -- one failure is as likely to be a slow instance as a real wall.
+#
+# That second failure is the series' wall, and it is then measured half a step and three halves
+# of a step below it, placing two points inside the step the wall falls in. Groups that
+# sustained less than `EXP5_PROBE_MIN_SUSTAINED` skip those two runs.
 function exp-5-refine() {
   local expId="$1" configName="$2" sustained="$3"; shift 3
   local active=("$@") survivors=()
-  local -A pending=()
-  local factor rung entry
+  local -A pending=() wall=() probes=()
+  local rung entry step half first
+  local -a rungs=()
 
-  echo "--> refining around ${sustained} req/s: ${active[*]}"
-  for factor in "${EXP5_LADDER_REFINE[@]}"; do
+  step="$(awk -v s="$sustained" -v cap="$EXP5_REFINE_STEP_CAP" \
+    'BEGIN { q = int(s / 4); printf "%d", (q < cap ? q : cap) }')"
+  [ "${step}" -gt 0 ] || step=1
+
+  first="$(awk -v s="$sustained" 'BEGIN { printf "%d", s * 0.75 + 0.5 }')"
+  for ((rung = first; rung < 4 * sustained; rung += step)); do
+    if [ "${rung}" -ne "${sustained}" ]; then
+      rungs+=("${rung}")
+    fi
+  done
+
+  echo "--> refining around ${sustained} req/s in steps of ${step}: ${active[*]}"
+  for rung in "${rungs[@]}"; do
     if [ "${#active[@]}" -eq 0 ]; then
       break
     fi
-    rung="$(awk -v s="$sustained" -v f="$factor" 'BEGIN { printf "%d", s * f + 0.5 }')"
     survivors=()
     for entry in "${active[@]}"; do
       if [ -n "${pending[$entry]:-}" ]; then
         if ! exp-5-series-run "$expId" "$configName" "$entry" "${pending[$entry]}"; then
+          wall["$entry"]="${pending[$entry]}"
           continue
         fi
         unset "pending[$entry]"
@@ -482,6 +504,25 @@ function exp-5-refine() {
       survivors+=("$entry")
     done
     active=("${survivors[@]}")
+  done
+
+  if [ "${sustained}" -lt "${EXP5_PROBE_MIN_SUSTAINED}" ]; then
+    return 0
+  fi
+
+  # Half-step probes, rate-major like every other round.
+  for entry in "${!wall[@]}"; do
+    for half_steps in 3 1; do
+      rung=$(( ${wall[$entry]} - half_steps * step / 2 ))
+      if [ "${rung}" -gt 0 ]; then
+        probes["$rung"]+="${entry} "
+      fi
+    done
+  done
+  for rung in $(printf '%s\n' "${!probes[@]}" | sort -n); do
+    for entry in ${probes[$rung]}; do
+      exp-5-series-run "$expId" "$configName" "$entry" "$rung" || true
+    done
   done
 }
 

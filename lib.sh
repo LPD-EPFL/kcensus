@@ -46,8 +46,10 @@ EXP5_SKEWS=() # No Skews, since EXP5_LOAD_SKEWS lists those and BASELINE_DURATIO
 # passed long ago.
 EXP5_LADDER_START=500 # Just to have a point bellow 1000
 EXP5_LADDER_END=1024000 # Way too large, just in case (likely to stop before 64k anyway)
-# Multiples of the last sustained rung, once the wall is found. (Also going too far, just in case)
-EXP5_LADDER_REFINE=(0.75 1.25 1.5 1.75 2 2.5 3 3.5 4 5 6 8 12 16 32)
+# One refinement step: a quarter of the last sustained rung, capped at this many req/s.
+EXP5_REFINE_STEP_CAP=4000
+# Series that sustained less than this skip the two half-step probes below their wall.
+EXP5_PROBE_MIN_SUSTAINED=4000
 EXP5_CDF_THROUGHPUT=1000
 EXP5_LOAD_SKEWS=(0 0.99)
 
