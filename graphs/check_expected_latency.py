@@ -28,13 +28,81 @@ UNIT_TO_MS = {
 }
 
 
+# A stall is a discontinuity in the run's latency profile: one window is slower than the
+# windows either side of it. Offered load alone never does that -- a deployment at its capacity
+# limit ramps gradually -- so an abrupt step means something outside the protocol changed state
+# mid-run, and the window is no longer comparable to its neighbours.
+#
+# The comparison is the low end of the suspect window against a *higher* quantile of its
+# neighbours, because a stall lifts the whole distribution while a mode shift only moves the
+# middle. Comparing like quantiles on both sides cannot tell those apart: any bi- or
+# multi-stable latency -- the 50:50 read/write mix, or a fast path against a slow one -- steps
+# between two stable values as the mix drifts, and a median-to-median test reads that as a
+# stall. Requiring the window's 20th percentile to exceed twice its neighbours' 40th means even
+# its fastest fifth is slower than much of theirs, which a mode shift does not achieve.
+#
+# Neither recovery nor duration is required and no window is excluded: a stall in the last
+# twentieth of a run is as good a reason to discard it as one in the middle, and requiring a
+# return to baseline would systematically miss exactly those.
+STALL_WINDOWS = 20
+STALL_WINDOW_QUANTILE = 5
+STALL_NEIGHBOUR_QUANTILE = 40
+STALL_FACTOR = 3.0
+STALL_MIN_SAMPLES = 200
+
+
+def quantile(sorted_values: list[float], percent: int) -> float:
+    index = percent * len(sorted_values) // 100
+    return sorted_values[min(index, len(sorted_values) - 1)]
+
+
 def is_target_experiment(path: Path, log_dir: Path) -> bool:
     parts = path.relative_to(log_dir).parts or path.parts
     return "t=1000" in parts and "conflicts=false" in parts
 
+
 def is_faults(path: Path, log_dir: Path) -> bool:
     parts = path.relative_to(log_dir).parts or path.parts
     return "f=" not in parts
+
+
+def stall_ratio(samples: list[tuple[int, float, str]]) -> float | None:
+    """How far the worst window stands out from its neighbours, or `None` if none does.
+
+    Requests carry a per-client `request_id` that increases with time, so ordering by it and
+    cutting into equal windows recovers the run's profile without needing a timestamp. Issue
+    order rather than completion order is what keeps the final window unbiased: the requests
+    issued last still have the sustain phase to finish in.
+
+    A neighbour is compared at its own quantile rather than pooled, and the *lower* of the two
+    is used, so that a stall spanning several windows is still caught at its edge, where one
+    side is undisturbed.
+    """
+    worst = None
+    for operation in ("Get", "Put"):
+        latencies = [latency for _, latency, op in sorted(samples) if op == operation]
+        if len(latencies) < STALL_MIN_SAMPLES:
+            continue
+        count = len(latencies)
+        windows = [
+            sorted(latencies[i * count // STALL_WINDOWS : (i + 1) * count // STALL_WINDOWS])
+            for i in range(STALL_WINDOWS)
+        ]
+        low = [quantile(window, STALL_WINDOW_QUANTILE) for window in windows]
+        neighbour = [quantile(window, STALL_NEIGHBOUR_QUANTILE) for window in windows]
+        for index in range(STALL_WINDOWS):
+            around = [
+                neighbour[side]
+                for side in (index - 1, index + 1)
+                if 0 <= side < STALL_WINDOWS
+            ]
+            calmest = min(around)
+            if calmest <= 0:
+                continue
+            ratio = low[index] / calmest
+            if ratio > STALL_FACTOR and (worst is None or ratio > worst):
+                worst = ratio
+    return worst
 
 
 def discover_process_logs(log_dir: Path) -> dict[Path, dict[int, Path]]:
@@ -43,12 +111,12 @@ def discover_process_logs(log_dir: Path) -> dict[Path, dict[int, Path]]:
 
     for path in log_dir.rglob("*.stdout"):
         match = STDOUT_RE.fullmatch(path.name)
-        if match and is_target_experiment(path.parent, log_dir):
+        if match:
             experiments[path.parent][int(match.group("pid"))] = path
 
     for path in log_dir.rglob("server_*.log"):
         match = SERVER_LOG_RE.fullmatch(path.name)
-        if match and is_target_experiment(path.parent, log_dir):
+        if match:
             pid = int(match.group("pid"))
             current = experiments[path.parent].get(pid)
             if current is None or path.stat().st_mtime_ns > current.stat().st_mtime_ns:
@@ -59,8 +127,9 @@ def discover_process_logs(log_dir: Path) -> dict[Path, dict[int, Path]]:
 
 def parse_process_log(
     path: Path,
-) -> tuple[float | None, float | None, float | None, float | None]:
+) -> tuple[float | None, float | None, float | None, float | None, float | None]:
     executed_latencies_ms = []
+    profile_samples: list[tuple[int, float, str]] = []
     expected_ms = None
 
     with path.open(encoding="utf-8", errors="replace") as log:
@@ -68,7 +137,13 @@ def parse_process_log(
             if line.startswith(EXECUTED_PREFIX):
                 try:
                     payload = json.loads(line.split(" | ", maxsplit=1)[1])
-                    executed_latencies_ms.append(duration_to_ms(payload["latency"]))
+                    latency_ms = duration_to_ms(payload["latency"])
+                    executed_latencies_ms.append(latency_ms)
+                    response = payload["response"]
+                    operation = "Get" if response.get("Get") else "Put"
+                    profile_samples.append(
+                        (response[operation]["request_id"], latency_ms, operation)
+                    )
                 except (IndexError, KeyError, TypeError, ValueError, json.JSONDecodeError):
                     pass
 
@@ -89,7 +164,7 @@ def parse_process_log(
     )
     p95_ms = percentiles[95] if percentiles else None
     p99_ms = percentiles[99] if percentiles else None
-    return avg_ms, p95_ms, p99_ms, expected_ms
+    return avg_ms, p95_ms, p99_ms, expected_ms, stall_ratio(profile_samples)
 
 
 def main() -> int:
@@ -115,14 +190,23 @@ def main() -> int:
     checked = 0
     incomplete = 0
 
+    stalls: dict[Path, list[tuple[int, float]]] = defaultdict(list)
+
     for experiment in sorted(experiments.keys()):
         process_logs = experiments[experiment]
+        expected_applies = is_target_experiment(experiment, log_dir)
         for pid, path in process_logs.items():
             try:
-                avg_ms, p95_ms, p99_ms, expected_ms = parse_process_log(path)
+                avg_ms, p95_ms, p99_ms, expected_ms, stall = parse_process_log(path)
             except OSError as error:
                 print(f"warning: could not read {path}: {error}", file=sys.stderr)
                 incomplete += 1
+                continue
+
+            if stall is not None:
+                stalls[experiment].append((pid, stall))
+
+            if not expected_applies:
                 continue
 
             if avg_ms is None or p95_ms is None or p99_ms is None or expected_ms is None:
@@ -147,8 +231,17 @@ def main() -> int:
                     (pid, expected_ms, avg_ms, avg_limit, p95_ms, p95_limit, p99_ms, p99_limit)
                 )
 
+        if experiment in stalls:
+            print(experiment.relative_to(log_dir.parent))
+            for pid, ratio in sorted(stalls[experiment]):
+                print(
+                    f"  process {pid:>2}: one window of the run was {ratio:.1f}x slower than"
+                    f" the windows around it. That is a stall, not saturation; rerun."
+                )
+
         if experiment not in violations:
-            print(experiment.relative_to(log_dir.parent), "is clean !")
+            if experiment not in stalls:
+                print(experiment.relative_to(log_dir.parent), "is clean !")
             continue
         print(experiment.relative_to(log_dir.parent))
         for pid, expected_ms, avg_ms, avg_limit, p95_ms, p95_limit, p99_ms, p99_limit  in sorted(
@@ -176,10 +269,10 @@ def main() -> int:
 
     print(
         f"Checked {checked} process logs in {len(experiments)} experiments; "
-        f"found {len(violations)} experiments with violations; "
-        f"skipped {incomplete} incomplete process logs."
+        f"found {len(violations)} experiments with violations and {len(stalls)} with a "
+        f"mid-run stall; skipped {incomplete} incomplete process logs."
     )
-    return 1 if violations else 0
+    return 1 if violations or stalls else 0
 
 
 if __name__ == "__main__":
