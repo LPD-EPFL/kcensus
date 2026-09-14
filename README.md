@@ -78,12 +78,12 @@ The experiments that produce the paper's experimental figures are described belo
 
 | Experiment | Description                                                                                                 | Figures | Local runtime | AWS runtime |
 |------------|-------------------------------------------------------------------------------------------------------------|---------|---------------|-------------|
-| `exp-1`    | End-to-end latency in four 7-replica deployments: Northern Hemisphere, Europe, North America, and East Asia | 1, 7    | 45min         | 1h          |
-| `exp-2`    | Northern Hemisphere, with every combination of up to 3 crashed replicas                                     | 8       | 1h55min       | 2h40min     |
-| `exp-3`    | Latency and resource scaling from 3 to 31 replicas worldwide, and requirements optimization time            | 9-12    | 2h30min       | 1h30min     |
-| `exp-5`    | Contention and throughput sweep in the 7-replica Northern Hemisphere deployment                          | 13, 14  | AWS only      | 6h |
+| `exp-1`    | End-to-end latency in four 7-replica deployments: Northern Hemisphere, Europe, North America, and East Asia | 1, 7    | 30min         | 45min          |
+| `exp-2`    | Northern Hemisphere, with every combination of up to 3 crashed replicas                                     | 8       | 2h15min       | 3h15min     |
+| `exp-3`    | Latency and resource scaling from 3 to 31 replicas worldwide, and requirements optimization time            | 9-12    | 3h30min       | 1h30min     |
+| `exp-5`    | Contention and throughput sweep in the 7-replica Northern Hemisphere deployment                          | 13, 14  | AWS only        | 3h15min |
 
-Runtimes are approximate. Experiments 1-3 total about 5 hours for either workflow.
+Runtimes are approximate. Experiments 1-3 total about 5 to 6 hours for either workflow.
 
 Each figure writes a `.pdf` and a `.txt` containing the underlying numbers to `graphs/plots/`:
 
@@ -152,7 +152,7 @@ To generate every locally supported experimental figure:
 ./plot.sh --local all
 ```
 
-The local suite takes approximately 5 hours.
+The local suite takes approximately 6 hours.
 
 ### What is different from the AWS runs
 
