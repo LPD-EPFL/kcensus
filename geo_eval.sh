@@ -452,12 +452,13 @@ function exp-5-ladder() {
   exp-5-refine "$expId" "$configName" "${pairs[@]}"
 }
 
-# One run, unless this series already has an outcome at this rate.
+# One run, unless this series already sustained this rate. A rate it failed is run again:
+# every caller that comes back to one is giving it a second chance.
 function exp-5-attempt() {
   local expId="$1" configName="$2" entry="$3" rung="$4"
   local key="${entry}@${rung}"
-  if [ -n "${EXP5_OUTCOMES[$key]:-}" ]; then
-    return "${EXP5_OUTCOMES[$key]}"
+  if [ "${EXP5_OUTCOMES[$key]:-1}" -eq 0 ]; then
+    return 0
   fi
   if exp-5-series-run "$expId" "$configName" "$entry" "$rung"; then
     EXP5_OUTCOMES["$key"]=0
@@ -473,14 +474,16 @@ function exp-5-attempt() {
 # step opens at half the sustained rate and the walk adds it. A step that is still wide -- over
 # `EXP5_STEP_COARSE`, or over an eighth of the rate reached and over `EXP5_STEP_FLOOR` -- is
 # halved after every rung, so the walk closes in whether the wall is just above the sustained
-# rate or nearly at twice it. The series ends on a rate that failed with the step already as
-# fine as it goes, which pins the wall to within one step.
+# rate or nearly at twice it. A rate that fails without narrowing the step is tried once more
+# before it is believed, one failure being as likely to be a slow instance as a real wall, so a
+# series ends on a rate that failed twice with the step already as fine as it goes. That pins
+# the wall to within one step.
 #
 # Series advance one rung per round rather than one series at a time, so two of them are still
 # measured minutes rather than hours apart once their rates have diverged.
 function exp-5-refine() {
   local expId="$1" configName="$2"; shift 2
-  local -A sustained=() step=()
+  local -A sustained=() step=() missed=()
   local -a series=() active=() survivors=()
   local entry rung successful reduce_step below
 
@@ -488,6 +491,7 @@ function exp-5-refine() {
     series+=("$1")
     sustained["$1"]="$2"
     step["$1"]=$(( $2 / 2 ))
+    missed["$1"]=0
     shift 2
   done
   active=("${series[@]}")
@@ -503,6 +507,7 @@ function exp-5-refine() {
       if exp-5-attempt "$expId" "$configName" "$entry" "$rung"; then
         successful=1
         sustained["$entry"]="$rung"
+        missed["$entry"]=0
       fi
       reduce_step=0
       if [ "${step[$entry]}" -gt "$EXP5_STEP_COARSE" ] \
@@ -513,18 +518,25 @@ function exp-5-refine() {
       fi
       if [ "$reduce_step" -eq 1 ] || [ "$successful" -eq 1 ]; then
         survivors+=("$entry")
+      elif [ "${missed[$entry]}" -eq 0 ]; then
+        missed["$entry"]=1
+        survivors+=("$entry")
       fi
     done
     active=("${survivors[@]}")
   done
 
   # Three rungs of the final step below where each series stopped, so the curve has points
-  # either side of the wall at the resolution the wall was found at.
+  # either side of the wall at the resolution the wall was found at. These sit under a rate the
+  # series sustained, so a failure is a disturbed run rather than a rate out of reach, and is
+  # worth the same second attempt the walk gives one.
   for below in 3 2 1; do
     for entry in "${series[@]}"; do
       rung=$(( sustained[$entry] - below * step[$entry] ))
       if [ "$rung" -gt 0 ]; then
-        exp-5-attempt "$expId" "$configName" "$entry" "$rung" || true
+        exp-5-attempt "$expId" "$configName" "$entry" "$rung" \
+          || exp-5-attempt "$expId" "$configName" "$entry" "$rung" \
+          || true
       fi
     done
   done
