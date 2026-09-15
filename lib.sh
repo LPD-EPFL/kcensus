@@ -46,10 +46,10 @@ EXP5_SKEWS=() # No Skews, since EXP5_LOAD_SKEWS lists those and BASELINE_DURATIO
 # passed long ago.
 EXP5_LADDER_START=500 # Just to have a point bellow 1000
 EXP5_LADDER_END=1024000 # Way too large, just in case (likely to stop before 64k anyway)
-# One refinement step: a quarter of the last sustained rung, capped at this many req/s.
-EXP5_REFINE_STEP_CAP=4000
-# Series that sustained less than this skip the two half-step probes below their wall.
-EXP5_PROBE_MIN_SUSTAINED=4000
+# Phase 2 halves its step whenever the step is wider than this, and never once it is this
+# narrow or finer than an eighth of the rate reached so far.
+EXP5_STEP_COARSE=2000
+EXP5_STEP_FLOOR=500
 EXP5_CDF_THROUGHPUT=1000
 EXP5_LOAD_SKEWS=(0 0.99)
 
