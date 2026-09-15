@@ -3,11 +3,28 @@
 import pathlib
 import sys
 
-# This file is needed to convert logs to correct format accepted by graphing scripts
+# Splits the combined `server_N.log` / `graph_bench.log` that older AWS runs fetched into the
+# `.stdout` and `.stderr` files the graphing scripts read. Runs fetch those two directly now, so
+# this only has work to do on trees from before that, and skips any log already split.
 
 ROOT_DIRECTORY = '../logs/'
 
+def is_split(log_file_path: pathlib.Path) -> bool:
+    """Whether this log's `.stdout` exists and is no older than the log itself."""
+    if log_file_path.name == "graph_bench.log":
+        stdout_name = "graph_bench.stdout"
+    else:
+        stdout_name = "".join(filter(str.isdigit, log_file_path.stem)) + ".stdout"
+    stdout_path = log_file_path.parent / stdout_name
+    return (
+        stdout_path.is_file()
+        and stdout_path.stat().st_mtime_ns >= log_file_path.stat().st_mtime_ns
+    )
+
+
 def process_log_file(log_file_path: pathlib.Path):
+    if is_split(log_file_path):
+        return
 
     try:
         content = log_file_path.read_text(encoding='utf-8')

@@ -26,10 +26,8 @@
       delegate_to: localhost
       run_once: true
       ansible.builtin.copy:
-        dest: "{{ result_path }}/graph_bench.log"
-        content: |
-          STDOUT:
-          {{ graph_bench_result.stdout | default('NO STDOUT CAPTURED') }}
-
-          STDERR:
-          {{ graph_bench_result.stderr | default('NO STDERR CAPTURED') }}
+        dest: "{{ result_path }}/graph_bench.{{ item }}"
+        content: "{{ graph_bench_result[item] | default('') }}\n"
+      loop:
+        - stdout
+        - stderr

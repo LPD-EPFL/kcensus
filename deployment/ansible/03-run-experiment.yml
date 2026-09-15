@@ -62,26 +62,14 @@
       register: job_result
       failed_when: false
 
-    # Assembled on the instance, in the shape the parsers already read, so that the fetch below
-    # moves one file per host and the controller never sits between a replica and its own log.
-    - name: Assemble this server's output
-      ansible.builtin.shell:
-        cmd: |
-          {
-            echo "STDOUT:"
-            cat run.out
-            echo
-            echo "STDERR:"
-            cat run.err
-          } > run.log
-        chdir: /home/ec2-user/kcensus_app
-      changed_when: true
-
     - name: Save output from each server
       ansible.builtin.fetch:
-        src: /home/ec2-user/kcensus_app/run.log
-        dest: "{{ result_path }}/server_{{ sub_exp_id }}.log"
+        src: "/home/ec2-user/kcensus_app/{{ item.src }}"
+        dest: "{{ result_path }}/{{ sub_exp_id }}.{{ item.ext }}"
         flat: yes
+      loop:
+        - { src: run.out, ext: stdout }
+        - { src: run.err, ext: stderr }
 
     # `copy` does not create its destination directory. `result_path` is made by the runner
     # before the play; `failed_path` is not, because it only applies to runs that fail -- so
@@ -111,8 +99,11 @@
         # `remote_src` because the delegate is localhost and the source is a path there, not
         # something to look up in the playbook's files.
         remote_src: yes
-        src: "{{ result_path }}/server_{{ sub_exp_id }}.log"
-        dest: "{{ failed_path }}/server_{{ sub_exp_id }}.log"
+        src: "{{ result_path }}/{{ sub_exp_id }}.{{ item }}"
+        dest: "{{ failed_path }}/{{ sub_exp_id }}.{{ item }}"
+      loop:
+        - stdout
+        - stderr
 
     - name: Record why each server failed
       delegate_to: localhost
@@ -121,7 +112,7 @@
         - ansible_play_hosts | map('extract', hostvars, 'job_result')
           | map(attribute='rc') | reject('equalto', 0) | list | length > 0
       ansible.builtin.copy:
-        dest: "{{ failed_path }}/server_{{ sub_exp_id }}.exit"
+        dest: "{{ failed_path }}/{{ sub_exp_id }}.exit"
         content: "EXIT CODE: {{ job_result.rc | default('unknown') }}\n"
 
     - name: Fail if this server's run failed
