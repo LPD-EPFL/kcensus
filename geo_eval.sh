@@ -124,6 +124,10 @@ CHECK_STALL=3
 QUALITY_MAX_ATTEMPTS=4
 # Set by `latency_quality_passes` and `run_stalled` for the retry loop to read.
 LAST_RUN_STALLED=0
+# Where `run` put the logs of the run it just completed.
+LAST_RUN_RESULT_PATH=""
+# Whether the run `exp-5-run` just judged was rejected for its latency alone.
+LAST_RUN_OVER_LATENCY_CAP=0
 
 function latency_quality_passes() {
   local resultPath="$1"
@@ -186,6 +190,7 @@ function run() {
   local title; title="$(make_title)"
   local resultPath="${ABSOLUTE_BASE_LOG_DIR}/${title}"
   mkdir -p "${resultPath}"
+  LAST_RUN_RESULT_PATH="${resultPath}"
 
   echo "--> RUNNING: ${title} (Exp ID: ${expId})"
 
@@ -422,16 +427,14 @@ function exp-5-ladder() {
     survivors=()
     for entry in "${active[@]}"; do
       if [ -n "${pending[$entry]:-}" ]; then
-        if ! exp-5-series-run "$expId" "$configName" "$entry" "${pending[$entry]}"; then
+        if ! exp-5-attempt "$expId" "$configName" "$entry" "${pending[$entry]}"; then
           continue
         fi
         sustained["$entry"]="${pending[$entry]}"
-        EXP5_OUTCOMES["${entry}@${pending[$entry]}"]=0
         unset "pending[$entry]"
       fi
-      if exp-5-series-run "$expId" "$configName" "$entry" "$throughput"; then
+      if exp-5-attempt "$expId" "$configName" "$entry" "$throughput"; then
         sustained["$entry"]="$throughput"
-        EXP5_OUTCOMES["${entry}@${throughput}"]=0
       else
         pending["$entry"]="$throughput"
       fi
@@ -452,19 +455,26 @@ function exp-5-ladder() {
   exp-5-refine "$expId" "$configName" "${pairs[@]}"
 }
 
-# One run, unless this series already sustained this rate. A rate it failed is run again:
-# every caller that comes back to one is giving it a second chance.
+# One run, and the verdict on it.
+#
+# Two verdicts are final and replay without running anything again: a rate the series sustained,
+# and one it measured cleanly but too slowly. Only a rate whose *run* failed is tried again,
+# every caller that comes back to one being there to give it a second chance -- a rate already
+# measured is not in want of one, and re-running it would only buy the same answer.
 function exp-5-attempt() {
   local expId="$1" configName="$2" entry="$3" rung="$4"
   local key="${entry}@${rung}"
-  if [ "${EXP5_OUTCOMES[$key]:-1}" -eq 0 ]; then
-    return 0
-  fi
+  case "${EXP5_OUTCOMES[$key]:-}" in
+    sustained) return 0 ;;
+    over-cap) return 1 ;;
+  esac
   if exp-5-series-run "$expId" "$configName" "$entry" "$rung"; then
-    EXP5_OUTCOMES["$key"]=0
+    EXP5_OUTCOMES["$key"]=sustained
     return 0
   fi
-  EXP5_OUTCOMES["$key"]=1
+  if [ "${LAST_RUN_OVER_LATENCY_CAP}" -eq 1 ]; then
+    EXP5_OUTCOMES["$key"]=over-cap
+  fi
   return 1
 }
 
@@ -542,16 +552,38 @@ function exp-5-refine() {
   done
 }
 
+# One rung of the ladder. Not sustained if the run did not finish, and not sustained either if
+# it finished slowly: past the knee a deployment still answers every request, just far later
+# than it did a rung earlier, so latency is what says the wall has been reached rather than
+# whether the run survived. A run whose latency cannot be read is not sustained either, and
+# unlike a slow one it is left retryable -- nothing was measured, so nothing was learnt.
 function exp-5-run() {
   local expId="$1" configName="$2" algo="$3" throughput="$4" skew="$5" duration="$6"
   local conflicts="${7:-true}"
   local keys="$KEYS"
+  LAST_RUN_OVER_LATENCY_CAP=0
   if ! run "$expId" "$configName" "$algo" "$EXP5_WRITES" "$duration" "exponential" \
          "$throughput" "" "$keys" "$skew" "$keys" "$conflicts"; then
     echo "--> SKIPPED (not sustainable?): ${algo} t=${throughput} skew=${skew} k=${keys}" \
       "conflicts=${conflicts}" >&2
     return 1
   fi
+
+  local average
+  if ! average="$(python3 "$(dirname "$0")/graphs/run_average_latency.py" \
+      "${LAST_RUN_RESULT_PATH}")"; then
+    echo "--> NOT SUSTAINED (no average latency in ${LAST_RUN_RESULT_PATH}):" \
+      "${algo} t=${throughput} skew=${skew} k=${keys} conflicts=${conflicts}" >&2
+    return 1
+  fi
+  if awk -v avg="${average}" -v max="${EXP5_SUSTAINED_MAX_LATENCY_MS}" \
+      'BEGIN { exit !(avg > max) }'; then
+    echo "--> NOT SUSTAINED (average ${average} ms, over ${EXP5_SUSTAINED_MAX_LATENCY_MS} ms):" \
+      "${algo} t=${throughput} skew=${skew} k=${keys} conflicts=${conflicts}" >&2
+    LAST_RUN_OVER_LATENCY_CAP=1
+    return 1
+  fi
+  echo "--> sustained at ${average} ms average"
 }
 
 # Experiment 2: impact of failures on latency. Feeds Figure 8.

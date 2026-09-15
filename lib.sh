@@ -50,6 +50,8 @@ EXP5_LADDER_END=1024000 # Way too large, just in case (likely to stop before 64k
 # narrow or finer than an eighth of the rate reached so far.
 EXP5_STEP_COARSE=2000
 EXP5_STEP_FLOOR=500
+# A rung whose measured average latency is above this is the wall, however cleanly it ran.
+EXP5_SUSTAINED_MAX_LATENCY_MS=400
 EXP5_CDF_THROUGHPUT=1000
 EXP5_LOAD_SKEWS=(0 0.99)
 
