@@ -77,11 +77,11 @@ The experiments that produce the paper's experimental figures are described belo
 [local runs (§5)](#5-running-locally-without-aws) or [AWS runs (§6)](#6-running-experiments-on-aws).
 
 | Experiment | Description                                                                                                 | Figures | Local runtime | AWS runtime |
-|------------|-------------------------------------------------------------------------------------------------------------|---------|---------------|-------------|
-| `exp-1`    | End-to-end latency in four 7-replica deployments: Northern Hemisphere, Europe, North America, and East Asia | 1, 7    | 30min         | 45min          |
+|------------|-------------------------------------------------------------------------------------------------------------|---------|--------------|-------------|
+| `exp-1`    | End-to-end latency in four 7-replica deployments: Northern Hemisphere, Europe, North America, and East Asia | 1, 7    | 30min         | 45min       |
 | `exp-2`    | Northern Hemisphere, with every combination of up to 3 crashed replicas                                     | 8       | 2h15min       | 3h15min     |
 | `exp-3`    | Latency and resource scaling from 3 to 31 replicas worldwide, and requirements optimization time            | 9-12    | 3h30min       | 1h30min     |
-| `exp-5`    | Contention and throughput sweep in the 7-replica Northern Hemisphere deployment                          | 13, 14  | AWS only        | 3h15min |
+| `exp-5`    | Contention and throughput sweep in the 7-replica Northern Hemisphere deployment                             | 13, 14  | AWS only      | 3h          |
 
 Runtimes are approximate. Experiments 1-3 total about 5 to 6 hours for either workflow.
 
@@ -261,7 +261,7 @@ To run all experiments:
 ./plot.sh all                      # Figures 1 and 7-14
 ```
 
-> **Note**: The experiments take several hours and incur AWS costs - `exp-5` (load) dominates,
+> **Note**: The experiments take several hours and incur AWS costs - `exp-2` and `exp-5` dominate runtimes,
 > while `exp-3` holds 31 instances across every region for its whole duration.
 >
 > Each experiment destroys its own resources when it finishes, and attempts to do so if it gives
@@ -312,9 +312,9 @@ Choose `<tfvars-path>` from the region set in `<experiment-id>`:
 
 > **Note**: `exp-5` also deploys into the `aws-ring-7` region set, but from
 > `ring-7-load.tfvars`, which asks for `c6i.large` instead of the `t3.medium` every other
-> experiment uses. `exp-5` is the only experiment whose offered rate exceeds a `t3.medium`'s
-> CPU-credit baseline, where the burstable instance's variable clock shows up as run-to-run
-> noise. Destroying `exp-5` therefore takes `ring-7-load.tfvars`, as shown below.
+> experiment uses. `exp-5` is the only experiment where stability matters, and the burstable
+> instance's variable clock shows up as run-to-run noise.
+> Destroying `exp-5` therefore takes `ring-7-load.tfvars`, as shown below.
 
 This single command tears down every instance in one region set:
 
