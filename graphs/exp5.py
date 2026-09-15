@@ -3,7 +3,6 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 from math import ceil
-from statistics import median
 
 import logparser
 from common import ALGORITHMS, args
@@ -16,6 +15,8 @@ EXP5_INGRESS = "exponential"
 EXP5_ALGORITHMS = ALGORITHMS
 LOAD_EDGE_FRACTION = 0.1
 LOAD_DURATION_SECONDS = 10.0
+# The slowest share of an edge, dropped before averaging it.
+LOAD_DELTA_TRIM = 0.05
 
 WRITES = 0.5
 KEYS = 100000
@@ -117,6 +118,27 @@ def selected_workloads(candidates):
     return chosen
 
 
+def _request_id(item):
+    """The proposer's own sequence number for a request, or `None` if the shape is unexpected."""
+    response = item["response"]
+    for operation in ("Put", "Get"):
+        if operation in response:
+            return response[operation]["request_id"]
+    return None
+
+
+def _edge_latency(latencies):
+    """Mean latency of an edge, once its slowest `LOAD_DELTA_TRIM` are dropped.
+
+    An edge is a tenth of a run, so a handful of outliers move a mean a long way; trimming the
+    top of it leaves the growth between the two edges rather than the worst run of either.
+    """
+    ordered = sorted(latencies)
+    kept = len(ordered) - int(len(ordered) * LOAD_DELTA_TRIM)
+    ordered = ordered[:kept] or ordered
+    return sum(ordered) / len(ordered)
+
+
 def _estimated_achieved_throughput(logs, proposer_count, target_throughput):
     """Estimate achieved throughput from measured request count and tail latency growth."""
     request_counts = []
@@ -127,7 +149,14 @@ def _estimated_achieved_throughput(logs, proposer_count, target_throughput):
         request_counts.append(len(items))
         if not items:
             continue
-        latencies = [duration_to_ms(item["latency"]) for item in items]
+        # A proposer logs in completion order, so a slow request lands after faster ones issued
+        # later. The edges are meant to be the run's first and last tenth as offered.
+        ordered = sorted(
+            (item for item in items if _request_id(item) is not None), key=_request_id
+        )
+        latencies = [duration_to_ms(item["latency"]) for item in ordered]
+        if not latencies:
+            continue
         edge_size = max(1, ceil(len(latencies) * LOAD_EDGE_FRACTION))
         initial_latencies.extend(latencies[:edge_size])
         final_latencies.extend(latencies[-edge_size:])
@@ -142,11 +171,15 @@ def _estimated_achieved_throughput(logs, proposer_count, target_throughput):
     request_ratio = (
         sum(count / expected_per_proposer for count in request_counts) / proposer_count
     )
-    latency_delta_seconds = (
-        median(final_latencies) - median(initial_latencies)
+    # Never negative: the estimate is `target / (1 + delta / ...)`, so a negative delta would
+    # report a run as achieving more than was offered it.
+    latency_delta_seconds = max(
+        0.0, _edge_latency(final_latencies) - _edge_latency(initial_latencies)
     ) / 1000
-    estimated_duration = (
-        request_ratio * LOAD_DURATION_SECONDS + latency_delta_seconds
+    # The edges are centred on the run's 5% and 95% marks, so the growth between them spans
+    # `1 - LOAD_EDGE_FRACTION` of the window rather than all of it.
+    estimated_duration = request_ratio * LOAD_DURATION_SECONDS + (
+        latency_delta_seconds / (1 - LOAD_EDGE_FRACTION)
     )
     if estimated_duration <= 0:
         return None
@@ -164,7 +197,8 @@ def run_stats(
 
     A proposer emits `client-done` only after every request it scheduled has received a response.
     Requiring that marker from all seven proposers therefore distinguishes a completed run from
-    the partial logs left by a timed-out run. The throughput estimate is available for both.
+    the partial logs left by a timed-out run. Only a completed run is given a throughput
+    estimate.
     """
     parse_args = {
         "config": EXP5_CONFIG,
@@ -217,8 +251,13 @@ def run_stats(
     proposer_count = int("".join(char for char in EXP5_CONFIG if char.isdigit()))
     aborted = not all(logs["client-done"].get(pid) for pid in range(proposer_count))
     failure_reason = "not every proposer completed" if aborted else None
-    estimated_throughput = _estimated_achieved_throughput(
-        logs, proposer_count, throughput
+    # A killed run is truncated at both ends of the estimate: its request count stops wherever
+    # the deadline fell, and the highest request ids holding a response are the ones that beat
+    # it, which reads as latency falling over the run.
+    estimated_throughput = (
+        None
+        if aborted
+        else _estimated_achieved_throughput(logs, proposer_count, throughput)
     )
     return RunStats(
         put_latencies,

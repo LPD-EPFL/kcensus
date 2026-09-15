@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Figure 14: all-request mean latency against achieved throughput.
 
-Every run uses estimated achieved throughput; regressing points are omitted.
+Every run uses estimated achieved throughput; runs the deadline killed are omitted, as are
+regressing points and rungs measured slower than a busier one.
 
   ./exp-5-figure-14-load.py              # all
   ./exp-5-figure-14-load.py --skew 0.99  # one
@@ -20,6 +21,10 @@ from exp5 import (
 from logparser import *
 from prelude import plt
 
+# How much slower than a busier rung a rung may measure before it is read as disturbed rather
+# than as capacity.
+LOAD_LATENCY_TOLERANCE = 1.1
+
 workloads = selected_workloads(LOAD_WORKLOADS)
 plotted_throughputs = tuple(t for t in load_throughputs())
 latency_graphs = (("All-request", ""),)
@@ -33,6 +38,25 @@ def latency_summary(stats):
         return None
     percentiles = compute_percentiles(samples)
     return sum(samples) / len(samples), percentiles[50], percentiles[99]
+
+
+def disturbed_positions(means):
+    """Positions measured more than `LOAD_LATENCY_TOLERANCE` times a busier rung's latency.
+
+    Takes the latencies ordered by achieved throughput, which is the axis the figure plots
+    them on. Load only ever costs latency, so a rung slower than one that achieved more did
+    not measure what the deployment does at that rate -- it measured whatever disturbed the
+    run. The walk goes from the top so that a run of consecutive bad rungs is each compared
+    against the first good one above them rather than against each other.
+    """
+    disturbed = set()
+    faster_above = None
+    for position in reversed(range(len(means))):
+        if faster_above is not None and means[position] > LOAD_LATENCY_TOLERANCE * faster_above:
+            disturbed.add(position)
+        else:
+            faster_above = means[position]
+    return disturbed
 
 
 for workload in workloads:
@@ -55,22 +79,48 @@ for latency_label, filename_suffix in latency_graphs:
         print("#" * 82)
         print(f"Load -- {workload.label} -- {latency_label} latency:")
         for algo in ALGORITHMS:
+            all_stats = run_results[workload][algo]
+            summaries = [None if s is None else latency_summary(s) for s in all_stats]
+            measured = [
+                index
+                for index, (stats, summary) in enumerate(zip(all_stats, summaries))
+                if summary is not None and stats.estimated_throughput is not None
+            ]
+            by_achieved = sorted(
+                measured, key=lambda index: all_stats[index].estimated_throughput
+            )
+            disturbed = {
+                by_achieved[position]
+                for position in disturbed_positions(
+                    [summaries[index][0] for index in by_achieved]
+                )
+            }
+
             points = []
             reported_latencies = []
             previous_throughput = None
-            for throughput, stats in zip(plotted_throughputs, run_results[workload][algo]):
+            for index, (throughput, stats) in enumerate(
+                zip(plotted_throughputs, all_stats)
+            ):
                 if stats is None:
                     reported_latencies.append(
                         f"input={throughput:g} req/s; status=missing logs"
                     )
                     continue
-                summary = latency_summary(stats)
+                summary = summaries[index]
                 if summary is None:
                     reported_latencies.append(
                         f"input={throughput:g} req/s; status=no samples"
                     )
                     continue
                 mean, p50, p99 = summary
+                if stats.aborted:
+                    reported_latencies.append(
+                        f"input={throughput:g} req/s; average={mean:.2f} ms; "
+                        f"p50={p50:.2f} ms; p99={p99:.2f} ms; "
+                        "status=dropped (deadline killed the run)"
+                    )
+                    continue
                 achieved_throughput = stats.estimated_throughput
                 if achieved_throughput is None:
                     reported_latencies.append(
@@ -84,6 +134,12 @@ for latency_label, filename_suffix in latency_graphs:
                     f"achieved={achieved_throughput:.2f} req/s; "
                     f"average={mean:.2f} ms; p50={p50:.2f} ms; p99={p99:.2f} ms"
                 )
+                if index in disturbed:
+                    reported_latencies.append(
+                        f"{measurement}; status=dropped (over {LOAD_LATENCY_TOLERANCE:g}x "
+                        "the latency of a busier rung)"
+                    )
+                    continue
                 if (
                     previous_throughput is not None
                     and achieved_throughput < previous_throughput
