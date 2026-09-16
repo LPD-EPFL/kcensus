@@ -1,6 +1,5 @@
 use crate::connector::WrappedSink;
-use crate::consensus::deps::dep_set::DepSet;
-use crate::consensus::deps::message::ShardAcks;
+use crate::consensus::deps::message::DepMsg;
 use crate::consensus::kcensus::message::KCensusMsg;
 use crate::consensus::message::{CommandBatch, ConsensusMessage, ConsensusMsg};
 use crate::message::Message;
@@ -24,9 +23,10 @@ pub struct MultiSink {
     pub alive_replicas: BitSet,
     pub stats: Stats,
     send_paxos_messages_to_all: bool,
-    /// Acks formed but not sent yet, by shard, and the non-replica proposers owed one of
-    /// them. Only SwiftPaxos fills this; see [`MultiSink::flush_acks`].
-    pending_acks: HashMap<usize, ShardAcks>,
+    /// Acks formed but not sent yet, each with its shard, in the order they were formed,
+    /// and the non-replica proposers owed one of them. Only SwiftPaxos fills this; see
+    /// [`MultiSink::flush_acks`].
+    pending_acks: Vec<(usize, DepMsg)>,
     /// Shared so that the run loop can tell there is nothing to flush without taking the
     /// lock, which is most iterations: only `PreAccept` and `Accept` produce an ack.
     pending_ack_count: Arc<AtomicUsize>,
@@ -39,18 +39,11 @@ pub struct ShardMultiSink {
 }
 
 impl ShardMultiSink {
-    pub async fn queue_fast_ack(&self, id: usize, deps: Option<DepSet>, requester: Option<usize>) {
+    pub async fn queue_ack(&self, msg: DepMsg, requester: Option<usize>) {
         self.multi_sink
             .lock()
             .await
-            .queue_fast_ack(self.shard_id, id, deps, requester);
-    }
-
-    pub async fn queue_slow_ack(&self, id: usize, requester: Option<usize>) {
-        self.multi_sink
-            .lock()
-            .await
-            .queue_slow_ack(self.shard_id, id, requester);
+            .queue_ack(self.shard_id, msg, requester);
     }
 }
 
@@ -81,7 +74,7 @@ impl MultiSink {
             alive_replicas,
             stats: Stats::default(),
             send_paxos_messages_to_all,
-            pending_acks: HashMap::new(),
+            pending_acks: Vec::new(),
             pending_ack_count: Arc::new(AtomicUsize::new(0)),
             ack_recipients: BitSet::with_capacity(nb_nodes),
         }
@@ -89,28 +82,13 @@ impl MultiSink {
 
     /// Holds one ack back for [`MultiSink::flush_acks`]. `requester` is served even when it
     /// casts no vote, the way a `priority_broadcast` of a single ack would serve it.
-    /// Holds one ack back for [`MultiSink::flush_acks`]. `requester` is served even when it
-    /// casts no vote, the way a `priority_broadcast` of a single ack would serve it.
-    fn ack_bucket(&mut self, shard: usize, requester: Option<usize>) -> &mut ShardAcks {
+    pub fn queue_ack(&mut self, shard: usize, msg: DepMsg, requester: Option<usize>) {
+        debug_assert!(msg.is_batched_ack(), "not an ack: {msg:?}");
         self.pending_ack_count.fetch_add(1, Ordering::Relaxed);
         if let Some(requester) = requester {
             self.ack_recipients.insert(requester);
         }
-        self.pending_acks.entry(shard).or_default()
-    }
-
-    pub fn queue_fast_ack(
-        &mut self,
-        shard: usize,
-        id: usize,
-        deps: Option<DepSet>,
-        requester: Option<usize>,
-    ) {
-        self.ack_bucket(shard, requester).fast.push((id, deps));
-    }
-
-    pub fn queue_slow_ack(&mut self, shard: usize, id: usize, requester: Option<usize>) {
-        self.ack_bucket(shard, requester).slow.push(id);
+        self.pending_acks.push((shard, msg));
     }
 
     /// Sends everything queued as one message.
@@ -121,11 +99,15 @@ impl MultiSink {
         if self.pending_ack_count.swap(0, Ordering::Relaxed) == 0 {
             return Ok(());
         }
-        let shards: Vec<(usize, ShardAcks)> = self.pending_acks.drain().collect();
-        let bytes = encode(&Message::DepAcks {
+        let bundle = Message::DepAcks {
             src: self.my_pid,
-            shards,
-        });
+            acks: std::mem::take(&mut self.pending_acks),
+        };
+        let bytes = encode(&bundle);
+        if let Message::DepAcks { mut acks, .. } = bundle {
+            acks.clear();
+            self.pending_acks = acks;
+        }
         for (dest, sink) in self.sinks.iter_mut() {
             if !self.alive_replicas.contains(*dest) && !self.ack_recipients.contains(*dest) {
                 continue;

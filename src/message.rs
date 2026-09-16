@@ -1,4 +1,4 @@
-use crate::consensus::deps::message::ShardAcks;
+use crate::consensus::deps::message::DepMsg;
 use crate::consensus::message::{CommandBatch, ConsensusMessage};
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
@@ -13,12 +13,13 @@ pub enum Message {
         msg: ConsensusMessage,
         value: Option<CommandBatch>,
     },
-    /// Several shards' worth of `PreAcceptOk`/`AcceptOk` in one message. The acks a
-    /// process owes span shards, and a `ConsensusM` is tagged with exactly one, so
-    /// bundling needs an envelope of its own.
+    /// SwiftPaxos' `MAcks`: the `PreAcceptOk`, `AcceptOk` and leader `Accept` messages one
+    /// process formed since its last flush, each with its shard, in the order they were
+    /// formed. The acks a process owes span shards, and a `ConsensusM` is tagged with
+    /// exactly one, so bundling needs an envelope of its own.
     DepAcks {
         src: usize,
-        shards: Vec<(usize, ShardAcks)>,
+        acks: Vec<(usize, DepMsg)>,
     },
     Ready,
     Done,

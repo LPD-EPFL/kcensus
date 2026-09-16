@@ -723,7 +723,10 @@ impl DepShard {
                 // served first.
                 DepMode::SwiftPaxos { .. } if self.batch_acks => {
                     self.sinks
-                        .queue_fast_ack(id, acked, self.requester_of(id))
+                        .queue_ack(
+                            DepMsg::PreAcceptOk { id, deps: acked },
+                            self.requester_of(id),
+                        )
                         .await
                 }
                 DepMode::SwiftPaxos { .. } => {
@@ -870,7 +873,9 @@ impl DepShard {
             // holds. The reference says so outright — its `SQ` is a `Majority`, whose
             // `Contains` is `true` for everyone (`swift.go:157`, `replica/quorum.go:26`).
             DepMode::SwiftPaxos { .. } if self.batch_acks => {
-                self.sinks.queue_slow_ack(id, self.requester_of(id)).await
+                self.sinks
+                    .queue_ack(DepMsg::AcceptOk { id }, self.requester_of(id))
+                    .await
             }
             DepMode::SwiftPaxos { .. } => {
                 self.priority_broadcast(DepMsg::AcceptOk { id }, None, self.requester_of(id))
@@ -1293,12 +1298,10 @@ impl DepConsensus {
                 self.apply_dep_msg(shard_id, src, msg, value, touched)
                     .await?;
             }
-            Message::DepAcks { src, shards } => {
-                for (shard_id, acks) in shards {
-                    for msg in acks.into_messages() {
+            Message::DepAcks { src, acks } => {
+                for (shard_id, msg) in acks {
                         self.apply_dep_msg(shard_id, src, msg, None, touched)
                             .await?;
-                    }
                 }
             }
             Done => return Ok(true),
