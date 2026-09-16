@@ -265,7 +265,7 @@ pub async fn run() -> io::Result<()> {
         commands: args
             .batch_commands
             .unwrap_or(batching && algo != Algo::SwiftPaxos),
-        acks: args.batch_acks.unwrap_or(batching),
+        acks: algo == Algo::SwiftPaxos && args.batch_acks.unwrap_or(batching),
         cross_shard: args.cross_shard_batching,
     };
     let duration = args.duration;

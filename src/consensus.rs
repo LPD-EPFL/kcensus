@@ -231,6 +231,7 @@ where
         pin!(experiment_timeout);
 
         'main_loop: while count_done < self.process_count {
+            let prioritize_messages = !msg_rx.is_empty();
             // Read new messages and/or new local command.
             // `None` means no shard was touched, `false` means the shard has nothing
             // left to propose or repropose.
@@ -260,7 +261,7 @@ where
                     eprintln!("{stuck} stuck shard(s) of {} active ({} asleep).", self.pool.active_count(), self.pool.shard_count() - self.pool.active_count());
                     panic!("Experiment timed-out. Deadline reached. Terminating.");
                 },
-                command = new_client_commands_rx.recv(), if !done => {
+                command = new_client_commands_rx.recv(), if !done && !prioritize_messages => {
                     match command {
                         Some(mut command) =>  {
                             let shard_id = command.shard;

@@ -23,14 +23,42 @@ pub struct MultiSink {
     pub alive_replicas: BitSet,
     pub stats: Stats,
     send_paxos_messages_to_all: bool,
-    /// Acks formed but not sent yet, each with its shard, in the order they were formed,
-    /// and the non-replica proposers owed one of them. Only SwiftPaxos fills this; see
-    /// [`MultiSink::flush_acks`].
-    pending_acks: Vec<(usize, DepMsg)>,
-    /// Shared so that the run loop can tell there is nothing to flush without taking the
-    /// lock, which is most iterations: only `PreAccept` and `Accept` produce an ack.
-    pending_ack_count: Arc<AtomicUsize>,
+    /// SwiftPaxos acks formed but not sent yet, each with its shard: `PreAcceptOk` and the
+    /// leader's `Accept` (the reference's `MFastAck`), and `AcceptOk` (its `MLightSlowAck`).
+    pending_fast: Vec<(usize, DepMsg)>,
+    pending_slow: Vec<(usize, DepMsg)>,
+    /// How many of each are pending, readable without taking the lock.
+    pending_counts: Arc<PendingAcks>,
+    /// The non-voting proposers owed one of the pending acks.
     ack_recipients: BitSet,
+}
+
+/// How many acks of one kind a bundle holds when it is sent. Each of the reference batcher's
+/// channels holds 16 (`NewBatcher(r, 16, ..)`) and its replica blocks on the 17th; once the
+/// batcher takes one, that 17th moves into the channel before the batcher counts what is
+/// left, so the bundle carries all 17.
+pub const ACK_BATCH_LIMIT: usize = 17;
+
+/// How many acks of each kind a [`MultiSink`] is holding.
+#[derive(Default)]
+pub struct PendingAcks {
+    fast: AtomicUsize,
+    slow: AtomicUsize,
+}
+
+impl PendingAcks {
+    pub fn any(&self) -> bool {
+        self.fast.load(Ordering::Relaxed) > 0 || self.slow.load(Ordering::Relaxed) > 0
+    }
+
+    /// How many more acks guarantee that the pending bundle is sent, however they split
+    /// between the two kinds: one fewer could leave both a single ack short of
+    /// [`ACK_BATCH_LIMIT`]. With nothing pending, this is the largest bundle there is.
+    pub fn room(&self) -> usize {
+        let fast = ACK_BATCH_LIMIT - self.fast.load(Ordering::Relaxed);
+        let slow = ACK_BATCH_LIMIT - self.slow.load(Ordering::Relaxed);
+        fast + slow - 1
+    }
 }
 
 pub struct ShardMultiSink {
@@ -39,11 +67,12 @@ pub struct ShardMultiSink {
 }
 
 impl ShardMultiSink {
-    pub async fn queue_ack(&self, msg: DepMsg, requester: Option<usize>) {
+    pub async fn queue_ack(&self, msg: DepMsg, requester: Option<usize>) -> io::Result<()> {
         self.multi_sink
             .lock()
             .await
-            .queue_ack(self.shard_id, msg, requester);
+            .queue_ack(self.shard_id, msg, requester)
+            .await
     }
 }
 
@@ -74,55 +103,89 @@ impl MultiSink {
             alive_replicas,
             stats: Stats::default(),
             send_paxos_messages_to_all,
-            pending_acks: Vec::new(),
-            pending_ack_count: Arc::new(AtomicUsize::new(0)),
+            pending_fast: Vec::new(),
+            pending_slow: Vec::new(),
+            pending_counts: Arc::default(),
             ack_recipients: BitSet::with_capacity(nb_nodes),
         }
     }
 
-    /// Holds one ack back for [`MultiSink::flush_acks`]. `requester` is served even when it
-    /// casts no vote, the way a `priority_broadcast` of a single ack would serve it.
-    pub fn queue_ack(&mut self, shard: usize, msg: DepMsg, requester: Option<usize>) {
-        debug_assert!(msg.is_batched_ack(), "not an ack: {msg:?}");
-        self.pending_ack_count.fetch_add(1, Ordering::Relaxed);
+    /// Holds one ack back for [`MultiSink::flush_acks`], and sends the bundle once it holds
+    /// [`ACK_BATCH_LIMIT`] acks of this kind. `requester` is served even when it casts no
+    /// vote, the way a `priority_broadcast` of a single ack would serve it.
+    pub async fn queue_ack(
+        &mut self,
+        shard: usize,
+        msg: DepMsg,
+        requester: Option<usize>,
+    ) -> io::Result<()> {
+        let (queue, count) = match msg {
+            DepMsg::PreAcceptOk { .. } | DepMsg::Accept { .. } => {
+                (&mut self.pending_fast, &self.pending_counts.fast)
+            }
+            DepMsg::AcceptOk { .. } => (&mut self.pending_slow, &self.pending_counts.slow),
+            ref other => panic!("not an ack: {other:?}"),
+        };
+        queue.push((shard, msg));
+        let full = count.fetch_add(1, Ordering::Relaxed) + 1 >= ACK_BATCH_LIMIT;
         if let Some(requester) = requester {
             self.ack_recipients.insert(requester);
         }
-        self.pending_acks.push((shard, msg));
+        if full {
+            self.flush_acks().await?;
+        }
+        Ok(())
     }
 
-    /// Sends everything queued as one message.
-    ///
-    /// Acks are replica business, so the bundle goes to the replicas plus whichever
-    /// non-voting proposers are owed one of the acks it carries.
+    /// Reads how many acks are pending, without taking the lock.
+    pub fn pending_acks_handle(&self) -> Arc<PendingAcks> {
+        self.pending_counts.clone()
+    }
+
+    /// Sends every pending ack as one bundle, fast acks first: the order the receiver
+    /// applies an `MAcks` in (`swift.go:307`).
     pub async fn flush_acks(&mut self) -> io::Result<()> {
-        if self.pending_ack_count.swap(0, Ordering::Relaxed) == 0 {
+        if !self.pending_counts.any() {
             return Ok(());
         }
+        self.pending_counts.fast.store(0, Ordering::Relaxed);
+        self.pending_counts.slow.store(0, Ordering::Relaxed);
+        let mut acks = std::mem::take(&mut self.pending_fast);
+        acks.append(&mut self.pending_slow);
+        let recipients = std::mem::take(&mut self.ack_recipients);
+        let result = self.send_acks(acks, &recipients).await;
+        self.ack_recipients = recipients;
+        self.ack_recipients.clear();
+        result
+    }
+
+    /// Sends one bundle of acks.
+    ///
+    /// Acks are replica business, so the bundle goes to the replicas plus whichever
+    /// non-voting proposers in `requesters` are owed one of the acks it carries.
+    async fn send_acks(
+        &mut self,
+        acks: Vec<(usize, DepMsg)>,
+        requesters: &BitSet,
+    ) -> io::Result<()> {
         let bundle = Message::DepAcks {
             src: self.my_pid,
-            acks: std::mem::take(&mut self.pending_acks),
+            acks,
         };
         let bytes = encode(&bundle);
         if let Message::DepAcks { mut acks, .. } = bundle {
             acks.clear();
-            self.pending_acks = acks;
+            self.pending_fast = acks;
         }
         for (dest, sink) in self.sinks.iter_mut() {
-            if !self.alive_replicas.contains(*dest) && !self.ack_recipients.contains(*dest) {
+            if !self.alive_replicas.contains(*dest) && !requesters.contains(*dest) {
                 continue;
             }
             self.stats.msg_count += 1;
             self.stats.byte_count += bytes.len();
             sink.send(bytes.clone()).await?;
         }
-        self.ack_recipients.clear();
         Ok(())
-    }
-
-    /// Reads how many acks are waiting, without taking the lock.
-    pub fn pending_acks_handle(&self) -> Arc<AtomicUsize> {
-        self.pending_ack_count.clone()
     }
 
     pub fn insert_sink(&mut self, pid: usize, sink: WrappedSink) {

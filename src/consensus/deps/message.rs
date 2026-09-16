@@ -73,17 +73,6 @@ pub enum DepMsg {
 }
 
 impl DepMsg {
-    /// Whether SwiftPaxos batches this message into a `DepAcks`: the replicas' fast and
-    /// slow acks, and the leader's `Accept`, which the reference sends as the leader's
-    /// `FastAck` through the same batcher as every other replica's (`swift.go:395`).
-    #[inline]
-    pub fn is_batched_ack(&self) -> bool {
-        matches!(
-            self,
-            DepMsg::PreAcceptOk { .. } | DepMsg::AcceptOk { .. } | DepMsg::Accept { .. }
-        )
-    }
-
     /// The instance this message is about. `None` for `Forward`, which carries a command
     /// that has not been given an id yet — the coordinating replica allocates one.
     #[inline]

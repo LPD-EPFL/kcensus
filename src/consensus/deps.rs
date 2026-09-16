@@ -18,17 +18,15 @@ use crate::consensus::shard_pool::{PooledShard, ShardPool};
 use crate::eval;
 use crate::message::Message::{ConsensusM, Done};
 use crate::message::{Message, MsgWithSource};
-use crate::multi_sink::{MultiSink, ShardMultiSink};
+use crate::multi_sink::{MultiSink, PendingAcks, ShardMultiSink};
 use crate::topology::Topology;
 use bit_set::BitSet;
 use log::{debug, trace};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
-use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::{pin, select};
 use tokio_timerfd::Delay;
@@ -133,7 +131,7 @@ pub(crate) struct DepShard {
     /// executor's retained Tarjan stack.
     execution_scratch: ExecutionScratch,
     /// Hold acks back for the run loop to send as one message, as SwiftPaxos' batcher
-    /// goroutine does. EPaxos unicasts its acks to one coordinator and has no batcher.
+    /// does. EPaxos unicasts its acks to one coordinator and has no batcher.
     batch_acks: bool,
     /// Derive dependencies per key rather than from everything the shard has seen. Needed
     /// once one instance carries commands for several keys, which is how the reference
@@ -727,7 +725,7 @@ impl DepShard {
                             DepMsg::PreAcceptOk { id, deps: acked },
                             self.requester_of(id),
                         )
-                        .await
+                        .await?
                 }
                 DepMode::SwiftPaxos { .. } => {
                     self.priority_broadcast(
@@ -875,7 +873,7 @@ impl DepShard {
             DepMode::SwiftPaxos { .. } if self.batch_acks => {
                 self.sinks
                     .queue_ack(DepMsg::AcceptOk { id }, self.requester_of(id))
-                    .await
+                    .await?
             }
             DepMode::SwiftPaxos { .. } => {
                 self.priority_broadcast(DepMsg::AcceptOk { id }, None, self.requester_of(id))
@@ -1020,10 +1018,10 @@ impl DepShard {
         instance.accept(my_deps.clone());
         instance.accept_acked.insert(my_pid);
         if self.batch_acks {
-            self.sinks
+            return self
+                .sinks
                 .queue_ack(DepMsg::Accept { id, deps: my_deps }, self.requester_of(id))
                 .await;
-            return Ok(());
         }
         self.priority_broadcast(
             DepMsg::Accept { id, deps: my_deps },
@@ -1203,14 +1201,6 @@ pub(crate) struct Batching {
     pub cross_shard: bool,
 }
 
-/// How many messages one drain takes, and so roughly how many acks a bundle carries:
-/// the reference batcher's channel size (`NewBatcher(r, 16, ..)`).
-const ACK_BATCH_LIMIT: usize = 16;
-
-/// How many client commands one instance-batching drain takes, and so how many instances
-/// one pass through the loop may create.
-const COMMAND_BATCH_LIMIT: usize = 1024;
-
 pub(crate) struct DepConsensus {
     process_count: usize,
     pool: ShardPool<DepShard>,
@@ -1218,14 +1208,14 @@ pub(crate) struct DepConsensus {
     /// Drain the client queue into one instance per shard, as EPaxos' `handlePropose`
     /// drains its propose queue (`epaxos.go:727`).
     batch_commands: bool,
-    /// Collect acks and send them as one message, as SwiftPaxos' batcher goroutine does
+    /// Collect acks and send them as one message, as SwiftPaxos' batcher does
     /// (`swift/batcher.go`). EPaxos sends each ack to one coordinator, so it has none.
     batch_acks: bool,
     /// Reused by [`DepConsensus::submit_client_commands`] so that draining the client
     /// queue allocates nothing of its own.
     batch_buffer: Vec<Command>,
     /// How many acks `sinks` is holding, readable without taking its lock.
-    pending_acks: Arc<AtomicUsize>,
+    pending_acks: Arc<PendingAcks>,
     /// Every command goes to one shard, whose dependencies are per key. An instance may
     /// then carry commands for any keys at all.
     cross_shard: bool,
@@ -1306,8 +1296,8 @@ impl DepConsensus {
             }
             Message::DepAcks { src, acks } => {
                 for (shard_id, msg) in acks {
-                        self.apply_dep_msg(shard_id, src, msg, None, touched)
-                            .await?;
+                    self.apply_dep_msg(shard_id, src, msg, None, touched)
+                        .await?;
                 }
             }
             Done => return Ok(true),
@@ -1338,9 +1328,8 @@ impl DepConsensus {
 
     /// Takes one client command and, when batching, everything queued behind it.
     ///
-    /// The drain is bounded by `COMMAND_BATCH_LIMIT`, mirroring EPaxos'
-    /// `batchSize := len(r.ProposeChan) + 1`: it groups what is queued now and leaves
-    /// whatever arrives later to the next instance. A batch cannot span shards, because a
+    /// The drain takes what is queued now, as EPaxos' `batchSize := len(r.ProposeChan) + 1`
+    /// does, and leaves whatever arrives later to the next instance. A batch cannot span shards, because a
     /// dependency never leaves one.
     async fn submit_client_commands(
         &mut self,
@@ -1354,21 +1343,8 @@ impl DepConsensus {
         let mut batch = std::mem::take(&mut self.batch_buffer);
         debug_assert!(batch.is_empty());
         batch.push(first);
-        let mut yielded = false;
-        while batch.len() < COMMAND_BATCH_LIMIT {
-            match rx.try_recv() {
-                Ok(next) => {
-                    yielded = false;
-                    batch.push(next);
-                }
-                // Empty only because the client task has not run. Give it a turn, and
-                // keep alternating for as long as a turn produces something.
-                Err(TryRecvError::Empty) if !yielded => {
-                    yielded = true;
-                    tokio::task::yield_now().await;
-                }
-                Err(_) => break,
-            }
+        for _ in 0..rx.len() {
+            batch.push(rx.try_recv().expect("counted as queued"));
         }
         let result = self.submit_batch(&mut batch, touched).await;
         batch.clear();
@@ -1379,8 +1355,7 @@ impl DepConsensus {
     /// One instance per shard represented in `batch`, and each read on its own.
     ///
     /// Sorting puts a shard's writes next to each other, so the grouping is one pass over
-    /// at most `COMMAND_BATCH_LIMIT` commands and allocates only the vectors the instances
-    /// take ownership of. `read_only` leads the key, which leaves the reads in one run at
+    /// the batch and allocates only the vectors the instances take ownership of. `read_only` leads the key, which leaves the reads in one run at
     /// the end.
     async fn submit_batch(
         &mut self,
@@ -1450,6 +1425,28 @@ impl DepConsensus {
 
         while count_done < self.process_count {
             touched.clear();
+            // Pending acks leave once neither an incoming message nor a client command is
+            // left to process: each may add to the same bundle (the leader's own commands
+            // produce its `Accept`), and none is held while the loop has nothing else to do.
+            // A full bundle leaves from `queue_ack`.
+            if self.batch_acks
+                && self.pending_acks.any()
+                && msg_rx.is_empty()
+                && new_client_commands_rx.is_empty()
+            {
+                tokio::task::yield_now().await;
+                if msg_rx.is_empty() && new_client_commands_rx.is_empty() {
+                    self.sinks.lock().await.flush_acks().await?;
+                }
+            }
+            // Client commands wait when batching acks (SwiftPaxos) and enough messages are
+            // waiting to complete the pending bundle whichever kinds of ack they produce.
+            // Otherwise either queue, at random.
+            let prioritize_messages = if self.batch_acks {
+                msg_rx.len() >= self.pending_acks.room()
+            } else {
+                !msg_rx.is_empty()
+            };
             select! {
                 res = &mut experiment_timeout => {
                     res.expect("should wait until experiment_timeout");
@@ -1489,7 +1486,7 @@ impl DepConsensus {
                     eprintln!("{stuck} stuck shard(s) of {} active ({} asleep).", self.pool.active_count(), self.pool.shard_count() - self.pool.active_count());
                     panic!("Experiment timed-out. Deadline reached. Terminating.");
                 },
-                command = new_client_commands_rx.recv(), if !done => {
+                command = new_client_commands_rx.recv(), if !done && !prioritize_messages => {
                     match command {
                         Some(command) => {
                             first_command = Some(command);
@@ -1503,42 +1500,12 @@ impl DepConsensus {
                 }
                 opt_msg = msg_rx.recv() => {
                     count_done += self.apply_message(opt_msg.unwrap().msg, &mut touched).await? as usize;
-                    // Drain what arrived with it, so the acks they produce leave together.
-                    // The reference gets the same effect from a batcher goroutine that its
-                    // main loop keeps feeding while it runs (`swift/batcher.go`).
-                    if self.batch_acks {
-                        let mut drained = 0usize;
-                        let mut yielded = false;
-                        while drained < ACK_BATCH_LIMIT {
-                            match msg_rx.try_recv() {
-                                Ok(next) => {
-                                    drained += 1;
-                                    yielded = false;
-                                    count_done +=
-                                        self.apply_message(next.msg, &mut touched).await? as usize;
-                                }
-                                // Empty only because the tasks feeding the channel have not
-                                // run. The reference batcher finds a filled channel for the
-                                // mirror-image reason: it is a goroutine of its own,
-                                // scheduled after the loop that fills it.
-                                Err(TryRecvError::Empty) if !yielded => {
-                                    yielded = true;
-                                    tokio::task::yield_now().await;
-                                }
-                                Err(_) => break,
-                            }
-                        }
-                    }
                 },
             };
 
             if let Some(command) = first_command.take() {
                 self.submit_client_commands(command, &mut new_client_commands_rx, &mut touched)
                     .await?;
-            }
-
-            if self.batch_acks && self.pending_acks.load(Ordering::Relaxed) > 0 {
-                self.sinks.lock().await.flush_acks().await?;
             }
 
             for &shard_id in &touched {
@@ -1556,6 +1523,9 @@ impl DepConsensus {
 
         self.pool.report();
 
+        if self.batch_acks {
+            self.sinks.lock().await.flush_acks().await?;
+        }
         let sinks = self.sinks.lock().await;
         eval::log(
             "network-done",
