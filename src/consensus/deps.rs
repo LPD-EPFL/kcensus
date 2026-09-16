@@ -1019,6 +1019,12 @@ impl DepShard {
         instance.record_preaccept(my_pid, my_deps.clone());
         instance.accept(my_deps.clone());
         instance.accept_acked.insert(my_pid);
+        if self.batch_acks {
+            self.sinks
+                .queue_ack(DepMsg::Accept { id, deps: my_deps }, self.requester_of(id))
+                .await;
+            return Ok(());
+        }
         self.priority_broadcast(
             DepMsg::Accept { id, deps: my_deps },
             None,
