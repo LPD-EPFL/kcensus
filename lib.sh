@@ -52,6 +52,9 @@ EXP5_STEP_COARSE=2000
 EXP5_STEP_FLOOR=500
 # A rung whose measured average latency is above this is the wall, however cleanly it ran.
 EXP5_SUSTAINED_MAX_LATENCY_MS=400
+# Phase 2 ends each series with a rung whose average latency is under this factor times its
+# average at EXP5_LADDER_START.
+EXP5_KNEE_LATENCY_FACTOR=1.2
 EXP5_CDF_THROUGHPUT=1000
 EXP5_LOAD_SKEWS=(0 0.99)
 

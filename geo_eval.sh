@@ -128,6 +128,8 @@ LAST_RUN_STALLED=0
 LAST_RUN_RESULT_PATH=""
 # Whether the run `exp-5-run` just judged was rejected for its latency alone.
 LAST_RUN_OVER_LATENCY_CAP=0
+# The average latency, in ms, of the run `exp-5-run` just judged. Empty when it has none.
+LAST_RUN_AVERAGE=""
 
 function latency_quality_passes() {
   local resultPath="$1"
@@ -420,7 +422,7 @@ function exp-5-ladder() {
   local expId="$1" configName="$2"; shift 2
   local active=("$@") survivors=()
   local -A sustained=() pending=()
-  local -A EXP5_OUTCOMES=()
+  local -A EXP5_OUTCOMES=() EXP5_AVERAGES=()
   local entry throughput="$EXP5_LADDER_START"
 
   while [ "$throughput" -le "$EXP5_LADDER_END" ] && [ "${#active[@]}" -gt 0 ]; do
@@ -468,7 +470,12 @@ function exp-5-attempt() {
     sustained) return 0 ;;
     over-cap) return 1 ;;
   esac
-  if exp-5-series-run "$expId" "$configName" "$entry" "$rung"; then
+  local status=0
+  exp-5-series-run "$expId" "$configName" "$entry" "$rung" || status=$?
+  if [ -n "${LAST_RUN_AVERAGE}" ]; then
+    EXP5_AVERAGES["$key"]="${LAST_RUN_AVERAGE}"
+  fi
+  if [ "$status" -eq 0 ]; then
     EXP5_OUTCOMES["$key"]=sustained
     return 0
   fi
@@ -550,6 +557,53 @@ function exp-5-refine() {
       fi
     done
   done
+
+  # Below those, each series keeps stepping down until a rung's average latency is within
+  # `EXP5_KNEE_LATENCY_FACTOR` of its average at `EXP5_LADDER_START`, so the curve shows where
+  # latency starts to rise. The step doubles at every rung, and each rung is the largest multiple
+  # of the step below the previous one, which lands on the rates phase 1 already measured. The
+  # step never exceeds half the previous rung.
+  local -A position=() back=()
+  active=()
+  for entry in "${series[@]}"; do
+    position["$entry"]=$(( sustained[$entry] - 3 * step[$entry] ))
+    back["$entry"]="${step[$entry]}"
+    if ! exp-5-below-knee "$entry" "${position[$entry]}"; then
+      active+=("$entry")
+    fi
+  done
+  while [ "${#active[@]}" -gt 0 ]; do
+    survivors=()
+    for entry in "${active[@]}"; do
+      back["$entry"]=$(( back[$entry] * 2 ))
+      while [ $(( back[$entry] * 2 )) -gt "${position[$entry]}" ] && [ "${back[$entry]}" -gt "$EXP5_LADDER_START" ]; do
+        back["$entry"]=$(( back[$entry] / 2 ))
+      done
+      rung=$(( (position[$entry] - 1) / back[$entry] * back[$entry] ))
+      position["$entry"]="$rung"
+      if [ "$rung" -lt "$EXP5_LADDER_START" ]; then
+        continue
+      fi
+      exp-5-attempt "$expId" "$configName" "$entry" "$rung" \
+        || exp-5-attempt "$expId" "$configName" "$entry" "$rung" \
+        || true
+      if ! exp-5-below-knee "$entry" "$rung"; then
+        survivors+=("$entry")
+      fi
+    done
+    active=("${survivors[@]}")
+  done
+}
+
+# Whether a series measured `rung` with an average latency under `EXP5_KNEE_LATENCY_FACTOR`
+# times its average at `EXP5_LADDER_START`. False when either average is missing.
+function exp-5-below-knee() {
+  local entry="$1" rung="$2"
+  local base="${EXP5_AVERAGES[${entry}@${EXP5_LADDER_START}]:-}"
+  local average="${EXP5_AVERAGES[${entry}@${rung}]:-}"
+  [ -n "$base" ] && [ -n "$average" ] \
+    && awk -v avg="$average" -v base="$base" -v factor="$EXP5_KNEE_LATENCY_FACTOR" \
+      'BEGIN { exit !(avg < factor * base) }'
 }
 
 # One rung of the ladder. Not sustained if the run did not finish, and not sustained either if
@@ -562,6 +616,7 @@ function exp-5-run() {
   local conflicts="${7:-true}"
   local keys="$KEYS"
   LAST_RUN_OVER_LATENCY_CAP=0
+  LAST_RUN_AVERAGE=""
   if ! run "$expId" "$configName" "$algo" "$EXP5_WRITES" "$duration" "exponential" \
          "$throughput" "" "$keys" "$skew" "$keys" "$conflicts"; then
     echo "--> SKIPPED (not sustainable?): ${algo} t=${throughput} skew=${skew} k=${keys}" \
@@ -576,6 +631,7 @@ function exp-5-run() {
       "${algo} t=${throughput} skew=${skew} k=${keys} conflicts=${conflicts}" >&2
     return 1
   fi
+  LAST_RUN_AVERAGE="${average}"
   if awk -v avg="${average}" -v max="${EXP5_SUSTAINED_MAX_LATENCY_MS}" \
       'BEGIN { exit !(avg > max) }'; then
     echo "--> NOT SUSTAINED (average ${average} ms, over ${EXP5_SUSTAINED_MAX_LATENCY_MS} ms):" \
