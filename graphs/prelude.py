@@ -22,6 +22,7 @@ plt.rc("axes", titlesize=MEDIUM_SIZE)  # Subplot title
 plt.rc("axes", labelsize=MEDIUM_SIZE)  # fontsize of the x and y labels
 plt.rc("xtick", labelsize=SMALL_SIZE)  # fontsize of the tick labels
 plt.rc("ytick", labelsize=SMALL_SIZE)  # fontsize of the tick labels
+plt.rc("figure", labelsize=MEDIUM_SIZE)  # fontsize of fig.supxlabel/supylabel
 
 
 def lighten_color(color):
