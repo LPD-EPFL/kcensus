@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Figure 13: PUT and GET latency CDFs side by side for each skew.
+"""Figure 13: WRITE and READ latency CDFs side by side for each skew.
 
   ./exp-5-figure-13-conflict.py              # both skews
   ./exp-5-figure-13-conflict.py --skew 0.99  # only that skew
@@ -26,8 +26,8 @@ throughput = selected_throughput()
 duration = EXP5_CDF_DURATION if throughput == CDF_THROUGHPUT else EXP5_DURATION
 workloads = selected_workloads(CDF_WORKLOADS)
 operations = (
-    ("PUTs", "put_latencies"),
-    ("GETs", "read_latencies"),
+    ("Writes", "put_latencies"),
+    ("Reads", "read_latencies"),
 )
 
 run_results = {workload: {} for workload in workloads}
