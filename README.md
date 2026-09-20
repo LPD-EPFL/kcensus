@@ -54,11 +54,11 @@ Complete §1 first to clone the repository and install the plotting dependencies
 
 You do not need to rerun the experiments to reproduce the exact experimental figures. The complete logs are
 available in
-the [release tagged "camera-ready-v2"](https://github.com/LPD-EPFL/kcensus/releases/tag/camera-ready-v2).
+the [release tagged "camera-ready-v3"](https://github.com/LPD-EPFL/kcensus/releases/tag/camera-ready-v3).
 From the root of a fresh clone, download them and generate the plots with:
 
 ```bash
-curl -L -o logs.zip https://github.com/LPD-EPFL/kcensus/releases/download/camera-ready-v2/logs.zip
+curl -L -o logs.zip https://github.com/LPD-EPFL/kcensus/releases/download/camera-ready-v3/logs.zip
 unzip logs.zip
 ./plot.sh all
 ```
@@ -81,7 +81,7 @@ The experiments that produce the paper's experimental figures are described belo
 | `exp-1`    | End-to-end latency in four 7-replica deployments: Northern Hemisphere, Europe, North America, and East Asia | 1, 7    | 30min         | 45min       |
 | `exp-2`    | Northern Hemisphere, with every combination of up to 3 crashed replicas                                     | 8       | 2h15min       | 3h15min     |
 | `exp-3`    | Latency and resource scaling from 3 to 31 replicas worldwide, and requirements optimization time            | 9-12    | 3h30min       | 1h30min     |
-| `exp-5`    | Contention and throughput sweep in the 7-replica Northern Hemisphere deployment                             | 13, 14  | AWS only      | 3h          |
+| `exp-5`    | Contention and throughput sweep in the 7-replica Northern Hemisphere deployment                             | 13, 14  | AWS only      | 3h30min     |
 
 Runtimes are approximate. Experiments 1-3 total about 5 to 6 hours for either workflow.
 
