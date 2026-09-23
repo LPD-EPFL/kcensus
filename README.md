@@ -1,5 +1,7 @@
 # KCensus
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.22914045.svg)](https://doi.org/10.5281/zenodo.22914045)
+
 KCensus is a framework for strongly consistent geo-replication that synthesizes optimal consensus
 fast-path schemes for a given network topology, workload, and latency objective. This repository includes
 the framework, a geo-replicated key-value store built with it, and experiments across AWS regions
