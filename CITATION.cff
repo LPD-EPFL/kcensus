@@ -1,0 +1,42 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite the paper below."
+title: "Artifact for KCensus: Synthesizing Latency-Optimal Consensus Fast Paths (EuroSys '27)"
+type: software
+authors:
+- family-names: Burgelin
+  given-names: Clément
+  orcid: https://orcid.org/0000-0003-2444-2199
+- family-names: Murat
+  given-names: Antoine
+  orcid: https://orcid.org/0000-0001-6062-7161
+- family-names: Choukri
+  given-names: Zakaria
+version: camera-ready-v3-zenodo
+doi: 10.5281/zenodo.22914045
+license: MIT
+repository-code: "https://github.com/LPD-EPFL/kcensus"
+date-released: 2026-09-23
+preferred-citation: # the paper, full author list
+  type: conference-paper
+  title: "KCensus: Synthesizing Latency-Optimal Consensus Fast Paths"
+  authors:
+    - family-names: Burgelin
+      given-names: Clément
+      orcid: https://orcid.org/0000-0003-2444-2199
+    - family-names: Murat
+      given-names: Antoine
+      orcid: https://orcid.org/0000-0001-6062-7161
+    - family-names: Sela
+      given-names: Gal
+      orcid: https://orcid.org/0000-0003-2342-6955
+    - family-names: Aguilera
+      given-names: Marcos K.
+      orcid: https://orcid.org/0000-0003-3489-2468
+    - family-names: Guerraoui
+      given-names: Rachid
+      orcid: https://orcid.org/0000-0002-4794-8902
+  collection-title: "Proceedings of the Twenty-Second European Conference on Computer Systems (EuroSys '27)"
+  publisher:
+    name: ACM
+  year: 2027
+  doi: 10.1145/3842654.3848528
