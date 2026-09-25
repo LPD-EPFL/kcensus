@@ -171,7 +171,7 @@ for latency_label, filename_suffix in latency_graphs:
     fig, subplot_grid = plt.subplots(
         len(workloads),
         1,
-        figsize=(3.26, 1.95),
+        figsize=(3.26, 2.2),
         sharex=True,
         sharey=True,
         squeeze=False,

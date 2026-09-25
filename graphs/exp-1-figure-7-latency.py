@@ -16,7 +16,7 @@ faults = ""
 keys = 100000
 skew = 0.0
 
-fig, subplots = plt.subplots(4, 2, figsize=(3.26, 3.5), tight_layout=True, width_ratios=[4, 2])
+fig, subplots = plt.subplots(4, 2, figsize=(3.26, 3.8), tight_layout=True, width_ratios=[4, 2])
 plt.tight_layout(pad=0, w_pad=0, h_pad=0)  # , rect=(0,0,.80,1))
 fig.subplots_adjust(
     wspace=0,
