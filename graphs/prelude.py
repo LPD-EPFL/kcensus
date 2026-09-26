@@ -3,9 +3,13 @@ import matplotlib.pyplot as plt
 from math import sqrt
 from os.path import expanduser
 
-mpl.rcParams["font.family"] = "Linux Libertine O"
+# Prefer the TrueType build of Libertine: with pdf.fonttype 42 below, the OpenType/CFF
+# build ("Linux Libertine O") gets embedded as a malformed TrueType font.
+mpl.rcParams["font.family"] = ["Linux Libertine", "Linux Libertine O"]
 mpl.rcParams["text.usetex"] = False
 mpl.rcParams["hatch.linewidth"] = 0.6
+# Embed TrueType (Type 42) fonts: HotCRP and ACM reject the default Type 3 fonts.
+mpl.rcParams["pdf.fonttype"] = 42
 
 EXTRA_SMALL_SIZE = 6
 SMALL_SIZE = 8
